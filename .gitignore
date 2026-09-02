@@ -1,0 +1,27 @@
+# Composer dependencies. A single rule, matching every other plugin in the
+# suite.
+/vendor/
+
+# Regenerated on every run; an untracked cache file leaves the working tree
+# looking dirty.
+.phpunit.result.cache
+/.phpunit.cache/
+
+/build/
+
+# Local coverage reports: `composer test:coverage` writes the HTML report
+# here, and CI writes the Clover report under build/. Neither belongs in git.
+/tests/coverage/
+
+# JetBrains IDE files
+.idea/
+
+# PHPStan
+# phpstan.neon (no .dist) is a local override that wins over the committed
+# phpstan.neon.dist outright — PHPStan takes the first file it finds and does
+# not merge them. Ignored so a personal tweak cannot be committed by accident.
+/phpstan.neon
+
+# composer.lock is COMMITTED, deliberately - do not add it here. An ignored
+# lock file makes CI resolve dependencies afresh on every run, so the tool
+# versions a build used are whatever had been published that morning.

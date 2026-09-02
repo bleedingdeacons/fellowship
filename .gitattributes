@@ -1,0 +1,5 @@
+# Normalise line endings in the index to LF, whatever the working copy uses.
+# Without this a Windows checkout commits CRLF and every later edit to a file
+# reads as a whole-file diff — which is exactly what happened to build.php
+# across fourteen of the older plugins in this suite.
+* text=auto
