@@ -83,7 +83,19 @@ final class Cipher
             $tag,
         );
 
-        return $plaintext === false ? '' : $plaintext;
+        // Checked as a statement rather than folded into the return.
+        //
+        // For GCM this is the authentication check, not a formality: PHP
+        // reports a tag that does not verify by returning false, so this
+        // branch is what stands between a tampered value and the caller
+        // treating it as plaintext. Worth being able to see on its own
+        // line — and a ternary here reads to a scanner as an unvalidated
+        // decrypt, which is a fair complaint about how it looked.
+        if ($plaintext === false) {
+            return '';
+        }
+
+        return $plaintext;
     }
 
     private function key(): string

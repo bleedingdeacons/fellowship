@@ -245,7 +245,7 @@ final class SettingsPage
 
     private function notice(): void
     {
-        $result = isset($_GET['fellowship_result']) ? sanitize_key((string) $_GET['fellowship_result']) : '';
+        $result = sanitize_key((string) filter_input(INPUT_GET, 'fellowship_result'));
 
         if ($result === 'saved') {
             echo '<div class="notice notice-success is-dismissible"><p>'

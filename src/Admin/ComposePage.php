@@ -38,6 +38,25 @@ final class ComposePage
     private const CAPABILITY = Capabilities::SEND_MESSAGES;
     private const NONCE = 'fellowship_compose';
 
+    /**
+     * Where a refused send's reason waits between the redirect and the
+     * render, keyed per user.
+     *
+     * <b>It used to travel in the query string.</b> That put a
+     * server-supplied message into the URL, and therefore into browser
+     * history, the web server's access log, and any referrer header the
+     * next request sends — for a string this code does not choose and
+     * cannot bound, since a WP_Error may carry anything a calling plugin
+     * put in it. A one-shot transient carries it without any of that.
+     *
+     * It also lets {@see redirect()} take nothing but a fixed code, which
+     * is what a redirect target should be built from.
+     */
+    private const ERROR_TRANSIENT = 'fellowship_compose_error_';
+
+    /** Long enough to survive the redirect, short enough to be forgotten. */
+    private const ERROR_TTL = 60;
+
     public function __construct(
         private readonly MessageApi $api,
         private readonly CommitteeRepository $committees,
@@ -142,26 +161,39 @@ final class ComposePage
         ]);
 
         if ($result instanceof WP_Error) {
-            $this->redirect('error', $result->get_error_message());
+            set_transient(
+                self::ERROR_TRANSIENT . get_current_user_id(),
+                $result->get_error_message(),
+                self::ERROR_TTL,
+            );
+
+            $this->redirect('error');
         }
 
-        $this->redirect('sent', '');
+        $this->redirect('sent');
     }
 
-    private function redirect(string $result, string $detail): void
+    /**
+     * Back to this screen with a one-word outcome.
+     *
+     * Every part of the target is fixed here: the page slug is a constant,
+     * the result is one of two literals, and the base comes from
+     * admin_url(). wp_safe_redirect then refuses anything that is somehow
+     * not on this host.
+     */
+    private function redirect(string $result): void
     {
-        $args = ['page' => self::PAGE_SLUG, 'fellowship_result' => $result];
-        if ($detail !== '') {
-            $args['fellowship_detail'] = rawurlencode($detail);
-        }
+        wp_safe_redirect(add_query_arg(
+            ['page' => self::PAGE_SLUG, 'fellowship_result' => $result],
+            admin_url('admin.php'),
+        ));
 
-        wp_safe_redirect(add_query_arg($args, admin_url('admin.php')));
         exit;
     }
 
     private function notice(): void
     {
-        $result = isset($_GET['fellowship_result']) ? sanitize_key((string) $_GET['fellowship_result']) : '';
+        $result = sanitize_key((string) filter_input(INPUT_GET, 'fellowship_result'));
 
         if ($result === 'sent') {
             echo '<div class="notice notice-success is-dismissible"><p>'
@@ -171,8 +203,14 @@ final class ComposePage
         }
 
         if ($result === 'error') {
-            $detail = isset($_GET['fellowship_detail'])
-                ? sanitize_text_field(rawurldecode((string) $_GET['fellowship_detail']))
+            // Read once and deleted, so a refresh does not re-show a
+            // failure the member has already been told about.
+            $key = self::ERROR_TRANSIENT . get_current_user_id();
+            $stored = get_transient($key);
+            delete_transient($key);
+
+            $detail = is_string($stored) && $stored !== ''
+                ? $stored
                 : __('The message could not be sent.', 'fellowship');
 
             echo '<div class="notice notice-error is-dismissible"><p>' . esc_html($detail) . '</p></div>';
