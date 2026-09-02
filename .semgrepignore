@@ -1,0 +1,21 @@
+# Semgrep exclusions.
+#
+# Semgrep's own defaults still apply — this file adds to them rather than
+# replacing them.
+
+# build.php is a standalone command-line build script. It is never
+# autoloaded, never routed to, and never shipped: the production zip it
+# assembles does not contain it.
+#
+# It trips two rules that are entirely correct about web code and entirely
+# beside the point here — `exec-use`, because it shells out to composer and
+# to git, and `unlink-use`, because it cleans its own staging directory.
+# Neither takes anything from a request, because nothing here ever sees a
+# request.
+#
+# Excluded as a file rather than suppressed line by line, because every
+# finding in it has the same answer and a dozen `nosemgrep` comments would
+# only make the next person read the reasoning a dozen times. Reach ships
+# the same script; its findings were triaged in the Semgrep platform
+# instead, which works but is not visible in the repository.
+build.php

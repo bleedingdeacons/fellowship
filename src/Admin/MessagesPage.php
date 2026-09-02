@@ -77,7 +77,7 @@ final class MessagesPage
             return;
         }
 
-        $page  = max(1, (int) ($_GET['paged'] ?? 1));
+        $page  = max(1, (int) filter_input(INPUT_GET, 'paged', FILTER_VALIDATE_INT));
         $total = $this->messages->countAll();
         $rows  = $this->messages->list(self::PER_PAGE, ($page - 1) * self::PER_PAGE);
 

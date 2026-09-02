@@ -87,7 +87,7 @@ final class DevicesPage
         // page chose to render is not a permission check.
         $canManage = current_user_can(self::MANAGE_CAPABILITY);
 
-        $page  = max(1, (int) ($_GET['paged'] ?? 1));
+        $page  = max(1, (int) filter_input(INPUT_GET, 'paged', FILTER_VALIDATE_INT));
         $total = $this->devices->countAll();
         $rows  = $this->devices->list(self::PER_PAGE, ($page - 1) * self::PER_PAGE);
 
@@ -181,7 +181,14 @@ final class DevicesPage
             wp_die(esc_html__('You are not allowed to manage devices.', 'fellowship'), '', ['response' => 403]);
         }
 
-        $id = (int) ($_POST['device'] ?? 0);
+        // filter_input rather than a cast on the superglobal: it
+        // *validates* where a cast merely coerces, so "12abc" is refused
+        // instead of quietly becoming 12. That matters here more than it
+        // looks, because this value is concatenated into the nonce action
+        // name on the next line — a coerced id would check a nonce for a
+        // device other than the one the form named.
+        $id = (int) filter_input(INPUT_POST, 'device', FILTER_VALIDATE_INT);
+
         check_admin_referer(self::NONCE . '_' . $id);
 
         if ($id <= 0) {
