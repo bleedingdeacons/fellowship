@@ -1,0 +1,43 @@
+# Committed PHPStan config.
+#
+# phpstan.neon (no .dist) is gitignored and, if present, overrides this
+# file entirely — keep personal tweaks there. This .dist is what CI uses.
+#
+# scanDirectories makes the sibling plugins' symbols known without
+# analysing them. Without it PHPStan cannot see a single Unity or
+# Scrutiny interface this plugin depends on, and reports every one as an
+# "unknown class" — which drowns real findings. CI checks these out
+# alongside.
+
+includes:
+    - vendor/szepeviktor/phpstan-wordpress/extension.neon
+
+parameters:
+    level: 8
+    # PHPStan 2 proves a condition dead when PHPDoc says it cannot happen.
+    # In WordPress plugin code PHPDoc is aspirational: values arrive from
+    # get_field(), HTTP responses and $_POST, none of which the annotation
+    # can guarantee. Trusting it would mean deleting defensive guards that
+    # are correct at runtime, so PHPDoc informs types but does not prove
+    # conditions. Native types are still checked normally.
+    treatPhpDocTypesAsCertain: false
+    # Analyse as PHP 8.1 — the plugin's floor and the version CI runs.
+    # Without this PHPStan analyses using whatever PHP is executing it, so
+    # a developer on 8.5 and CI on 8.1 disagree.
+    phpVersion: 80100
+    # No baseline, and this is a new plugin — it starts clean and should
+    # stay that way. A baseline added later is a decision to be taken
+    # deliberately, not a place to put today's findings.
+    reportUnmatchedIgnoredErrors: false
+    paths:
+        - src
+    excludePaths:
+        - tests
+    scanDirectories:
+        - ../unity/src
+        - ../scrutiny/src
+        - ../sentinel/src
+    # The plugin's own bootstrap, where the FELLOWSHIP_* constants src/
+    # uses are define()d. Scanned, not analysed.
+    scanFiles:
+        - fellowship.php

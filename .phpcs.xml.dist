@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<ruleset name="fellowship">
+    <description>PSR-12 coding standard for the Fellowship plugin.</description>
+
+    <file>src</file>
+    <file>tests</file>
+    <file>fellowship.php</file>
+    <file>build.php</file>
+
+    <arg name="basepath" value="."/>
+    <arg name="extensions" value="php"/>
+    <arg name="colors"/>
+
+    <rule ref="PSR12">
+        <!-- Line endings are normalised by git (`* text=auto`): the index is LF, the
+             Windows working copy is CRLF. This sniff only ever fires locally. -->
+        <exclude name="Generic.Files.LineEndings"/>
+
+        <!-- PSR-12's 120-character limit. The long lines here are admin HTML output
+             and array literals, where wrapping costs more than it gives. -->
+        <exclude name="Generic.Files.LineLength"/>
+
+        <!-- Every source file carries the mandatory WordPress
+             `if (!defined('ABSPATH')) { exit; }` guard, which PSR-1 counts as a side
+             effect sitting alongside the class declaration. Not removable. -->
+        <exclude name="PSR1.Files.SideEffects"/>
+    </rule>
+
+    <!-- Tests use snake_case BDD method names (it_returns_null_when_absent). -->
+    <rule ref="PSR1.Methods.CamelCapsMethodName">
+        <exclude-pattern>tests/*</exclude-pattern>
+    </rule>
+
+    <!-- Test doubles, fakes and WP_* stubs are deliberately global, deliberately not
+         PascalCase, and deliberately grouped in the file that uses them. -->
+    <rule ref="PSR1.Classes.ClassDeclaration">
+        <exclude-pattern>tests/*</exclude-pattern>
+        <!-- build.php is a standalone CLI build script, never autoloaded and never
+             shipped; its PluginBuilder class is deliberately global. -->
+        <exclude-pattern>build\.php</exclude-pattern>
+    </rule>
+    <rule ref="Squiz.Classes.ValidClassName">
+        <exclude-pattern>tests/*</exclude-pattern>
+    </rule>
+    <rule ref="PSR12.Files.FileHeader">
+        <exclude-pattern>tests/*</exclude-pattern>
+    </rule>
+</ruleset>

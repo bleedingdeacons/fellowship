@@ -1,0 +1,61 @@
+{
+    "name": "bleeding-deacons/fellowship",
+    "description": "Server side of the Link messaging app: OAuth device enrolment, per-device key exchange, and encrypted push delivery to Unity members and committees.",
+    "type": "wordpress-plugin",
+    "license": "MIT (Modified)",
+    "authors": [
+        {
+            "name": "The Bleeding Deacons"
+        }
+    ],
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/bleedingdeacons/wp-mocks"
+        }
+    ],
+    "require": {
+        "php": ">=8.1",
+        "ext-openssl": "*",
+        "ext-json": "*",
+        "ext-zlib": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "Fellowship\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Fellowship\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true,
+        "platform": {
+            "php": "8.1"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "test:unit": "phpunit --testsuite=Unit",
+        "test:coverage": "phpunit --coverage-html ./tests/coverage",
+        "build": "php build.php build:production",
+        "build:production": "php build.php build:production",
+        "build:dev": "php build.php build:dev",
+        "build:clean": "php build.php clean",
+        "phpcs": "phpcs --standard=.phpcs.xml.dist",
+        "phpcs:fix": "phpcbf --standard=.phpcs.xml.dist",
+        "phpstan": "phpstan analyse --memory-limit=1G"
+    },
+    "require-dev": {
+        "bleedingdeacons/wp-mocks": "^2.0",
+        "mockery/mockery": "^1.6",
+        "phpstan/phpstan": "^2.0",
+        "phpunit/phpunit": "^10.5",
+        "psr/container": "^2.0",
+        "squizlabs/php_codesniffer": "^4.0",
+        "szepeviktor/phpstan-wordpress": "^2.0"
+    }
+}
