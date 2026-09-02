@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Committed PHPUnit config.
+
+    Schema is 10.5, so coverage include/exclude lives in <source> rather
+    than the 9.x <coverage> element.
+
+    There is deliberately no <exclude> for src/Admin. Excluding a
+    directory does not just hide it from the report, it takes it out of
+    the denominator — so an untested admin layer reads as a higher
+    percentage than a tested one. The capability gates on those screens
+    are exactly the code that most wants a test.
+-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/10.5/phpunit.xsd"
+         bootstrap="tests/bootstrap.php"
+         colors="true"
+         cacheResultFile=".phpunit.result.cache"
+         executionOrder="depends,defects"
+         failOnRisky="true"
+         failOnWarning="true">
+    <testsuites>
+        <testsuite name="Unit">
+            <directory>tests</directory>
+        </testsuite>
+    </testsuites>
+
+    <source>
+        <include>
+            <directory suffix=".php">src</directory>
+        </include>
+    </source>
+</phpunit>

@@ -1,0 +1,569 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  # A merge is the release, so without this there is no way to cut one when the
+  # merge's own run does not survive. Added after the 2026-08-06 Actions outage
+  # left a release run wedged: queued with no runner, refusing both cancel
+  # ("already completed") and rerun ("already running"), and holding the
+  # concurrency group so nothing could follow it. A merge cannot be repeated;
+  # this can.
+  workflow_dispatch:
+
+concurrency:
+  # PR runs share one group per ref, so pushing again cancels the superseded
+  # run. Runs on main get a group of their own (run_id is unique) and therefore
+  # queue behind nothing — a run that never *starts* must not be able to block
+  # every run after it, which is what a single shared group allowed. Releases
+  # still serialise, on the release job's own group; the gates never needed to.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    name: PHP 8.1
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        # This plugin and the siblings its PHPStan config scans are
+        # checked out side by side, mirroring a WordPress plugins/
+        # directory, so run everything from inside this one.
+        working-directory: fellowship
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: fellowship
+
+      - name: Checkout Unity
+        # Scanned by phpstan.neon.dist so cross-plugin symbols resolve.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: bleedingdeacons/unity
+          ref: main
+          path: unity
+
+      - name: Checkout Scrutiny
+        # Scanned by phpstan.neon.dist so cross-plugin symbols resolve.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: bleedingdeacons/scrutiny
+          ref: main
+          path: scrutiny
+
+      - name: Checkout Sentinel
+        # Scanned by phpstan.neon.dist so cross-plugin symbols resolve.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: bleedingdeacons/sentinel
+          ref: main
+          path: sentinel
+
+      - name: Setup PHP 8.1
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.1'
+          # zip: build.php assembles the release archive with ZipArchive.
+          extensions: mbstring, intl, json, zip
+          tools: composer:v2
+          # pcov drives PHPUnit's line coverage for the Coveralls upload
+          # below. Much faster than xdebug for coverage-only runs.
+          coverage: pcov
+
+      - name: Get Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # Keyed on composer.json: composer.lock is untracked in several of
+          # these repos, so it is not a reliable cache key across the suite.
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-php8.1-composer-${{ hashFiles('fellowship/composer.json') }}
+          restore-keys: |
+            ${{ runner.os }}-php8.1-composer-
+
+      # --- Gates -----------------------------------------------------------
+      # These fail the build. Each is verified to pass across the suite today.
+
+      - name: Validate composer.json
+        # A gate, lock included. This ran with --no-check-lock on the reasoning
+        # that composer.lock was untracked in some repos and had drifted from
+        # composer.json in others, with lock state reported as a separate
+        # advisory step instead. Neither is true any more: every repo tracks its
+        # lock and every lock is in sync, verified on the runner rather than
+        # locally. So the advisory step has gone and this checks the lock
+        # directly.
+        run: composer validate
+
+      - name: Composer audit
+        # A gate. --locked reads composer.lock directly, so this needs no
+        # vendor/ and runs before install, failing in seconds. Nothing is added
+        # to require-dev — Composer ships the command.
+        #
+        # Dev dependencies are audited too. Scoping this to --no-dev was tried
+        # first, so that an advisory against a dev tool could not block every PR
+        # in the suite. It does not work here: production requirements across
+        # these plugins amount to psr/container and a couple of ext-*, so the
+        # audit set is empty in 9 of the 17 and Composer 2.10 treats an empty
+        # set as an error ("No installed packages found") even with --locked.
+        # Composer 2.9 skips it and exits 0, which is why that only showed up in
+        # CI. Where it did run it audited a single package. Auditing the whole
+        # lock audits something real.
+        #
+        # --abandoned=report pins today's behaviour. The default becomes "fail"
+        # in Composer 3, which would turn an unmaintained package into a build
+        # failure without anyone having chosen that.
+        run: composer audit --locked --abandoned=report
+
+      - name: Semgrep
+        # A gate, on pull requests and on main alike.
+        #
+        # `semgrep ci` is diff-aware on a PR: it scans against the merge base
+        # and reports only what that PR introduces — the same bargain PHPStan's
+        # baseline strikes below, with the platform holding the existing state
+        # instead of a committed file. On main it runs a full scan, and that
+        # gates the release: release has `needs: ci`, so a blocking finding
+        # means no version is raised and no zip is published.
+        #
+        # Deliberately no continue-on-error. Making the main scan advisory was
+        # tried first, reasoning that a merge is the release here and a
+        # pre-existing finding should not be able to freeze one. That has the
+        # trade backwards: it buys an uninterrupted release cadence by shipping
+        # a zip the scanner has already objected to. If a finding does block a
+        # release, triage it and re-cut with workflow_dispatch, which runs the
+        # gates and publishes exactly as a merge does.
+        #
+        # A run: step rather than semgrep/semgrep-action, for two reasons.
+        # uses: steps ignore defaults.run.working-directory (see the Coveralls
+        # step below), and these jobs check this repo out alongside its
+        # siblings — an action would scan all of them and file the siblings'
+        # findings against this repo, where they would never dedupe against
+        # those repos' own scans and a merge into one of them could fail an
+        # unrelated PR here. Running from inside this repo's own directory
+        # scopes the scan to this git repo. Pinning a third-party action to run
+        # the security scanning is also the trivy-action shape; installing a
+        # pinned semgrep adds no action.
+        #
+        # Some of this suite's findings come from pro rules, which only exist
+        # with a platform token. Without SEMGREP_APP_TOKEN this skips outright
+        # rather than scanning with a quietly smaller ruleset and reporting
+        # green.
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        run: |
+          if [ -z "${SEMGREP_APP_TOKEN:-}" ]; then
+            echo 'SEMGREP_APP_TOKEN is not set - skipping the scan.'
+            echo 'Set it as an organisation secret to enable this gate.'
+            exit 0
+          fi
+          python3 -m pip install --quiet semgrep==1.174.0
+          semgrep ci
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress
+
+      - name: Lint PHP syntax
+        # Shipped code only: tests/ is covered by the advisory test run, and
+        # some suites currently contain files that cannot be parsed.
+        run: |
+          status=0
+          while IFS= read -r -d '' file; do
+            if ! out=$(php -l "$file" 2>&1); then
+              echo "$out"
+              status=1
+            fi
+          done < <(find . -path ./vendor -prune -o -path ./build -prune \
+                        -o -path ./tests -prune -o -path ./node_modules -prune \
+                        -o -name '*.php' -print0)
+          exit $status
+
+      - name: Build production archive
+        # The build is what /bump ships, so a broken build must fail the PR.
+        run: composer build:production
+
+      - name: PHPStan
+        # A gate. phpstan.neon.dist is committed so CI actually has a config
+        # — it previously ran with none at all, analysing nothing. Existing
+        # findings are grandfathered in phpstan-baseline.neon, so this fails
+        # only on new ones.
+        run: composer phpstan
+
+      - name: PHPStan badge is resolvable
+        # The README badge is a shields.io dynamic badge: it reads
+        # parameters.level straight out of phpstan.neon.dist, parsed as YAML.
+        # NEON is not YAML — it only parses because this config sticks to
+        # YAML-compatible syntax. Add a NEON-specific construct (%placeholder%,
+        # entity::method, @service) and the badge quietly degrades to
+        # "no result", so assert here that the parse still yields a level.
+        run: |
+          python3 - <<'PY'
+          import sys, yaml
+          cfg = yaml.safe_load(open('phpstan.neon.dist')) or {}
+          level = cfg.get('parameters', {}).get('level')
+          if not isinstance(level, int):
+              sys.exit('phpstan.neon.dist no longer yields an integer '
+                       'parameters.level when parsed as YAML — the README '
+                       'badge would show "no result".')
+          print('badge resolves: level', level)
+          PY
+
+      - name: PHPUnit
+        # A gate. There was no test step here at all and no phpunit config, so
+        # this plugin's 165 tests had never run in CI — which is how four
+        # Member test doubles came to be missing a method the Unity interface
+        # had gained.
+        run: composer test -- --coverage-clover build/logs/clover.xml
+
+      - name: PHPCS
+        # A gate. .phpcs.xml.dist is PSR-12 with a handful of documented
+        # exclusions for things WordPress forces on us (the ABSPATH guard reads
+        # as a PSR-1 side effect) and for test-only idioms (snake_case BDD
+        # method names, WP_* stubs that must stay global and non-PascalCase).
+        run: composer phpcs
+
+      - name: PHPCS badge is resolvable
+        # The README badge is a shields.io dynamic badge: it reads the first
+        # top-level <rule ref> straight out of .phpcs.xml.dist via the XPath
+        # /ruleset/rule[1]/@ref, so the badge always states the standard this
+        # repo actually enforces. Reorder the ruleset so a different rule comes
+        # first and the badge silently starts advertising that instead, so
+        # assert here that the query still yields the base standard.
+        run: |
+          python3 - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          root = ET.parse('.phpcs.xml.dist').getroot()
+          rules = root.findall('rule')
+          ref = rules[0].get('ref') if rules else None
+          if ref != 'PSR12':
+              sys.exit('The first top-level <rule> in .phpcs.xml.dist is '
+                       f'{ref!r}, not "PSR12" — the README badge would '
+                       'advertise the wrong standard.')
+          print('badge resolves:', ref)
+          PY
+
+      # --- Advisory --------------------------------------------------------
+      # Reported but not enforced.
+
+      - name: Upload coverage to Coveralls (advisory)
+        # Reports a coverage number; does not gate the build. The Clover report
+        # is produced by the PHPUnit step above. This action runs from the repo
+        # root (defaults.run.working-directory does not apply to `uses:` steps),
+        # so the file is under fellowship/ and base-path strips that prefix back off
+        # the paths inside the report to match the repository layout.
+        uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
+        continue-on-error: true
+        with:
+          file: fellowship/build/logs/clover.xml
+          format: clover
+          base-path: fellowship
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Release
+  # ---------------------------------------------------------------------------
+  # A merge to main is the release. Ported from LifeLines, which piloted this.
+  #
+  # Before it, the version was raised on a developer's machine by
+  # `/bump -Stage version`, committed into the change's own PR, and the shipping
+  # zip built locally by `-Stage release` once that PR merged. That put a manual
+  # step between "tests pass" and "there is something installable", and the zip
+  # only ever existed in C:\Data\Plugins on one machine.
+  #
+  # Now the gates pass, CI raises the version, builds the archive from merged
+  # code and publishes it as a GitHub Release. /deploy pulls the asset from
+  # there. Nothing is bumped or built by hand — and this plugin must therefore
+  # be in bump.ps1's $ciReleased list, or a second version gets raised on top.
+  release:
+    name: Release
+    # Every gate must pass first: needs: ci makes the whole release conditional
+    # on a green run, so a failing test can never publish a zip.
+    needs: ci
+    # main only. PRs run the gates and stop; a push to develop does too.
+    # workflow_dispatch releases as well — a manual trigger that ran the gates
+    # and then declined to publish would be useless for the case it exists for.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+
+    # The version commit and the release are both written with GITHUB_TOKEN,
+    # whose repo-wide default is read-only, so write has to be asked for here.
+    # Scoped to this job — nothing in the gates needs it.
+    permissions:
+      contents: write
+
+    # Separate from the workflow-level group so releases queue rather than
+    # cancel each other when two PRs merge in quick succession.
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
+
+    defaults:
+      run:
+        # Same layout as the gates: this repo and its siblings are
+        # checked out side by side, mirroring a WordPress plugins/
+        # directory, so everything runs from inside fellowship.
+        working-directory: fellowship
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history and tags: see the version step below.
+          fetch-depth: 0
+          path: fellowship
+
+      - name: Checkout Unity
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: bleedingdeacons/unity
+          ref: main
+          path: unity
+
+      - name: Checkout Scrutiny
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: bleedingdeacons/scrutiny
+          ref: main
+          path: scrutiny
+
+      - name: Checkout Sentinel
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: bleedingdeacons/sentinel
+          ref: main
+          path: sentinel
+
+      - name: Setup PHP 8.1
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.1'
+          # zip: build.php assembles the release archive with ZipArchive.
+          extensions: mbstring, intl, json, zip
+          tools: composer:v2
+          # No coverage driver: this job builds, it does not test.
+          coverage: none
+
+      - name: Decide the next version
+        id: version
+        # The rule is the one /bump -Stage suggest used to recommend and a human
+        # then confirmed: feat! or BREAKING CHANGE earns a major, feat: earns a
+        # minor, anything else is a patch. Nobody confirms it now, so it is
+        # worth being clear about what that costs — the prefixes state intent,
+        # not effect, so a feat: that turned out to only fix something still
+        # takes the minor. That is the trade for one PR instead of two.
+        #
+        # The range is the last v* tag to HEAD. There is no tag on the first
+        # run, and rather than read the entire history back to the initial
+        # commit (which would find an old feat: and cut a minor for it), the
+        # first release is always a patch.
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import re, subprocess, sys
+
+          MAIN = 'fellowship.php'
+
+          def git(*args):
+              return subprocess.run(['git', *args], capture_output=True,
+                                    text=True, check=True).stdout
+
+          tags = git('tag', '--list', 'v[0-9]*', '--sort=-v:refname').split()
+          last = tags[0] if tags else ''
+
+          # The header is read before anything is decided, because which of
+          # three states this run is in depends on it.
+          with open(MAIN, encoding='utf-8', newline='') as fh:
+              header_src = fh.read()
+          hm = re.search(r'(?m)^(?P<pre>\s*\*\s*Version:\s*)'
+                         r'(?P<ver>[0-9]+(?:\.[0-9]+)*)(?P<post>.*)$', header_src)
+          if not hm:
+              sys.exit(f'No "Version:" header line in {MAIN}.')
+          header = hm.group('ver')
+
+          # State 1 - the header carries a version that was never tagged.
+          #
+          # A previous run raised it, committed and pushed, and then died
+          # before the release was published. That is not hypothetical: on
+          # 2026-08-17 a GitHub outage failed `gh release create` with a 503
+          # in six plugins at once, after the version commit had landed. The
+          # job could not then recover, because raising the version again
+          # found nothing to commit and the step exited 1 - so the fix sat on
+          # main, unreleased, and every re-run and workflow_dispatch failed
+          # the same way.
+          #
+          # Publish what is already committed rather than inventing a new
+          # version. This is what makes the job re-runnable.
+          if f'v{header}' not in set(tags):
+              print('action=publish', f'version={header}', f'previous={header}',
+                    'level=none',
+                    'why=version already committed but never released; publishing it',
+                    sep='\n')
+              print(f'{MAIN}: recovering unreleased v{header}', file=sys.stderr)
+              sys.exit(0)
+
+          # State 2 - nothing new since the last release. Skip, successfully.
+          #
+          # Re-running a green release used to cut an empty version whose diff
+          # was only the version strings. A run with nothing to do should say
+          # so and pass, not manufacture a release.
+          if last and not [s for s in git('log', f'{last}..HEAD', '--format=%s').splitlines() if s]:
+              print('action=skip', f'version={header}', f'previous={header}',
+                    'level=none', f'why=no commits since {last}', sep='\n')
+              print(f'{MAIN}: nothing to release since {last}', file=sys.stderr)
+              sys.exit(0)
+
+          # State 3 - the ordinary case: raise the version for what has landed.
+          if not last:
+              level = 'patch'
+              why = 'no previous release tag; first release is always a patch'
+          else:
+              rng = f'{last}..HEAD'
+              subjects = [s for s in git('log', rng, '--format=%s').splitlines() if s]
+              bodies = git('log', rng, '--format=%B')
+              breaking = [s for s in subjects if re.match(r'^[a-z]+(\([^)]*\))?!:', s)]
+              feats = [s for s in subjects if re.match(r'^feat(\([^)]*\))?:', s)]
+              if breaking:
+                  level, why = 'major', f'breaking change: {breaking[0]}'
+              elif re.search(r'BREAKING[ -]CHANGE', bodies):
+                  level, why = 'major', 'BREAKING CHANGE in a commit body'
+              elif feats:
+                  level, why = 'minor', f'feat: commit: {feats[0]}'
+              else:
+                  level, why = 'patch', (f'{len(subjects)} commit(s) since {last}, '
+                                         'none feat: or breaking')
+
+          # newline='' throughout: this file's line endings are whatever the
+          # repo holds, and a release has no business rewriting them.
+          with open(MAIN, encoding='utf-8', newline='') as fh:
+              src = fh.read()
+          m = re.search(r'(?m)^(?P<pre>\s*\*\s*Version:\s*)'
+                        r'(?P<ver>[0-9]+(?:\.[0-9]+)*)(?P<post>.*)$', src)
+          if not m:
+              sys.exit(f'No "Version:" header line in {MAIN}.')
+
+          cur = m.group('ver')
+          parts = [int(p) for p in cur.split('.')]
+          if level in ('major', 'minor'):
+              while len(parts) < 3:
+                  parts.append(0)
+              idx = 0 if level == 'major' else 1
+              parts[idx] += 1
+              for i in range(idx + 1, len(parts)):
+                  parts[i] = 0
+          else:
+              parts[-1] += 1
+          new = '.'.join(str(p) for p in parts)
+
+          src = (src[:m.start()] + m.group('pre') + new + m.group('post')
+                 + src[m.end():])
+          with open(MAIN, 'w', encoding='utf-8', newline='') as fh:
+              fh.write(src)
+
+          print('action=bump', f'level={level}', f'version={new}',
+                f'previous={cur}', f'why={why}', sep='\n')
+          print(f'{MAIN}: {cur} -> {new} ({level} — {why})', file=sys.stderr)
+          PY
+
+      - name: Install dependencies
+        if: steps.version.outputs.action != 'skip'
+        # --no-dev: nothing here runs the test suite or the linters, and
+        # build.php stages its own no-dev vendor/ for the archive regardless.
+        run: composer install --no-dev --prefer-dist --no-progress
+
+      - name: Build production archive
+        if: steps.version.outputs.action != 'skip'
+        # This is the shipping zip. build.php is also the only thing that
+        # propagates the version raised above into readme.txt, README.md and the
+        # bundled docs, so those writes are what the commit below picks up.
+        run: composer build:production
+
+      - name: Check the archive was produced
+        if: steps.version.outputs.action != 'skip'
+        # Named explicitly rather than left to `gh release create` to fail on a
+        # missing file, so a rename in build.php reads as a rename and not as a
+        # GitHub API error.
+        run: |
+          zip="build/fellowship-production-${{ steps.version.outputs.version }}.zip"
+          if [ ! -f "$zip" ]; then
+            echo "Expected $zip, but build/ holds:"
+            ls -l build || true
+            exit 1
+          fi
+          echo "archive: $zip ($(stat -c%s "$zip") bytes)"
+
+      - name: Commit the version bump
+        id: commit
+        if: steps.version.outputs.action != 'skip'
+        # Straight to main, not via a PR. This is the commit that used to need
+        # its own — it contains nothing a human wrote and nothing to review:
+        # a version header, and whatever build.php propagated it into.
+        #
+        # [skip ci] keeps the push from starting another run. GITHUB_TOKEN
+        # pushes do not trigger workflows anyway; the marker is there so the
+        # loop stays closed if this ever moves to a PAT.
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -u
+          if git diff --cached --quiet; then
+            # Not a failure. In recovery mode the version header is already
+            # correct and already pushed - there is genuinely nothing to
+            # commit, and the release still needs publishing against the
+            # commit that carries it.
+            echo 'Nothing to commit - the version header is already current.'
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m 'chore(release): v${{ steps.version.outputs.version }} [skip ci]'
+          # A merge that landed while this job was building would make the push
+          # a non-fast-forward; rebase the release commit onto it and carry on.
+          git pull --rebase origin main
+          git push origin HEAD:main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the GitHub Release
+        if: steps.version.outputs.action != 'skip'
+        # --target pins the tag to the commit just pushed rather than to
+        # whatever main points at by now. The zip is the only asset; the notes
+        # are generated from the PRs since the last tag.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "v$VERSION is already published; nothing to do."
+            exit 0
+          fi
+          gh release create "v$VERSION" \
+            "build/fellowship-production-$VERSION.zip" \
+            --title "v$VERSION" \
+            --target "${{ steps.commit.outputs.sha }}" \
+            --generate-notes
+
+      - name: Summary
+        # Everything reaches the shell as an environment variable rather than
+        # as a ${{ }} substitution: WHY carries a commit subject, which is
+        # attacker-shaped text as far as a shell is concerned, and a PR titled
+        # with a backtick would otherwise run as a command here.
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PREVIOUS: ${{ steps.version.outputs.previous }}
+          LEVEL: ${{ steps.version.outputs.level }}
+          WHY: ${{ steps.version.outputs.why }}
+        run: |
+          {
+            printf '### Released `v%s`\n\n' "$VERSION"
+            printf '| | |\n|---|---|\n'
+            printf '| previous | `%s` |\n' "$PREVIOUS"
+            printf '| level | `%s` |\n' "$LEVEL"
+            printf '| because | %s |\n' "$WHY"
+            printf '| asset | `fellowship-production-%s.zip` |\n\n' "$VERSION"
+            printf 'Install it with `/deploy test fellowship`.\n'
+          } >> "$GITHUB_STEP_SUMMARY"

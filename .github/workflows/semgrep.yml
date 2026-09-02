@@ -1,0 +1,94 @@
+name: Semgrep
+
+# A scheduled full scan of main. This exists to close a gap the PR gate cannot.
+#
+# `semgrep ci` only marks a finding "blocking" in a pull_request context. That
+# was measured, not assumed: on sentinel #50 the same probe file scored
+# "3 blocking" in a PR run and "0 blocking" in a full scan of the same tree.
+# So the Block remediation policy protects anything arriving through a PR, and
+# nothing else - a Critical/High finding that reaches main by a direct push, or
+# one created by a rule newly added to the policy flagging existing code, would
+# never fail a build and never stop a release.
+#
+# This job therefore gates on severity rather than on the blocking flag, which
+# is the only signal available outside a PR. It cannot block a merge that has
+# already happened; what it does is fail loudly and turn the README badge red.
+
+on:
+  schedule:
+    # Mondays, 03:17 UTC. Deliberately not on the hour - GitHub queues
+    # scheduled jobs worst at round times.
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: semgrep-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  full-scan:
+    name: Full scan of main
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Semgrep full scan
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        run: |
+          if [ -z "${SEMGREP_APP_TOKEN:-}" ]; then
+            echo 'SEMGREP_APP_TOKEN is not set - skipping the scan.'
+            echo 'Set it as an organisation secret to enable this scan.'
+            exit 0
+          fi
+          python3 -m pip install --quiet semgrep==1.174.0
+
+          # No --dry-run: this uploads, so the platform's view of main stays
+          # current and triage done in the UI keeps applying here.
+          # `|| true` because semgrep's own exit code reflects blocking
+          # findings, which a full scan never has; the check below is the gate.
+          semgrep ci --json > semgrep-results.json || true
+
+          python3 - <<'PY'
+          import json, sys
+
+          with open('semgrep-results.json', encoding='utf-8') as fh:
+              data = json.load(fh)
+
+          results = data.get('results', [])
+
+          # Semgrep emits two severity vocabularies side by side - the older
+          # ERROR/WARNING/INFO and the newer CRITICAL/HIGH/MEDIUM/LOW - and a
+          # single scan can return both. Matching only ERROR silently misses
+          # everything labelled CRITICAL, so both spellings are listed here.
+          SERIOUS = {'ERROR', 'CRITICAL', 'HIGH'}
+
+          counts = {}
+          for r in results:
+              sev = (r.get('extra') or {}).get('severity', 'UNKNOWN').upper()
+              counts[sev] = counts.get(sev, 0) + 1
+
+          print('findings on main by severity:', counts or '(none)')
+
+          serious = [
+              r for r in results
+              if (r.get('extra') or {}).get('severity', '').upper() in SERIOUS
+          ]
+
+          for r in serious:
+              loc = (r.get('start') or {}).get('line', '?')
+              print(f"  {r.get('check_id')}  {r.get('path')}:{loc}")
+
+          if serious:
+              sys.exit(
+                  f'{len(serious)} critical/high finding(s) on main. '
+                  'Triage in Semgrep or fix in code.'
+              )
+
+          print('No critical or high findings on main.')
+          PY
