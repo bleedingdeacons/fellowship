@@ -225,6 +225,8 @@ final class FellowshipServiceProvider
             $c->get(DeviceRepository::class),
             $c->get(MemberRepository::class),
             $c->get(AuditLogger::class),
+            $c->get(PasswordAuthenticator::class),
+            $c->get(MemberGate::class),
         ));
         $container->register(SettingsPage::class, fn(ContainerInterface $c) => new SettingsPage(
             $c->get(Settings::class),
