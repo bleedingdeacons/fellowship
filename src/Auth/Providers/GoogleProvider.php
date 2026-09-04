@@ -46,8 +46,17 @@ final class GoogleProvider implements OAuthProvider
         return true;
     }
 
-    public function getAuthorizationUrl(string $state, string $nonce, string $redirectUri): string
+    public function requiresPkce(): bool
     {
+        return false;
+    }
+
+    public function getAuthorizationUrl(
+        string $state,
+        string $nonce,
+        string $redirectUri,
+        ?string $codeVerifier = null
+    ): string {
         $params = [
             'client_id'     => $this->settings->getClientId(self::PROVIDER_NAME),
             'redirect_uri'  => $redirectUri,
@@ -68,8 +77,12 @@ final class GoogleProvider implements OAuthProvider
         return self::AUTH_URL . '?' . http_build_query($params);
     }
 
-    public function handleCallback(string $code, string $nonce, string $redirectUri): ?VerifiedIdentity
-    {
+    public function handleCallback(
+        string $code,
+        string $nonce,
+        string $redirectUri,
+        ?string $codeVerifier = null
+    ): ?VerifiedIdentity {
         $tokens = $this->exchangeCode($code, $redirectUri);
         if ($tokens === null || empty($tokens['id_token']) || !is_string($tokens['id_token'])) {
             return null;

@@ -9,7 +9,9 @@ if (!defined('ABSPATH')) {
 }
 
 use Fellowship\Auth\Providers\AppleProvider;
+use Fellowship\Auth\Providers\FacebookProvider;
 use Fellowship\Auth\Providers\GoogleProvider;
+use Fellowship\Auth\Providers\MicrosoftProvider;
 use Fellowship\Core\Settings;
 use Fellowship\Push\ServiceAccount;
 use Fellowship\Rest\DeviceAuthController;
@@ -89,6 +91,40 @@ final class SettingsPage
         );
         echo '</tbody></table>';
 
+        echo '<h2>' . esc_html__('Sign in with Microsoft', 'fellowship') . '</h2>';
+        echo '<table class="form-table" role="presentation"><tbody>';
+        $this->textRow(
+            'microsoft_client_id',
+            __('Application (client) ID', 'fellowship'),
+            $this->settings->getClientId(MicrosoftProvider::PROVIDER_NAME),
+        );
+        $this->secretRow(
+            'microsoft_client_secret',
+            __('Client secret', 'fellowship'),
+            $this->settings->getClientSecret(MicrosoftProvider::PROVIDER_NAME) !== '',
+        );
+        echo '<tr><td colspan="2"><p class="description">'
+            . esc_html__('Register the app in Entra as "Personal Microsoft accounts only". Work and school accounts are refused on purpose: only the consumer tenant guarantees the address in the token is one Microsoft verified.', 'fellowship')
+            . '</p></td></tr>';
+        echo '</tbody></table>';
+
+        echo '<h2>' . esc_html__('Sign in with Facebook', 'fellowship') . '</h2>';
+        echo '<table class="form-table" role="presentation"><tbody>';
+        $this->textRow(
+            'facebook_client_id',
+            __('App ID', 'fellowship'),
+            $this->settings->getClientId(FacebookProvider::PROVIDER_NAME),
+        );
+        $this->secretRow(
+            'facebook_client_secret',
+            __('App secret', 'fellowship'),
+            $this->settings->getClientSecret(FacebookProvider::PROVIDER_NAME) !== '',
+        );
+        echo '<tr><td colspan="2"><p class="description">'
+            . esc_html__('Facebook Login must have the "openid" and "email" permissions. Nothing else is requested.', 'fellowship')
+            . '</p></td></tr>';
+        echo '</tbody></table>';
+
         echo '<h2>' . esc_html__('Sign in with Apple', 'fellowship') . '</h2>';
         echo '<table class="form-table" role="presentation"><tbody>';
         $this->textRow(
@@ -159,15 +195,37 @@ final class SettingsPage
             sanitize_text_field((string) ($_POST['apple_client_id'] ?? '')),
         );
 
+        $this->settings->setClientId(
+            MicrosoftProvider::PROVIDER_NAME,
+            sanitize_text_field((string) ($_POST['microsoft_client_id'] ?? '')),
+        );
+        $this->settings->setClientId(
+            FacebookProvider::PROVIDER_NAME,
+            sanitize_text_field((string) ($_POST['facebook_client_id'] ?? '')),
+        );
+
         // An empty secret field means "leave it alone", not "clear it" —
         // the field is never populated with the stored value, so an empty
         // submission is the normal case for anyone editing something else
-        // on this screen.
-        $googleSecret = trim((string) ($_POST['google_client_secret'] ?? ''));
-        if (!empty($_POST['clear_google_client_secret'])) {
-            $this->settings->setClientSecret(GoogleProvider::PROVIDER_NAME, '');
-        } elseif ($googleSecret !== '') {
-            $this->settings->setClientSecret(GoogleProvider::PROVIDER_NAME, $googleSecret);
+        // on this screen. Clearing is the checkbox's job.
+        //
+        // Extracted to a loop when the second and third providers arrived:
+        // three copies of the same six lines is where one of them
+        // eventually gets the wrong constant pasted into it.
+        foreach (
+            [
+            GoogleProvider::PROVIDER_NAME    => 'google_client_secret',
+            MicrosoftProvider::PROVIDER_NAME => 'microsoft_client_secret',
+            FacebookProvider::PROVIDER_NAME  => 'facebook_client_secret',
+            ] as $provider => $field
+        ) {
+            $submitted = trim((string) ($_POST[$field] ?? ''));
+
+            if (!empty($_POST['clear_' . $field])) {
+                $this->settings->setClientSecret($provider, '');
+            } elseif ($submitted !== '') {
+                $this->settings->setClientSecret($provider, $submitted);
+            }
         }
 
         $fcm = trim((string) ($_POST['fcm_service_account'] ?? ''));

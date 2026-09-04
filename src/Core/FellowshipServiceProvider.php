@@ -17,7 +17,9 @@ use Fellowship\Auth\DeviceRedirectValidator;
 use Fellowship\Auth\DeviceTokenMinter;
 use Fellowship\Auth\JwtVerifier;
 use Fellowship\Auth\Providers\AppleProvider;
+use Fellowship\Auth\Providers\FacebookProvider;
 use Fellowship\Auth\Providers\GoogleProvider;
+use Fellowship\Auth\Providers\MicrosoftProvider;
 use Fellowship\Auth\ProviderRegistry;
 use Fellowship\Auth\StateStore;
 use Fellowship\Crypto\MessageSealer;
@@ -81,6 +83,8 @@ final class FellowshipServiceProvider
             // from here is unreachable, not merely unconfigured. See
             // ProviderRegistry.
             $registry->register(new GoogleProvider($c->get(Settings::class), $c->get(JwtVerifier::class)));
+            $registry->register(new MicrosoftProvider($c->get(Settings::class), $c->get(JwtVerifier::class)));
+            $registry->register(new FacebookProvider($c->get(Settings::class), $c->get(JwtVerifier::class)));
             $registry->register(new AppleProvider($c->get(Settings::class), $c->get(JwtVerifier::class)));
             return $registry;
         });

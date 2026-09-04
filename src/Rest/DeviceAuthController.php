@@ -223,14 +223,26 @@ final class DeviceAuthController
                 );
             }
 
-            $issued = $this->stateStore->issue($provider->name(), $redirectUri);
+            // A PKCE verifier only for a provider that asks for one, so
+            // the transient does not carry a secret nothing will read.
+            // 32 random bytes, hex-encoded to 64 characters: inside RFC
+            // 7636's 43-128 range and made only of unreserved characters,
+            // so it needs no escaping anywhere it travels.
+            $codeVerifier = $provider->requiresPkce() ? bin2hex(random_bytes(32)) : null;
+
+            $issued = $this->stateStore->issue($provider->name(), $redirectUri, $codeVerifier);
 
             return new WP_REST_Response([
                 'state'             => $issued['state'],
+                // The verifier is deliberately absent from this response.
+                // It never leaves this server -- only its SHA-256
+                // challenge goes out, on the authorization URL below --
+                // and handing it to the app would undo the point of PKCE.
                 'authorization_url' => $provider->getAuthorizationUrl(
                     $issued['state'],
                     $issued['nonce'],
                     $this->callbackUrl(),
+                    $issued['code_verifier'],
                 ),
             ], 200);
         }
@@ -288,6 +300,7 @@ final class DeviceAuthController
             (string) $request->get_param('code'),
             $stored['nonce'],
             $this->callbackUrl(),
+            $stored['code_verifier'],
         );
 
         if ($identity === null) {
