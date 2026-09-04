@@ -313,10 +313,11 @@ final class PasswordAuthenticatorTest extends TestCase
 
         $body = (string) (WpState::$mail[count(WpState::$mail) - 1]['message'] ?? '');
 
+        // The code is on a line of its own, base64url of 32 random bytes.
         self::assertSame(
             1,
-            preg_match('~link://password\?token=([A-Za-z0-9_-]+)~', $body, $matches),
-            'The email did not carry a usable link.',
+            preg_match('~^([A-Za-z0-9_-]{40,})$~m', $body, $matches),
+            'The email did not carry a usable code.',
         );
 
         return $matches[1];

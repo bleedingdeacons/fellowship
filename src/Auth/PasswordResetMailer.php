@@ -9,7 +9,6 @@ if (!defined('ABSPATH')) {
 }
 
 use function add_action;
-use function add_query_arg;
 use function wp_mail;
 
 /**
@@ -26,14 +25,17 @@ use function wp_mail;
  * endpoint's response is identical regardless, so nothing here leaks
  * account existence.
  *
- * <b>The link is a deep link into the app, not a web page.</b> Reach mails
- * a URL to a page it serves, because Reach has a front end. Fellowship has
- * none: it is a REST server for a handset, and standing up a public page
- * to collect a password would be a new attack surface built solely to
- * receive one. `link://password?token=…` opens the app that asked for the
- * link, on the phone that asked for it, which is where the member already
- * is. The token is printed underneath as well, so a member who opens the
- * mail on a desktop can paste it into the app rather than being stuck.
+ * <b>A code to type, not a link to click.</b> Reach mails a URL to a page
+ * it serves, because Reach has a front end. Fellowship has none: it is a
+ * REST server for a handset, and standing up a public page to collect a
+ * password would be a new attack surface built solely to receive one.
+ *
+ * A `link://password` deep link was the obvious alternative and is not
+ * used, because nothing claims that host yet — Link registers the scheme
+ * for `link://auth` only, so the mail would have offered a link that did
+ * nothing. Deep linking can be added later; a mail that lies cannot be.
+ * The member pastes the code into the app instead, which also works when
+ * they read the mail on a desktop.
  *
  * <b>Why sending is queued rather than done on the spot.</b> The
  * request-reset endpoint answers `{sent: true}` whether or not a link
@@ -127,23 +129,16 @@ final class PasswordResetMailer
         $blogName = (string) get_bloginfo('name');
         $siteName = $blogName !== '' ? $blogName : 'your intergroup';
 
-        $link = add_query_arg('token', $rawToken, 'link://password');
-
         $subject = sprintf('[%s] Set your Link password', $siteName);
 
         $lines = [
             'Someone (hopefully you) asked to set or reset the password for the Link app.',
             '',
-            'Open this link on the phone Link is installed on, within the next hour:',
-            '',
-            $link,
-            '',
-            'If you are reading this somewhere other than that phone, open Link,',
-            'choose "Set a password" and paste in this code instead:',
+            'Open Link, choose "Set or reset a password", and enter this code:',
             '',
             $rawToken,
             '',
-            'The link can be used once and expires after 60 minutes. If you did not',
+            'The code can be used once and expires after 60 minutes. If you did not',
             'request this, you can safely ignore this email — nothing has changed,',
             'and you can still sign in with Google, Microsoft, Apple or Facebook.',
         ];
