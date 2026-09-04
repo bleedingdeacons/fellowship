@@ -9,6 +9,8 @@ if (!defined('ABSPATH')) {
 }
 
 use Fellowship\Auth\DeviceCodeStore;
+use Fellowship\Auth\PasswordAuthenticator;
+use Fellowship\Auth\PasswordResetResult;
 use Fellowship\Auth\DeviceRedirectValidator;
 use Fellowship\Auth\DeviceTokenMinter;
 use Fellowship\Auth\ProviderRegistry;
@@ -92,6 +94,7 @@ final class DeviceAuthController
         private readonly StateStore $stateStore,
         private readonly RateLimiter $rateLimiter,
         private readonly AuditLogger $auditLogger,
+        private readonly PasswordAuthenticator $passwords,
     ) {
     }
 
@@ -153,6 +156,48 @@ final class DeviceAuthController
                 'platform'      => ['type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_key'],
                 'push_provider' => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_key'],
                 'push_token'    => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
+            ],
+        ]);
+
+        // Password sign-in. Enrols exactly as the OAuth paths do; only
+        // the proof differs.
+        register_rest_route(self::NAMESPACE, '/auth/device/password', [
+            'methods'             => WP_REST_Server::CREATABLE,
+            'callback'            => [$this, 'password'],
+            'permission_callback' => '__return_true',
+            'args'                => [
+                'email' => ['type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_email'],
+                // Deliberately not sanitized. A password is an arbitrary
+                // string of printable characters, spaces and Unicode
+                // included, and WordPress's sanitisers would silently
+                // alter a chosen password into one that never matches.
+                'password'      => ['type' => 'string', 'required' => true],
+                'public_key'    => ['type' => 'string', 'required' => true],
+                'label'         => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
+                'platform'      => ['type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_key'],
+                'push_provider' => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_key'],
+                'push_token'    => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
+            ],
+        ]);
+
+        // Ask for a set-or-reset link. Always answers the same thing.
+        register_rest_route(self::NAMESPACE, '/auth/password/request', [
+            'methods'             => WP_REST_Server::CREATABLE,
+            'callback'            => [$this, 'requestPassword'],
+            'permission_callback' => '__return_true',
+            'args'                => [
+                'email' => ['type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_email'],
+            ],
+        ]);
+
+        // Complete one, with the token from the emailed link.
+        register_rest_route(self::NAMESPACE, '/auth/password/complete', [
+            'methods'             => WP_REST_Server::CREATABLE,
+            'callback'            => [$this, 'completePassword'],
+            'permission_callback' => '__return_true',
+            'args'                => [
+                'token'    => ['type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_text_field'],
+                'password' => ['type' => 'string', 'required' => true],
             ],
         ]);
 
@@ -223,14 +268,26 @@ final class DeviceAuthController
                 );
             }
 
-            $issued = $this->stateStore->issue($provider->name(), $redirectUri);
+            // A PKCE verifier only for a provider that asks for one, so
+            // the transient does not carry a secret nothing will read.
+            // 32 random bytes, hex-encoded to 64 characters: inside RFC
+            // 7636's 43-128 range and made only of unreserved characters,
+            // so it needs no escaping anywhere it travels.
+            $codeVerifier = $provider->requiresPkce() ? bin2hex(random_bytes(32)) : null;
+
+            $issued = $this->stateStore->issue($provider->name(), $redirectUri, $codeVerifier);
 
             return new WP_REST_Response([
                 'state'             => $issued['state'],
+                // The verifier is deliberately absent from this response.
+                // It never leaves this server -- only its SHA-256
+                // challenge goes out, on the authorization URL below --
+                // and handing it to the app would undo the point of PKCE.
                 'authorization_url' => $provider->getAuthorizationUrl(
                     $issued['state'],
                     $issued['nonce'],
                     $this->callbackUrl(),
+                    $issued['code_verifier'],
                 ),
             ], 200);
         }
@@ -288,6 +345,7 @@ final class DeviceAuthController
             (string) $request->get_param('code'),
             $stored['nonce'],
             $this->callbackUrl(),
+            $stored['code_verifier'],
         );
 
         if ($identity === null) {
@@ -328,6 +386,22 @@ final class DeviceAuthController
             return $identity;
         }
 
+        return $this->enrolVerified($request, $identity);
+    }
+
+    /**
+     * Turn a proven identity into an enrolled device.
+     *
+     * <b>Shared by every sign-in method, and that is the point.</b> OAuth
+     * and a password prove the same thing — that the caller controls this
+     * address — and differ only in how. Everything after that proof is
+     * identical: the member gate, the platform check, the public key, the
+     * device cap, the token, the audit line. A second copy for the
+     * password path is how one of them would quietly lose the device cap
+     * or stop writing an audit entry.
+     */
+    private function enrolVerified(WP_REST_Request $request, VerifiedIdentity $identity): WP_REST_Response|WP_Error
+    {
         $member = $this->gate->authorisedMember($identity->email);
         if ($member === null) {
             // Same wording whether the address is unknown or belongs to
@@ -413,6 +487,128 @@ final class DeviceAuthController
                 'name' => $member->getAnonymousName(),
             ],
         ], 201);
+    }
+
+    /**
+     * Enrol with an email and password.
+     *
+     * <b>Not the default path, and not meant to be.</b> Four OAuth
+     * providers come first in the app; this exists for the member whose
+     * intergroup address is not a Google, Microsoft, Apple or Facebook
+     * account, who otherwise could not sign in at all. A password is only
+     * ever set on request, so most members never have one and this
+     * endpoint refuses them exactly as it refuses a wrong password.
+     */
+    public function password(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        if ($insecure = $this->insecureTransport()) {
+            return $insecure;
+        }
+
+        if ($limited = $this->rateLimited('exchange')) {
+            return $limited;
+        }
+
+        $identity = $this->passwords->attemptLogin(
+            (string) $request->get_param('email'),
+            (string) $request->get_param('password'),
+            time(),
+        );
+
+        if ($identity === null) {
+            // One message for an unknown address, an address with no
+            // password, a wrong password and a locked account. Telling
+            // them apart would say which addresses belong to members,
+            // which is the thing the whole flow is careful about.
+            return new WP_Error(
+                'fellowship_bad_credentials',
+                'Email or password is incorrect.',
+                ['status' => 401],
+            );
+        }
+
+        return $this->enrolVerified($request, $identity);
+    }
+
+    /**
+     * Ask for a set-or-reset link.
+     *
+     * <b>The answer never varies.</b> Same body, same status, whether the
+     * address belongs to a member, to somebody who may not use Link, or
+     * to nobody at all. The send is queued past the response as well, so
+     * the two branches cost the same time as well as saying the same
+     * thing — a synchronous SMTP round trip on one branch and a return on
+     * the other is a difference an attacker can measure.
+     */
+    public function requestPassword(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        if ($insecure = $this->insecureTransport()) {
+            return $insecure;
+        }
+
+        if ($limited = $this->rateLimited('start')) {
+            return $limited;
+        }
+
+        $this->passwords->beginReset((string) $request->get_param('email'), time());
+
+        return new WP_REST_Response([
+            'sent'    => true,
+            'message' => 'If that address belongs to a member, a link is on its way. It expires in an hour.',
+        ], 200);
+    }
+
+    /**
+     * Set the password, using the token from the emailed link.
+     *
+     * Answers no session: setting a password is not signing in, and the
+     * app returns to the sign-in screen to use it. That keeps this
+     * endpoint free of the device-enrolment arguments it would otherwise
+     * need, and means a link opened on the wrong handset cannot enrol it.
+     */
+    public function completePassword(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        if ($insecure = $this->insecureTransport()) {
+            return $insecure;
+        }
+
+        if ($limited = $this->rateLimited('exchange')) {
+            return $limited;
+        }
+
+        $result = $this->passwords->completeReset(
+            (string) $request->get_param('token'),
+            (string) $request->get_param('password'),
+            time(),
+        );
+
+        if ($result->status === PasswordResetResult::INVALID_TOKEN) {
+            return new WP_Error(
+                'fellowship_bad_reset_token',
+                'That link has expired or has already been used. Please ask for a new one.',
+                ['status' => 400],
+            );
+        }
+
+        if ($result->status === PasswordResetResult::WEAK_PASSWORD) {
+            // 422 rather than 400: the request was well formed and the
+            // token was good. The link stays usable, so the member can
+            // try a different password without asking for another email.
+            return new WP_Error('fellowship_weak_password', $result->message, ['status' => 422]);
+        }
+
+        $member = $this->gate->authorisedMember($result->email);
+        if ($member !== null) {
+            $this->auditLogger->log(
+                AuditLogger::ACTION_UPDATE,
+                AuditLogger::ENTITY_MEMBER,
+                $member->getId(),
+                'authentication',
+                'Link password set via emailed link',
+            );
+        }
+
+        return new WP_REST_Response(['ok' => true], 200);
     }
 
     public function updatePush(WP_REST_Request $request): WP_REST_Response|WP_Error

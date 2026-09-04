@@ -54,13 +54,28 @@ final class AppleProvider implements OAuthProvider
         return false;
     }
 
-    public function getAuthorizationUrl(string $state, string $nonce, string $redirectUri): string
+    public function requiresPkce(): bool
     {
+        // Moot: PKCE protects an authorization code in transit, and this
+        // flow never mints one.
+        return false;
+    }
+
+    public function getAuthorizationUrl(
+        string $state,
+        string $nonce,
+        string $redirectUri,
+        ?string $codeVerifier = null
+    ): string {
         throw new \LogicException('Apple uses the client-side flow; getAuthorizationUrl does not apply.');
     }
 
-    public function handleCallback(string $code, string $nonce, string $redirectUri): ?VerifiedIdentity
-    {
+    public function handleCallback(
+        string $code,
+        string $nonce,
+        string $redirectUri,
+        ?string $codeVerifier = null
+    ): ?VerifiedIdentity {
         throw new \LogicException('Apple uses the client-side flow; handleCallback does not apply.');
     }
 

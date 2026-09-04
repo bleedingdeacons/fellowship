@@ -16,8 +16,15 @@ use Fellowship\Auth\DeviceCodeStore;
 use Fellowship\Auth\DeviceRedirectValidator;
 use Fellowship\Auth\DeviceTokenMinter;
 use Fellowship\Auth\JwtVerifier;
+use Fellowship\Auth\PasswordAuthenticator;
+use Fellowship\Auth\PasswordCredentialRepository;
+use Fellowship\Auth\PasswordPolicy;
+use Fellowship\Auth\PasswordResetMailer;
 use Fellowship\Auth\Providers\AppleProvider;
+use Fellowship\Auth\WpdbPasswordCredentialRepository;
+use Fellowship\Auth\Providers\FacebookProvider;
 use Fellowship\Auth\Providers\GoogleProvider;
+use Fellowship\Auth\Providers\MicrosoftProvider;
 use Fellowship\Auth\ProviderRegistry;
 use Fellowship\Auth\StateStore;
 use Fellowship\Crypto\MessageSealer;
@@ -81,6 +88,8 @@ final class FellowshipServiceProvider
             // from here is unreachable, not merely unconfigured. See
             // ProviderRegistry.
             $registry->register(new GoogleProvider($c->get(Settings::class), $c->get(JwtVerifier::class)));
+            $registry->register(new MicrosoftProvider($c->get(Settings::class), $c->get(JwtVerifier::class)));
+            $registry->register(new FacebookProvider($c->get(Settings::class), $c->get(JwtVerifier::class)));
             $registry->register(new AppleProvider($c->get(Settings::class), $c->get(JwtVerifier::class)));
             return $registry;
         });
@@ -138,6 +147,36 @@ final class FellowshipServiceProvider
             $c->get(MemberGate::class),
         ));
 
+        // ── Password sign-in ──
+        //
+        // Registered whether or not anybody has set a password: the
+        // credential table is empty until somebody asks for a link, and a
+        // conditional registration would only move the decision somewhere
+        // it is harder to see.
+        $container->register(
+            PasswordCredentialRepository::class,
+            function (): PasswordCredentialRepository {
+                global $wpdb;
+
+                if (!$wpdb instanceof \wpdb) {
+                    throw new \RuntimeException('Password credentials need $wpdb.');
+                }
+
+                return new WpdbPasswordCredentialRepository($wpdb);
+            }
+        );
+
+        $container->register(PasswordPolicy::class, fn(): PasswordPolicy => new PasswordPolicy());
+
+        $container->register(PasswordResetMailer::class, fn(): PasswordResetMailer => new PasswordResetMailer());
+
+        $container->register(PasswordAuthenticator::class, fn(ContainerInterface $c) => new PasswordAuthenticator(
+            $c->get(PasswordCredentialRepository::class),
+            $c->get(MemberGate::class),
+            $c->get(PasswordResetMailer::class),
+            $c->get(PasswordPolicy::class),
+        ));
+
         // ── REST ──
         $container->register(DeviceAuthController::class, fn(ContainerInterface $c) => new DeviceAuthController(
             $c->get(DeviceRepository::class),
@@ -150,6 +189,7 @@ final class FellowshipServiceProvider
             $c->get(StateStore::class),
             $c->get(RateLimiter::class),
             $c->get(AuditLogger::class),
+            $c->get(PasswordAuthenticator::class),
         ));
 
         $container->register(MessageController::class, fn(ContainerInterface $c) => new MessageController(

@@ -8,6 +8,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+use Fellowship\Auth\WpdbPasswordCredentialRepository;
 use Fellowship\Devices\WpdbDeviceRepository;
 use Fellowship\Logger\HasLogger;
 use Fellowship\Messaging\WpdbMessageRepository;
@@ -46,8 +47,9 @@ final class Schema
      * Schema version. Bump on any change to a CREATE TABLE below.
      *
      * 1 — devices, messages and message recipients.
+     * 2 — password credentials, for members who set one.
      */
-    public const VERSION = 1;
+    public const VERSION = 2;
 
     public const OPTION = 'fellowship_schema_version';
 
@@ -111,6 +113,7 @@ final class Schema
      */
     public static function install(wpdb $wpdb): void
     {
+        WpdbPasswordCredentialRepository::install($wpdb);
         WpdbDeviceRepository::install($wpdb);
         WpdbMessageRepository::install($wpdb);
         WpdbRecipientRepository::install($wpdb);

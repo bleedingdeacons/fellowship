@@ -24,6 +24,13 @@ use Fellowship\Auth\VerifiedIdentity;
  * asked for an authorization URL it does not have is a wiring mistake in
  * this plugin, not a failed sign-in, and it should be loud in
  * development rather than quietly answering "no" in production.
+ *
+ * <b>`$codeVerifier` is optional because only Facebook needs it.</b> It
+ * is defaulted rather than added to a second interface: one provider
+ * requiring PKCE does not justify splitting the contract every other
+ * provider satisfies, and a null a provider ignores costs nothing.
+ * {@see \Fellowship\Auth\StateStore} is what carries it between the
+ * two legs.
  */
 interface OAuthProvider
 {
@@ -32,9 +39,22 @@ interface OAuthProvider
     /** True for the code-exchange flow, false for a client-supplied ID token. */
     public function isServerSide(): bool;
 
-    public function getAuthorizationUrl(string $state, string $nonce, string $redirectUri): string;
+    /** True when this provider's token endpoint requires PKCE. */
+    public function requiresPkce(): bool;
 
-    public function handleCallback(string $code, string $nonce, string $redirectUri): ?VerifiedIdentity;
+    public function getAuthorizationUrl(
+        string $state,
+        string $nonce,
+        string $redirectUri,
+        ?string $codeVerifier = null
+    ): string;
+
+    public function handleCallback(
+        string $code,
+        string $nonce,
+        string $redirectUri,
+        ?string $codeVerifier = null
+    ): ?VerifiedIdentity;
 
     public function verifyIdToken(string $idToken, string $nonce): ?VerifiedIdentity;
 }
