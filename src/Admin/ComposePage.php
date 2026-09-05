@@ -151,6 +151,23 @@ final class ComposePage
 
         check_admin_referer(self::NONCE);
 
+        $this->redirect($this->sendFromRequest());
+    }
+
+    /**
+     * The body of the above, split out so it can be driven directly.
+     *
+     * The handler ends in wp_safe_redirect() and exit, which a test
+     * cannot follow, so the decision is separated from the redirect --
+     * the same split DevicesPage uses for the password code, and the same
+     * one Reach settled on in CallRequestsPage::completeFromRequest().
+     * Behaviour-identical: what was two calls to redirect() is now one
+     * return value and one call.
+     *
+     * @return string The result code the notice is keyed on.
+     */
+    public function sendFromRequest(): string
+    {
         // Passed through the same API another plugin would call, rather
         // than reaching for the dispatcher directly. One path in means
         // one place where validation, audit and the send actually happen.
@@ -161,16 +178,19 @@ final class ComposePage
         ]);
 
         if ($result instanceof WP_Error) {
+            // The reason waits in a one-shot per-user transient rather
+            // than travelling in the query string, where it would be a
+            // server-supplied message rendered from a URL.
             set_transient(
                 self::ERROR_TRANSIENT . get_current_user_id(),
                 $result->get_error_message(),
                 self::ERROR_TTL,
             );
 
-            $this->redirect('error');
+            return 'error';
         }
 
-        $this->redirect('sent');
+        return 'sent';
     }
 
     /**
