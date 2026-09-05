@@ -93,7 +93,7 @@ final class DevicesPage
         // page chose to render is not a permission check.
         $canManage = current_user_can(self::MANAGE_CAPABILITY);
 
-        $page  = max(1, (int) filter_input(INPUT_GET, 'paged', FILTER_VALIDATE_INT));
+        $page  = max(1, (int) filter_var($_GET['paged'] ?? null, FILTER_VALIDATE_INT));
         $total = $this->devices->countAll();
         $rows  = $this->devices->list(self::PER_PAGE, ($page - 1) * self::PER_PAGE);
 
@@ -129,7 +129,9 @@ final class DevicesPage
             echo '<td>' . esc_html($device->wantsPush() ? __('Yes', 'fellowship') : __('Poll only', 'fellowship')) . '</td>';
             echo '<td>' . esc_html($this->when($device->createdAt)) . '</td>';
             echo '<td>' . esc_html($device->lastSeenAt > 0 ? $this->when($device->lastSeenAt) : '—') . '</td>';
-            echo '<td>' . wp_kses_post($this->status($device, $canManage)) . '</td>';
+            echo '<td>';
+            $this->status($device, $canManage);
+            echo '</td>';
             echo '</tr>';
         }
 
@@ -138,6 +140,15 @@ final class DevicesPage
     }
 
     public function handleRevoke(): void
+    {
+        $this->redirect($this->revokeFromRequest());
+    }
+
+    /**
+     * The body of the above, split out so it can be driven directly.
+     * See ComposePage::sendFromRequest() for the reasoning.
+     */
+    public function revokeFromRequest(): string
     {
         $id = $this->authoriseAction();
 
@@ -151,10 +162,18 @@ final class DevicesPage
             );
         }
 
-        $this->redirect('revoked');
+        return 'revoked';
     }
 
     public function handleRemove(): void
+    {
+        $this->redirect($this->removeFromRequest());
+    }
+
+    /**
+     * The body of the above, split out so it can be driven directly.
+     */
+    public function removeFromRequest(): string
     {
         $id = $this->authoriseAction();
 
@@ -178,7 +197,7 @@ final class DevicesPage
             );
         }
 
-        $this->redirect('removed');
+        return 'removed';
     }
 
     /**
@@ -318,13 +337,15 @@ final class DevicesPage
             wp_die(esc_html__('You are not allowed to manage devices.', 'fellowship'), '', ['response' => 403]);
         }
 
-        // filter_input rather than a cast on the superglobal: it
-        // *validates* where a cast merely coerces, so "12abc" is refused
-        // instead of quietly becoming 12. That matters here more than it
-        // looks, because this value is concatenated into the nonce action
-        // name on the next line — a coerced id would check a nonce for a
-        // device other than the one the form named.
-        $id = (int) filter_input(INPUT_POST, 'device', FILTER_VALIDATE_INT);
+        // <b>Validated, not cast.</b> "12abc" must be refused rather than
+        // quietly becoming 12, because this value is concatenated into the
+        // nonce action name on the next line — a coerced id would check a
+        // nonce for a device other than the one the form named.
+        //
+        // filter_var on the superglobal rather than filter_input, which
+        // reads the *original* request and so cannot be driven by a test
+        // at all. The validation is identical; only the source differs.
+        $id = (int) filter_var($_POST['device'] ?? null, FILTER_VALIDATE_INT);
 
         check_admin_referer(self::NONCE . '_' . $id);
 
@@ -335,51 +356,68 @@ final class DevicesPage
         return $id;
     }
 
-    private function status(Device $device, bool $canManage): string
+    /**
+     * The status cell, echoed rather than returned.
+     *
+     * It builds markup — a coloured span, and up to two forms — so
+     * returning it would mean printing a string of HTML at the call
+     * site, and the only tool for that is wp_kses_post(). That reads as
+     * "trust me, this is fine", and it is not what is keeping the cell
+     * safe: every dynamic value below is escaped where it is written.
+     * Echoing directly keeps the escaping next to the value it protects
+     * and leaves no HTML-carrying string for anything to have to trust.
+     */
+    private function status(Device $device, bool $canManage): void
     {
         if ($device->isRevoked()) {
-            return '<span class="description">'
+            echo '<span class="description">'
                 . esc_html(sprintf(__('Revoked %s', 'fellowship'), $this->when((int) $device->revokedAt)))
-                . '</span>' . ($canManage ? ' ' . $this->button(self::REMOVE_ACTION, $device->id, __('Remove', 'fellowship'), true) : '');
-        }
+                . '</span>';
 
-        $status = '';
+            if ($canManage) {
+                echo ' ';
+                $this->button(self::REMOVE_ACTION, $device->id, __('Remove', 'fellowship'), true);
+            }
+
+            return;
+        }
 
         if ($device->hasKeyFault()) {
             // Worth saying loudly: this handset is enrolled, looks
             // healthy, and cannot read a word it is sent.
-            $status .= '<span style="color:#b32d2e"><strong>'
+            echo '<span style="color:#b32d2e"><strong>'
                 . esc_html__('Cannot read messages', 'fellowship')
                 . '</strong></span><br>';
         }
 
         if (!$canManage) {
-            return $status . esc_html__('Active', 'fellowship');
+            echo esc_html__('Active', 'fellowship');
+
+            return;
         }
 
-        return $status
-            . $this->button(self::REVOKE_ACTION, $device->id, __('Revoke', 'fellowship'), false)
-            . ' '
-            . $this->button(self::REMOVE_ACTION, $device->id, __('Remove', 'fellowship'), true);
+        $this->button(self::REVOKE_ACTION, $device->id, __('Revoke', 'fellowship'), false);
+        echo ' ';
+        $this->button(self::REMOVE_ACTION, $device->id, __('Remove', 'fellowship'), true);
     }
 
-    private function button(string $action, int $deviceId, string $label, bool $confirm): string
+    private function button(string $action, int $deviceId, string $label, bool $confirm): void
     {
-        $form  = '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="display:inline">';
-        $form .= '<input type="hidden" name="action" value="' . esc_attr($action) . '">';
-        $form .= '<input type="hidden" name="device" value="' . esc_attr((string) $deviceId) . '">';
-        $form .= wp_nonce_field(self::NONCE . '_' . $deviceId, '_wpnonce', true, false);
-        $form .= '<button type="submit" class="button button-small"';
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="display:inline">';
+        echo '<input type="hidden" name="action" value="' . esc_attr($action) . '">';
+        echo '<input type="hidden" name="device" value="' . esc_attr((string) $deviceId) . '">';
+
+        wp_nonce_field(self::NONCE . '_' . $deviceId, '_wpnonce', true, true);
+
+        echo '<button type="submit" class="button button-small"';
 
         if ($confirm) {
-            $form .= ' onclick="return confirm(' . esc_attr(wp_json_encode(
+            echo ' onclick="return confirm(' . esc_attr(wp_json_encode(
                 __('Remove this device permanently? Revoking keeps the record instead.', 'fellowship')
             ) ?: '""') . ')"';
         }
 
-        $form .= '>' . esc_html($label) . '</button></form>';
-
-        return $form;
+        echo '>' . esc_html($label) . '</button></form>';
     }
 
     /**
@@ -436,7 +474,7 @@ final class DevicesPage
 
     private function notice(): void
     {
-        $result = sanitize_key((string) filter_input(INPUT_GET, 'fellowship_result'));
+        $result = sanitize_key((string) ($_GET['fellowship_result'] ?? ''));
 
         $message = match ($result) {
             'revoked'   => __('The device was revoked. Its record has been kept.', 'fellowship'),

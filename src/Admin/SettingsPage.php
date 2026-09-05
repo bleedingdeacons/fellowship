@@ -186,6 +186,22 @@ final class SettingsPage
 
         check_admin_referer(self::NONCE);
 
+        $this->redirect($this->saveFromRequest());
+    }
+
+    /**
+     * The body of the above, split out so it can be driven directly.
+     *
+     * The handler ends in wp_safe_redirect() and exit, which a test
+     * cannot follow. Same split as ComposePage::sendFromRequest() and
+     * DevicesPage::sendResetCodeFromRequest(), and behaviour-identical:
+     * what were two calls to redirect() are now two return values and one
+     * call.
+     *
+     * @return string The result code the notice is keyed on.
+     */
+    public function saveFromRequest(): string
+    {
         $this->settings->setClientId(
             GoogleProvider::PROVIDER_NAME,
             sanitize_text_field((string) ($_POST['google_client_id'] ?? '')),
@@ -237,7 +253,7 @@ final class SettingsPage
             // the moment to find that out is now rather than at the first
             // message.
             if (ServiceAccount::fromJson($fcm) === null) {
-                $this->redirect('bad_service_account');
+                return 'bad_service_account';
             }
 
             $this->settings->setFcmServiceAccount($fcm);
@@ -246,7 +262,7 @@ final class SettingsPage
         $this->settings->setCommitteeSendFromApp(!empty($_POST['app_committee_send']));
         $this->settings->setRetentionDays((int) ($_POST['retention_days'] ?? Settings::DEFAULT_RETENTION_DAYS));
 
-        $this->redirect('saved');
+        return 'saved';
     }
 
     private function textRow(string $name, string $label, string $value): void
@@ -303,7 +319,7 @@ final class SettingsPage
 
     private function notice(): void
     {
-        $result = sanitize_key((string) filter_input(INPUT_GET, 'fellowship_result'));
+        $result = sanitize_key((string) ($_GET['fellowship_result'] ?? ''));
 
         if ($result === 'saved') {
             echo '<div class="notice notice-success is-dismissible"><p>'

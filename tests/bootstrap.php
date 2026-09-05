@@ -131,3 +131,131 @@ if (!function_exists('dbDelta')) {
         return [];
     }
 }
+
+// A minimal wpdb, because the repositories type-hint the real one.
+//
+// wp-mocks ships Doubles\FakeWpdb, but it is final and extends nothing,
+// so it cannot satisfy `__construct(wpdb $wpdb)` — and those constructors
+// are typed on purpose, since a repository handed something that is not a
+// database connection is a wiring fault worth failing on. The stand-in
+// therefore has to *be* a wpdb, which means a class to extend.
+//
+// Only the surface the repositories touch is declared. Anything else is a
+// method this suite does not exercise, and inventing behaviour for it
+// would be inventing a database. Tests use Support\RecordingWpdb, which
+// extends this and records what it was asked.
+if (!class_exists('wpdb')) {
+    class wpdb
+    {
+        public string $prefix = 'wp_';
+
+        public int $insert_id = 0;
+
+        public string $last_error = '';
+
+        /** @param array<int|string, mixed> $args */
+        public function prepare(string $query, ...$args): string
+        {
+            // Enough of the real thing for a test to assert on the SQL:
+            // %s is quoted, %d and %f are not.
+            $replaced = str_replace(['%s', '%d', '%f'], ['%s', '%d', '%f'], $query);
+
+            foreach ($args as $arg) {
+                $position = strcspn($replaced, '%');
+                $token = substr($replaced, $position, 2);
+
+                $value = match ($token) {
+                    '%d' => (string) (int) $arg,
+                    '%f' => (string) (float) $arg,
+                    default => "'" . (is_scalar($arg) ? (string) $arg : '') . "'",
+                };
+
+                $replaced = substr_replace($replaced, $value, $position, 2);
+            }
+
+            return $replaced;
+        }
+
+        /** @return array<int, mixed> */
+        public function get_results(string $query, mixed $output = null): array
+        {
+            return [];
+        }
+
+        public function get_row(string $query, mixed $output = null, int $y = 0): mixed
+        {
+            return null;
+        }
+
+        public function get_var(string $query, int $x = 0, int $y = 0): mixed
+        {
+            return null;
+        }
+
+        public function query(string $query): mixed
+        {
+            return 0;
+        }
+
+        /** @param array<string, mixed> $data */
+        public function insert(string $table, array $data, mixed $formats = null): mixed
+        {
+            return 1;
+        }
+
+        /**
+         * @param array<string, mixed> $data
+         * @param array<string, mixed> $where
+         */
+        public function update(string $table, array $data, array $where, mixed $f = null, mixed $wf = null): mixed
+        {
+            return 1;
+        }
+
+        /** @param array<string, mixed> $where */
+        public function delete(string $table, array $where, mixed $formats = null): mixed
+        {
+            return 1;
+        }
+
+        public function get_charset_collate(): string
+        {
+            return 'DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci';
+        }
+
+        public function esc_like(string $text): string
+        {
+            return addcslashes($text, '_%\\');
+        }
+    }
+}
+
+// A minimal WP_Role, because Capabilities::ensureAssigned() type-checks
+// the real one.
+//
+// Without a class to satisfy that instanceof, the method returns early
+// and the capability grant is untestable — worse, it would *look* tested
+// while asserting only that nothing happened. Only add_cap and has_cap
+// are declared; those are the two the grant uses.
+if (!class_exists('WP_Role')) {
+    class WP_Role
+    {
+        /** @var array<string, bool> */
+        public array $capabilities = [];
+
+        public function has_cap(string $cap): bool
+        {
+            return !empty($this->capabilities[$cap]);
+        }
+
+        public function add_cap(string $cap, bool $grant = true): void
+        {
+            $this->capabilities[$cap] = $grant;
+        }
+
+        public function remove_cap(string $cap): void
+        {
+            unset($this->capabilities[$cap]);
+        }
+    }
+}
