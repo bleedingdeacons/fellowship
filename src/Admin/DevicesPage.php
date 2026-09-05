@@ -129,7 +129,9 @@ final class DevicesPage
             echo '<td>' . esc_html($device->wantsPush() ? __('Yes', 'fellowship') : __('Poll only', 'fellowship')) . '</td>';
             echo '<td>' . esc_html($this->when($device->createdAt)) . '</td>';
             echo '<td>' . esc_html($device->lastSeenAt > 0 ? $this->when($device->lastSeenAt) : '—') . '</td>';
-            echo '<td>' . wp_kses_post($this->status($device, $canManage)) . '</td>';
+            echo '<td>';
+            $this->status($device, $canManage);
+            echo '</td>';
             echo '</tr>';
         }
 
@@ -354,51 +356,68 @@ final class DevicesPage
         return $id;
     }
 
-    private function status(Device $device, bool $canManage): string
+    /**
+     * The status cell, echoed rather than returned.
+     *
+     * It builds markup — a coloured span, and up to two forms — so
+     * returning it would mean printing a string of HTML at the call
+     * site, and the only tool for that is wp_kses_post(). That reads as
+     * "trust me, this is fine", and it is not what is keeping the cell
+     * safe: every dynamic value below is escaped where it is written.
+     * Echoing directly keeps the escaping next to the value it protects
+     * and leaves no HTML-carrying string for anything to have to trust.
+     */
+    private function status(Device $device, bool $canManage): void
     {
         if ($device->isRevoked()) {
-            return '<span class="description">'
+            echo '<span class="description">'
                 . esc_html(sprintf(__('Revoked %s', 'fellowship'), $this->when((int) $device->revokedAt)))
-                . '</span>' . ($canManage ? ' ' . $this->button(self::REMOVE_ACTION, $device->id, __('Remove', 'fellowship'), true) : '');
-        }
+                . '</span>';
 
-        $status = '';
+            if ($canManage) {
+                echo ' ';
+                $this->button(self::REMOVE_ACTION, $device->id, __('Remove', 'fellowship'), true);
+            }
+
+            return;
+        }
 
         if ($device->hasKeyFault()) {
             // Worth saying loudly: this handset is enrolled, looks
             // healthy, and cannot read a word it is sent.
-            $status .= '<span style="color:#b32d2e"><strong>'
+            echo '<span style="color:#b32d2e"><strong>'
                 . esc_html__('Cannot read messages', 'fellowship')
                 . '</strong></span><br>';
         }
 
         if (!$canManage) {
-            return $status . esc_html__('Active', 'fellowship');
+            echo esc_html__('Active', 'fellowship');
+
+            return;
         }
 
-        return $status
-            . $this->button(self::REVOKE_ACTION, $device->id, __('Revoke', 'fellowship'), false)
-            . ' '
-            . $this->button(self::REMOVE_ACTION, $device->id, __('Remove', 'fellowship'), true);
+        $this->button(self::REVOKE_ACTION, $device->id, __('Revoke', 'fellowship'), false);
+        echo ' ';
+        $this->button(self::REMOVE_ACTION, $device->id, __('Remove', 'fellowship'), true);
     }
 
-    private function button(string $action, int $deviceId, string $label, bool $confirm): string
+    private function button(string $action, int $deviceId, string $label, bool $confirm): void
     {
-        $form  = '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="display:inline">';
-        $form .= '<input type="hidden" name="action" value="' . esc_attr($action) . '">';
-        $form .= '<input type="hidden" name="device" value="' . esc_attr((string) $deviceId) . '">';
-        $form .= wp_nonce_field(self::NONCE . '_' . $deviceId, '_wpnonce', true, false);
-        $form .= '<button type="submit" class="button button-small"';
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="display:inline">';
+        echo '<input type="hidden" name="action" value="' . esc_attr($action) . '">';
+        echo '<input type="hidden" name="device" value="' . esc_attr((string) $deviceId) . '">';
+
+        wp_nonce_field(self::NONCE . '_' . $deviceId, '_wpnonce', true, true);
+
+        echo '<button type="submit" class="button button-small"';
 
         if ($confirm) {
-            $form .= ' onclick="return confirm(' . esc_attr(wp_json_encode(
+            echo ' onclick="return confirm(' . esc_attr(wp_json_encode(
                 __('Remove this device permanently? Revoking keeps the record instead.', 'fellowship')
             ) ?: '""') . ')"';
         }
 
-        $form .= '>' . esc_html($label) . '</button></form>';
-
-        return $form;
+        echo '>' . esc_html($label) . '</button></form>';
     }
 
     /**
