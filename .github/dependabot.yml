@@ -1,0 +1,73 @@
+# Dependabot configuration.
+#
+# Two ecosystems, and the same file Reach carries — this plugin is
+# deliberately shaped like Reach, and a second dialect of dependency
+# management would only mean two sets of habits.
+#
+# github-actions — every action in ci.yml and semgrep.yml is pinned to a
+# commit SHA. That is safe against a tag being silently repointed, but a
+# pinned SHA also never picks up an upstream fix on its own: without this
+# file the pins simply rot. Dependabot rewrites the SHA and its trailing
+# version comment together, which is the only thing that keeps pinning
+# honest.
+#
+# composer — worth having because composer.lock is *tracked* here. With no
+# lock to update Dependabot can only bump the constraint in composer.json,
+# so it fires when a release lands outside the declared range (PHPUnit 11
+# against "^10.5") and stays silent when one lands inside it (PHPStan 2.2.8
+# against "^2.0"). The second case is the one that breaks a PHPStan run —
+# and this plugin has no baseline to absorb it, so a new rule arrives as a
+# red gate rather than as drift. With the lock committed it arrives as a
+# real diff in a real PR that CI runs against, which is the whole point.
+#
+# Both ecosystems are grouped and monthly on purpose. Twenty repositories on
+# a weekly ungrouped schedule is a great deal of noise for one reviewer.
+#
+# Note: merging a Dependabot PR cuts a release like any other change — the
+# release job in ci.yml runs on a push to main, once every gate has passed.
+# A "chore(deps)" subject takes the patch level, which is what a dependency
+# bump should be.
+
+version: 2
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    # Newly published versions are the ones most likely to be malicious or
+    # broken, so hold them for a week before proposing them. The monthly
+    # grouped schedule above absorbs some of this already, but not a package
+    # published a day or two before a run lands.
+    cooldown:
+      default-days: 7
+    # One PR for all action bumps rather than one per action.
+    groups:
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(ci)"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "composer"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 7
+    # Everything grouped into one PR: this plugin ships no production
+    # dependencies at all, and what moves is the dev tooling — phpunit,
+    # phpstan, phpcs, mockery, wp-mocks — which is best reviewed and merged
+    # as a set, since CI runs them together anyway.
+    groups:
+      dependencies:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(deps)"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
