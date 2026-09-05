@@ -84,9 +84,11 @@ final class MessageApi
         }
 
         // Audited because a message is personal data addressed to named
-        // members. What is recorded is who it reached and how it was
-        // addressed — not the body, which is already in a table Scrutiny
-        // does not need a second copy of.
+        // members. What is recorded is who it reached, how it was
+        // addressed, and the subject — not the body, which is already in
+        // a table Scrutiny does not need a second copy of. See
+        // AuditDetail on why the subject is the one piece of the message
+        // text that earns its place here.
         //
         // Entity id 0: this send has no member behind it. It is the
         // intergroup speaking, and inventing a member to attribute it to
@@ -96,10 +98,7 @@ final class MessageApi
             AuditLogger::ENTITY_MEMBER,
             0,
             'message',
-            'Message sent from WordPress;message:' . $message->id
-                . ';audience:' . $message->audienceType
-                . ($message->audienceRef !== '' ? ';ref:' . $message->audienceRef : '')
-                . ';recipients:' . count($members),
+            AuditDetail::forMessage($message, 'Message sent from WordPress', count($members)),
         );
 
         return $message->id;

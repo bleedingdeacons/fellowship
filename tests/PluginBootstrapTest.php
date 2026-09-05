@@ -96,6 +96,10 @@ final class PluginBootstrapTest extends TestCase
             ]),
             'Unity\\Committees\\Interfaces\\CommitteeRepository' => new InMemoryCommitteeRepository(),
             'Scrutiny\\Audit\\Interfaces\\AuditLogger' => new \Scrutiny\Testing\Doubles\SpyAuditLogger(),
+            // Unity's, since it took ownership of the password
+            // store. Fellowship no longer binds one.
+            'Unity\\Auth\\Interfaces\\PasswordCredentialRepository' =>
+                new \Unity\Testing\Doubles\InMemoryPasswordCredentialRepository(),
         ]);
 
         // The in-memory halves, primed so the hooks act on something the

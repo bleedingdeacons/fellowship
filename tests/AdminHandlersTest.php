@@ -17,7 +17,7 @@ use Fellowship\Core\Schema;
 use Fellowship\Core\Settings;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Tests\Support\InMemoryDeviceRepository;
-use Fellowship\Tests\Support\InMemoryPasswordCredentialRepository;
+use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
 use Fellowship\Tests\Support\RecordingWpdb;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;
 use Unity\Testing\Doubles\InMemoryMemberRepository;
@@ -249,9 +249,17 @@ final class AdminHandlersTest extends TestCase
 
         $sql = implode(' ', $GLOBALS['__fellowship_dbdelta'] ?? []);
 
-        foreach (['devices', 'messages', 'recipients', 'credentials'] as $table) {
+        foreach (['devices', 'messages', 'recipients'] as $table) {
             self::assertStringContainsString('fellowship_' . $table, $sql, $table . ' was not installed.');
         }
+
+        // Credentials are Unity's table now, and Unity installs it on its
+        // own version change. Asserted rather than merely dropped from the
+        // list above: installing it from here as well would give two
+        // plugins a claim on one schema, and the one that lost a race
+        // would be the one whose dbDelta ran against a table it did not
+        // define.
+        self::assertStringNotContainsString('credentials', $sql);
     }
 
     public function testInstallingIsSkippedWhenTheSchemaIsCurrent(): void

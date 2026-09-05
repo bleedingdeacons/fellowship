@@ -14,6 +14,7 @@ use Fellowship\Crypto\MessageSealer;
 use Fellowship\Devices\CurrentDevice;
 use Fellowship\Devices\Device;
 use Fellowship\Logger\HasLogger;
+use Fellowship\Messaging\AuditDetail;
 use Fellowship\Messaging\Message;
 use Fellowship\Messaging\MessageDispatcher;
 use Fellowship\Messaging\MessageRepository;
@@ -287,19 +288,22 @@ final class MessageController
             return new WP_Error('fellowship_send_failed', 'The message could not be sent.', ['status' => 500]);
         }
 
-        // Recorded against the sender, and holding no message text. What
-        // was said is already in a table Scrutiny does not need a second
-        // copy of; what the audit trail is for is who reached whom.
+        // Recorded against the sender, holding the subject and no more of
+        // the message than that. What was said is already in a table
+        // Scrutiny does not need a second copy of; what the audit trail is
+        // for is who reached whom, and which message it was. See
+        // AuditDetail.
         $this->auditLogger->log(
             AuditLogger::ACTION_MESSAGE,
             AuditLogger::ENTITY_MEMBER,
             $member->getId(),
             'message',
-            'Message sent from Link;message:' . $message->id
-                . ';audience:' . $message->audienceType
-                . ($message->audienceRef !== '' ? ';ref:' . $message->audienceRef : '')
-                . ';recipients:' . count($recipients)
-                . ';device:' . $device->id,
+            AuditDetail::forMessage(
+                $message,
+                'Message sent from Link',
+                count($recipients),
+                ['device' => $device->id],
+            ),
         );
 
         return new WP_REST_Response([

@@ -5,35 +5,29 @@ declare(strict_types=1);
 namespace Fellowship\Tests;
 
 use BleedingDeacons\WpMocks\TestCase;
-use Fellowship\Auth\WpdbPasswordCredentialRepository;
 use Fellowship\Messaging\WpdbMessageRepository;
 use Fellowship\Messaging\WpdbRecipientRepository;
 use Fellowship\Tests\Support\RecordingWpdb;
 
 /**
- * The message, recipient and credential tables.
+ * The message and recipient tables.
  *
- * <b>What is asserted is mostly the WHERE clause</b>, because in two of
- * these the WHERE clause *is* the security control and there is nowhere
- * else it can be checked:
+ * <p>The credential table was here too, until it became Unity's. Its
+ * tests went with it, and are not restated here: Reach was asserting the
+ * same statements against an identical copy of the same class, and one
+ * of the two would eventually have drifted.</p>
  *
- *  - A handset marks a message read by naming it, and the statement
- *    carries the member's own address. That is the authorisation — a
- *    request naming somebody else's message affects nothing and answers
- *    exactly as one naming a message that does not exist. Move that
- *    condition into a caller and any handset can mark any message read.
- *  - A reset token is looked up by hash, and an empty hash is refused
- *    before the query runs. Without that guard a blank token matches
- *    every row that has no reset pending, and the first one back is
- *    somebody's account.
- *
- * The credential table also holds the only secrets in the plugin, so what
- * goes into it is asserted directly: a hash, never a password; a
- * SHA-256, never a code.
+ * <b>What is asserted is mostly the WHERE clause</b>, because in these
+ * the WHERE clause *is* the security control and there is nowhere else
+ * it can be checked. A handset marks a message read by naming it, and
+ * the statement carries the member's own address. That is the
+ * authorisation — a request naming somebody else's message affects
+ * nothing and answers exactly as one naming a message that does not
+ * exist. Move that condition into a caller and any handset can mark any
+ * message read.
  *
  * @covers \Fellowship\Messaging\WpdbMessageRepository
  * @covers \Fellowship\Messaging\WpdbRecipientRepository
- * @covers \Fellowship\Auth\WpdbPasswordCredentialRepository
  */
 final class WpdbRepositoriesTest extends TestCase
 {
@@ -180,81 +174,14 @@ final class WpdbRepositoriesTest extends TestCase
 
     // ── Credentials ───────────────────────────────────────────────────
 
-    public function testABlankResetTokenIsRefusedBeforeAnyQueryRuns(): void
-    {
-        // Otherwise it matches every row with no reset pending, and the
-        // first one back is somebody's account.
-        self::assertNull($this->credentials()->findByResetTokenHash(''));
-        self::assertSame([], $this->wpdb->queries);
-    }
-
-    public function testACredentialIsReadBackFromItsRow(): void
-    {
-        $this->wpdb->results = [[
-            'email' => 'member@example.org',
-            'password_hash' => 'hashed',
-            'reset_token_hash' => '',
-            'reset_expires_at' => 0,
-            'failed_attempts' => 2,
-            'locked_until' => 0,
-            'updated_at' => 1788000000,
-        ]];
-
-        $credential = $this->credentials()->find('member@example.org');
-
-        self::assertNotNull($credential);
-        self::assertTrue($credential->hasPassword());
-        self::assertSame(2, $credential->failedAttempts);
-        self::assertFalse($credential->isLocked(1788000100));
-    }
-
-    public function testAnAddressWithNoCredentialAnswersNull(): void
-    {
-        $this->wpdb->results = [];
-
-        self::assertNull($this->credentials()->find('nobody@example.org'));
-    }
-
-    public function testSettingAPasswordClearsTheTokenAndTheLockout(): void
-    {
-        // A set or reset is a fresh start: the code is spent and any
-        // lockout is lifted, which is what makes the emailed code the
-        // recovery route for somebody locked out.
-        $this->credentials()->upsertPasswordHash('member@example.org', 'new-hash', 1788000000);
-
-        $sql = $this->wpdb->lastQuery();
-        self::assertStringContainsString('new-hash', $sql);
-        self::assertStringContainsString('locked_until', $sql);
-        self::assertStringContainsString('reset_token_hash', $sql);
-    }
-
-    public function testAFailedAttemptNeverCreatesARow(): void
-    {
-        // An unknown address has no password to guess. Seeding a row for
-        // one would turn the table into a list of every address anybody
-        // has ever tried, and would let a lockout be induced for an
-        // account that does not exist.
-        $this->credentials()->recordFailedAttempt('nobody@example.org', 1, 0, 1788000000);
-
-        self::assertStringContainsString('UPDATE', $this->wpdb->lastQuery());
-        self::assertSame([], $this->wpdb->inserts);
-    }
-
-    public function testDeletingACredentialIsScopedToOneAddress(): void
-    {
-        // Used to erase this GDPR-protected data when a member is
-        // deleted.
-        $this->credentials()->delete('member@example.org');
-
-        self::assertNotSame([], $this->wpdb->deletes);
-        self::assertSame(['email' => 'member@example.org'], $this->wpdb->deletes[0]['where']);
-    }
-
+    /**
+     * The credential table is not here any more: it is Unity's, and its
+     * name is asserted in Unity's own suite.
+     */
     public function testEveryTableNameCarriesThePrefix(): void
     {
         self::assertStringEndsWith('fellowship_messages', WpdbMessageRepository::tableName($this->wpdb));
         self::assertStringEndsWith('fellowship_recipients', WpdbRecipientRepository::tableName($this->wpdb));
-        self::assertStringEndsWith('fellowship_credentials', WpdbPasswordCredentialRepository::tableName($this->wpdb));
     }
 
     // ── Fixtures ──────────────────────────────────────────────────────
@@ -267,10 +194,5 @@ final class WpdbRepositoriesTest extends TestCase
     private function recipients(): WpdbRecipientRepository
     {
         return new WpdbRecipientRepository($this->wpdb);
-    }
-
-    private function credentials(): WpdbPasswordCredentialRepository
-    {
-        return new WpdbPasswordCredentialRepository($this->wpdb);
     }
 }

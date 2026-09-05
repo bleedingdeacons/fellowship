@@ -7,7 +7,6 @@ namespace Fellowship\Tests;
 use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
 use Brain\Monkey\Functions;
-use Fellowship\Auth\WpdbPasswordCredentialRepository;
 use Fellowship\Core\Capabilities;
 use Fellowship\Core\Schema;
 use Fellowship\Devices\WpdbDeviceRepository;
@@ -61,7 +60,6 @@ use Fellowship\Tests\Support\RecordingWpdb;
  * @covers \Fellowship\Devices\WpdbDeviceRepository
  * @covers \Fellowship\Messaging\WpdbMessageRepository
  * @covers \Fellowship\Messaging\WpdbRecipientRepository
- * @covers \Fellowship\Auth\WpdbPasswordCredentialRepository
  */
 final class SchemaAndLoggingTest extends TestCase
 {
@@ -109,15 +107,6 @@ final class SchemaAndLoggingTest extends TestCase
         WpdbRecipientRepository::install($this->wpdb);
 
         self::assertStringContainsString('191', $this->sql());
-    }
-
-    public function testACredentialIsKeyedOnTheAddress(): void
-    {
-        // One credential per member, which is what makes every write an
-        // upsert rather than a check-then-insert.
-        WpdbPasswordCredentialRepository::install($this->wpdb);
-
-        self::assertStringContainsString('email', $this->sql());
     }
 
     public function testAMessageTableIsCreated(): void

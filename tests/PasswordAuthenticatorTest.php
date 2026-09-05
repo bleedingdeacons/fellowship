@@ -10,7 +10,7 @@ use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
 use Fellowship\Auth\PasswordResetResult;
 use Fellowship\Devices\MemberGate;
-use Fellowship\Tests\Support\InMemoryPasswordCredentialRepository;
+use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
 use BleedingDeacons\WpMocks\TestCase;
 use Unity\Members\Interfaces\Member;
 use Unity\Members\Interfaces\MemberRepository;

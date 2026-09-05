@@ -50,6 +50,34 @@ message log, and Scrutiny auditing what was sent to whom. True
 end-to-end would have cost all three, and would additionally have meant
 that a lost phone loses a member's whole history with no recovery.
 
+**Scrutiny records the subject, and never the body.** An audit entry
+saying only that a message reached eleven people cannot answer the
+question it exists to answer — *which* message — without opening the
+message table, which is exactly what an auditor reviewing access should
+not have to do. The subject is the shortest thing that identifies a
+message and the line its recipients saw first; the body is where the
+substance is, and it is already in a table with its own retention
+window.
+
+A subject is member-typed text and may carry personal data, so this
+relaxes the AuditLogger contract's "no raw PII in the detail" for
+exactly one field, deliberately. What follows from that: the subject is
+treated as hostile text — delimiters stripped so it cannot forge a
+field, newlines flattened, length capped so the structured fields
+always survive the column — and it inherits the audit log's retention
+rather than the message table's. Both send paths, admin and handset,
+build their detail through `Messaging\AuditDetail`, so they cannot
+disagree about it.
+
+**Passwords are Unity's, not Fellowship's.** Fellowship kept its own
+`wp_fellowship_credentials` table and Reach kept an identical
+`wp_reach_credentials` one, so a member who set a password in one could
+not sign into the other with it and a reset in one left the other stale
+with nothing to say so. A member has one password. It lives in
+`wp_unity_credentials` now, bound as
+`Unity\Auth\Interfaces\PasswordCredentialRepository`, and Unity migrates
+the old rows on its first admin page load after the upgrade.
+
 **What the server does not hold is any handset's private key.** It is
 generated on the device at enrolment and only the public half is sent, so
 a payload Fellowship sealed and pushed yesterday is one it cannot open

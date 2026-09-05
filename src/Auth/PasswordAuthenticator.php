@@ -9,6 +9,8 @@ if (!defined('ABSPATH')) {
 }
 
 use Fellowship\Devices\MemberGate;
+use Unity\Auth\Interfaces\PasswordCredentialRepository;
+use Unity\Auth\PasswordCredential;
 
 /**
  * Email + password authentication, plus the emailed set/reset flow.
