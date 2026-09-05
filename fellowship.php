@@ -3,7 +3,7 @@
 /**
  * Plugin Name: Fellowship
  * Description: Server side of the Link messaging app. Enrols Android and iOS handsets against Unity members by OAuth-verified email, exchanges a device public key at enrolment, and delivers messages to individuals and committees as encrypted push notifications. Requires Unity and Scrutiny.
- * Version: 1.1.1
+ * Version: 1.1.2
  * Requires at least: 6.1
  * Requires PHP: 8.1
  * Requires Plugins: unity, scrutiny

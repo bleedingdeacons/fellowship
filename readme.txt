@@ -3,8 +3,8 @@ Contributors: thebleedingdeacons
 Requires at least: 6.1
 Tested up to: 6.7
 Requires PHP: 8.1
-Stable tag: 1.1.1
-Build date: 2026/09/05 06:25:28
+Stable tag: 1.1.2
+Build date: 2026/09/05 13:51:19
 License: MIT (Modified)
 
 Server side of the Link messaging app. Enrols handsets against Unity members by OAuth-verified email, exchanges a device public key, and delivers messages to individuals and committees as encrypted push notifications. Requires Unity and Scrutiny.
