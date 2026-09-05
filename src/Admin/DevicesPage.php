@@ -93,7 +93,7 @@ final class DevicesPage
         // page chose to render is not a permission check.
         $canManage = current_user_can(self::MANAGE_CAPABILITY);
 
-        $page  = max(1, (int) filter_input(INPUT_GET, 'paged', FILTER_VALIDATE_INT));
+        $page  = max(1, (int) filter_var($_GET['paged'] ?? null, FILTER_VALIDATE_INT));
         $total = $this->devices->countAll();
         $rows  = $this->devices->list(self::PER_PAGE, ($page - 1) * self::PER_PAGE);
 
@@ -455,7 +455,7 @@ final class DevicesPage
 
     private function notice(): void
     {
-        $result = sanitize_key((string) filter_input(INPUT_GET, 'fellowship_result'));
+        $result = sanitize_key((string) ($_GET['fellowship_result'] ?? ''));
 
         $message = match ($result) {
             'revoked'   => __('The device was revoked. Its record has been kept.', 'fellowship'),

@@ -213,7 +213,13 @@ final class ComposePage
 
     private function notice(): void
     {
-        $result = sanitize_key((string) filter_input(INPUT_GET, 'fellowship_result'));
+        // $_GET rather than filter_input, which reads the *original*
+        // request and therefore cannot be driven by a test at all — the
+        // same substitution DevicesPage::authoriseAction carries, and for
+        // the same reason. sanitize_key is the validation either way, and
+        // the value is only ever compared against a fixed set of literals
+        // below.
+        $result = sanitize_key((string) ($_GET['fellowship_result'] ?? ''));
 
         if ($result === 'sent') {
             echo '<div class="notice notice-success is-dismissible"><p>'
