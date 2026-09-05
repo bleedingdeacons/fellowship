@@ -522,10 +522,50 @@ jobs:
             exit 0
           fi
           git commit -m 'chore(release): v${{ steps.version.outputs.version }} [skip ci]'
-          # A merge that landed while this job was building would make the push
-          # a non-fast-forward; rebase the release commit onto it and carry on.
-          git pull --rebase origin main
-          git push origin HEAD:main
+
+          # A merge that lands while this job is building makes the push a
+          # non-fast-forward. Rebasing *before* pushing - which is what this
+          # did until now - closes the long window, the minutes spent
+          # building, but leaves a short one between the pull and the push,
+          # and nothing retried it. Push first and rebase only when rejected,
+          # so there is no gap at all.
+          #
+          # Link lost a whole release to this on 2026-09-05: a merge landed
+          # sixteen seconds before its push, every gate had already passed,
+          # and the version was simply gone. That job had no rebase at all,
+          # which is why this is an upgrade rather than a fix - the plugins
+          # were never exposed the way it was.
+          #
+          # The race is never two release jobs; the concurrency group above
+          # serialises those. It is a person merging while one is in flight,
+          # and the other writer is not a job, so no job-level concurrency
+          # can see it.
+          #
+          # A conflict is deliberately not retried. The only way to conflict
+          # is another writer touching the same version header, which that
+          # same group already rules out for this job - so it means something
+          # genuinely unexpected, and failing loudly beats resolving it blind.
+          pushed=
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              echo "Pushed the release commit on attempt $attempt."
+              pushed=yes
+              break
+            fi
+            echo "Push rejected on attempt $attempt; main moved. Rebasing onto it."
+            if ! git pull --rebase origin main; then
+              echo 'Rebase onto main failed; leaving it alone.' >&2
+              git rebase --abort || true
+              exit 1
+            fi
+          done
+          if [ -z "$pushed" ]; then
+            echo 'Could not push the release commit after 3 attempts.' >&2
+            exit 1
+          fi
+          # Read after the loop on purpose. A rebase rewrites the commit, so
+          # the sha the release is published against has to be the one that
+          # actually landed, not the one built before the retry.
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Publish the GitHub Release
