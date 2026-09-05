@@ -22,7 +22,7 @@ use Fellowship\Devices\DeviceRepository;
  * is refused because it cannot be found, not because anything downstream
  * checks a flag.
  */
-final class InMemoryDeviceRepository implements DeviceRepository
+class InMemoryDeviceRepository implements DeviceRepository
 {
     /** @var array<int, Device> */
     public array $rows = [];

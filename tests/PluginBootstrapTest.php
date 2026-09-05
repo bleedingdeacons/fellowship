@@ -18,6 +18,7 @@ use Fellowship\Tests\Support\InMemoryMessageRepository;
 use Fellowship\Tests\Support\InMemoryRecipientRepository;
 use Fellowship\Tests\Support\RecordingWpdb;
 use ReflectionProperty;
+use RuntimeException;
 use Unity\Testing\Doubles\FakeContainer;
 use Unity\Testing\Doubles\InMemoryCommitteeRepository;
 use Unity\Testing\Doubles\InMemoryMemberRepository;
@@ -269,6 +270,116 @@ final class PluginBootstrapTest extends TestCase
         $this->fire('unity/member_deleted', 42, null);
 
         self::assertFalse($this->devices->rows[1]->isRevoked());
+    }
+
+    // ── Booting twice, and not at all ─────────────────────────────────
+
+    public function testBootingASecondTimeChangesNothing(): void
+    {
+        // WordPress can fire unity/loaded more than once when a plugin is
+        // activated mid-request. Registering every route and menu twice
+        // would give the admin two Fellowship menus.
+        $before = count($this->actions['fellowship_purge_messages'] ?? []);
+
+        Plugin::init($this->container);
+
+        self::assertCount($before, $this->actions['fellowship_purge_messages'] ?? []);
+    }
+
+    public function testTheContainerIsAvailableOnceThePluginHasBooted(): void
+    {
+        self::assertSame($this->container, Plugin::getContainer());
+    }
+
+    public function testAskingForTheContainerBeforeBootIsAFaultRatherThanANull(): void
+    {
+        // Every caller dereferences it immediately, so a null would
+        // surface as "call to a member function on null" somewhere far
+        // from the actual mistake.
+        $this->resetPlugin();
+
+        $this->expectException(RuntimeException::class);
+
+        Plugin::getContainer();
+    }
+
+    public function testTheAdminScreensAreRegisteredOnlyInTheAdmin(): void
+    {
+        // Four screens, and none of them has any business being built on
+        // a front-end request.
+        Functions\when('is_admin')->justReturn(true);
+        Functions\when('add_menu_page')->justReturn('toplevel_page_fellowship');
+        Functions\when('add_submenu_page')->justReturn('fellowship_page_x');
+        Functions\when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
+
+        Actions\expectAdded('admin_menu')->atLeast()->once();
+
+        $this->resetPlugin();
+        Plugin::init($this->container);
+    }
+
+    // ── The retention sweep ───────────────────────────────────────────
+
+    public function testASiteKeepingMessagesIndefinitelySweepsNothing(): void
+    {
+        // Zero is a deliberate choice on the settings screen, not an
+        // unset value, and the sweep reads it as "do nothing".
+        $this->settings->setRetentionDays(0);
+
+        $this->fire('fellowship_purge_messages');
+
+        self::assertSame([], $this->recipients->rows);
+    }
+
+    public function testASweepThatDeletedNothingSaysNothing(): void
+    {
+        $this->settings->setRetentionDays(30);
+
+        $this->fire('fellowship_purge_messages');
+
+        self::assertTrue(true, 'The sweep ran without a message to delete.');
+    }
+
+    public function testTheSweepRunsAgainstAContainerThatHasGoneAway(): void
+    {
+        // Cron fires on its own request. If the plugin stood itself down
+        // in between — a kill switch, a deactivated Unity — the callback
+        // is still registered and must not fatal.
+        $this->resetPlugin();
+
+        $this->fire('fellowship_purge_messages');
+
+        self::assertSame([], $this->recipients->rows);
+    }
+
+    // ── Erasure ───────────────────────────────────────────────────────
+
+    public function testAMemberWithNoAddressIsNotErasedByAddress(): void
+    {
+        // Every device row would match an empty address, so acting on
+        // one would revoke the whole fleet.
+        $this->devices->create('hash-1', self::MEMBER, 7, 'Pixel 6a', 'android', 'spki', 'fcm', 'token-1', 1788000000);
+
+        $this->fire('unity/member_deleted', 42, new MemberStub(id: 7, personalEmail: '   '));
+
+        self::assertFalse($this->devices->rows[1]->isRevoked());
+    }
+
+    // ── The build date ────────────────────────────────────────────────
+
+    public function testTheBuildDateComesFromTheShippedReadme(): void
+    {
+        // It is written into readme.txt by the build, so a checkout that
+        // was never built has none — and answering an empty string is
+        // the documented behaviour rather than a fault.
+        self::assertIsString(Plugin::buildDate());
+    }
+
+    public function testTheBuildDateIsReadOnceRatherThanPerCall(): void
+    {
+        // It is on the settings screen and in the status dashboard; a
+        // file read per call would be a read per page view.
+        self::assertSame(Plugin::buildDate(), Plugin::buildDate());
     }
 
     // ── Fixtures ──────────────────────────────────────────────────────

@@ -183,6 +183,132 @@ final class PushTest extends TestCase
         self::assertFalse((new FcmClient())->send($account, ['token' => 'fcm-1']));
     }
 
+    public function testAMessageFcmAcceptsIsASend(): void
+    {
+        // The whole path: sign an assertion, exchange it for an access
+        // token, post the message. Nothing below this line is reached at
+        // all unless the service-account key actually loads.
+        $account = ServiceAccount::fromJson($this->accountJson());
+        self::assertNotNull($account);
+
+        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+        FakeWpHttp::pushResponse(200, '{"name":"projects/x/messages/1"}');
+
+        self::assertTrue((new FcmClient())->send($account, ['token' => 'fcm-1']));
+        self::assertSame(2, FakeWpHttp::callCount());
+    }
+
+    public function testTheMessageGoesToTheProjectsOwnEndpointUnderTheToken(): void
+    {
+        $account = ServiceAccount::fromJson($this->accountJson());
+        self::assertNotNull($account);
+
+        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+        FakeWpHttp::pushResponse(200, '{}');
+
+        (new FcmClient())->send($account, ['token' => 'fcm-1']);
+
+        $args = FakeWpHttp::sentArgs(1);
+
+        self::assertStringContainsString('intergroup-fellowship', FakeWpHttp::sentUrl(1));
+        self::assertSame('Bearer ya29.token', $args['headers']['Authorization']);
+    }
+
+    public function testTheAccessTokenIsReusedRatherThanMintedPerMessage(): void
+    {
+        // A fan-out to a committee is one token and many sends. Minting
+        // one per handset would be an RSA signature and a round trip to
+        // Google for every member.
+        $account = ServiceAccount::fromJson($this->accountJson());
+        self::assertNotNull($account);
+
+        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+        FakeWpHttp::pushResponse(200, '{}');
+        FakeWpHttp::pushResponse(200, '{}');
+
+        $client = new FcmClient();
+        $client->send($account, ['token' => 'fcm-1']);
+        $client->send($account, ['token' => 'fcm-2']);
+
+        self::assertSame(3, FakeWpHttp::callCount(), 'The token was minted twice.');
+    }
+
+    public function testASendThatNeverReachesGoogleIsJustFalse(): void
+    {
+        $account = ServiceAccount::fromJson($this->accountJson());
+        self::assertNotNull($account);
+
+        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+        FakeWpHttp::push(new \WP_Error('http_request_failed', 'offline'));
+
+        self::assertFalse((new FcmClient())->send($account, ['token' => 'fcm-1']));
+    }
+
+    public function testAKeyThatWillNotLoadStopsBeforeAnyRequest(): void
+    {
+        // The failure the fixture used to have by accident, asserted on
+        // purpose — and asserted by call count, which is the only thing
+        // that tells it apart from a refusal further down.
+        $account = ServiceAccount::fromJson((string) wp_json_encode([
+            'type' => 'service_account',
+            'project_id' => 'intergroup-fellowship',
+            'client_email' => 'pusher@intergroup-fellowship.iam.gserviceaccount.com',
+            'private_key' => "-----BEGIN PRIVATE KEY-----
+not-a-real-key
+-----END PRIVATE KEY-----
+",
+            'token_uri' => 'https://oauth2.googleapis.com/token',
+        ]));
+
+        self::assertNotNull($account);
+        self::assertFalse((new FcmClient())->send($account, ['token' => 'fcm-1']));
+        self::assertSame(0, FakeWpHttp::callCount());
+    }
+
+    // ── Transport to client ───────────────────────────────────────────
+
+    public function testAConfiguredSiteSealsTheBodyAndPushesIt(): void
+    {
+        $settings = new Settings();
+        $settings->setFcmServiceAccount($this->accountJson());
+
+        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+        FakeWpHttp::pushResponse(200, '{}');
+
+        $device = $this->device(publicKey: $this->publicKey());
+
+        self::assertTrue($this->transport($settings)->send($device, $this->message()));
+    }
+
+    public function testTheBodyOnTheWireIsSealedRatherThanReadable(): void
+    {
+        // What the design is for: the message travels through Google, so
+        // the one thing that must never be in the payload is the text.
+        $settings = new Settings();
+        $settings->setFcmServiceAccount($this->accountJson());
+
+        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+        FakeWpHttp::pushResponse(200, '{}');
+
+        $this->transport($settings)->send($this->device(publicKey: $this->publicKey()), $this->message());
+
+        $body = (string) (FakeWpHttp::sentArgs(1)['body'] ?? '');
+
+        self::assertStringNotContainsString('Now the 14th', $body);
+        self::assertStringNotContainsString('Intergroup moved', $body);
+    }
+
+    public function testAHandsetWhoseKeyWillNotLoadIsSkippedRatherThanSentToInTheClear(): void
+    {
+        // A key that is present but unusable is the case worth being
+        // sure about: an empty one is refused a step earlier.
+        $settings = new Settings();
+        $settings->setFcmServiceAccount($this->accountJson());
+
+        self::assertFalse($this->transport($settings)->send($this->device(publicKey: 'not-a-key'), $this->message()));
+        self::assertSame(0, FakeWpHttp::callCount());
+    }
+
     // ── Fixtures ──────────────────────────────────────────────────────
 
     private function transport(?Settings $settings = null): FcmTransport
@@ -221,17 +347,55 @@ final class PushTest extends TestCase
         );
     }
 
+    private function publicKey(): string
+    {
+        $resource = openssl_pkey_get_private(self::privateKey());
+        self::assertNotFalse($resource);
+
+        $details = openssl_pkey_get_details($resource);
+        self::assertIsArray($details);
+
+        return preg_replace('/\s+|-----[^-]*-----/', '', (string) $details['key']) ?? '';
+    }
+
     private function accountJson(string $projectId = 'intergroup-fellowship'): string
     {
-        // A structurally real account with a throwaway key. Nothing here
-        // signs anything a test asserts on, and a committed fixture must
-        // never carry a usable credential.
+        // Structurally real, and signed with a keypair generated for this
+        // run. A committed fixture must never carry a usable credential,
+        // but a *fake* key is worse than useless here: the assertion is
+        // signed before any HTTP call is made, so an unreadable key makes
+        // every send return false at the first step and the token
+        // exchange, the send and every status branch below it are never
+        // reached at all. Tests written against that pass for a reason
+        // that has nothing to do with what they claim to assert.
         return (string) wp_json_encode([
             'type' => 'service_account',
             'project_id' => $projectId,
             'client_email' => 'pusher@' . $projectId . '.iam.gserviceaccount.com',
-            'private_key' => "-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----\n",
+            'private_key' => self::privateKey(),
             'token_uri' => 'https://oauth2.googleapis.com/token',
         ]);
+    }
+
+    /** A throwaway RSA key, generated once for the whole run. */
+    private static function privateKey(): string
+    {
+        static $pem = null;
+
+        if ($pem === null) {
+            $resource = openssl_pkey_new([
+                'private_key_bits' => 2048,
+                'private_key_type' => OPENSSL_KEYTYPE_RSA,
+            ]);
+
+            if ($resource === false) {
+                self::markTestSkipped('OpenSSL could not generate a keypair. Set OPENSSL_CONF.');
+            }
+
+            openssl_pkey_export($resource, $exported);
+            $pem = (string) $exported;
+        }
+
+        return $pem;
     }
 }

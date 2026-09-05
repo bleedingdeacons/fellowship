@@ -10,7 +10,7 @@ use Fellowship\Messaging\MessageRepository;
 /**
  * Messages, in memory.
  */
-final class InMemoryMessageRepository implements MessageRepository
+class InMemoryMessageRepository implements MessageRepository
 {
     /** @var array<int, Message> */
     public array $rows = [];
