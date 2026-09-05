@@ -8,9 +8,11 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Core\Capabilities;
 use Fellowship\Devices\Device;
 use Fellowship\Devices\DeviceRepository;
+use Fellowship\Devices\MemberGate;
 use Scrutiny\Audit\Interfaces\AuditLogger;
 use Scrutiny\Privacy\PersonalDataPolicy;
 use Unity\Members\Interfaces\MemberRepository;
@@ -43,6 +45,7 @@ final class DevicesPage
     public const PAGE_SLUG = 'fellowship-devices';
     public const REVOKE_ACTION = 'fellowship_revoke_device';
     public const REMOVE_ACTION = 'fellowship_remove_device';
+    public const RESET_ACTION = 'fellowship_send_password_code';
 
     private const VIEW_CAPABILITY = PersonalDataPolicy::VIEW_CAPABILITY;
     private const MANAGE_CAPABILITY = Capabilities::MANAGE_DEVICES;
@@ -54,6 +57,8 @@ final class DevicesPage
         private readonly DeviceRepository $devices,
         private readonly MemberRepository $members,
         private readonly AuditLogger $auditLogger,
+        private readonly PasswordAuthenticator $passwords,
+        private readonly MemberGate $gate,
     ) {
     }
 
@@ -62,6 +67,7 @@ final class DevicesPage
         add_action('admin_menu', [$this, 'addMenu']);
         add_action('admin_post_' . self::REVOKE_ACTION, [$this, 'handleRevoke']);
         add_action('admin_post_' . self::REMOVE_ACTION, [$this, 'handleRemove']);
+        add_action('admin_post_' . self::RESET_ACTION, [$this, 'handleSendResetCode']);
     }
 
     public function addMenu(): void
@@ -95,6 +101,10 @@ final class DevicesPage
         echo '<h1>' . esc_html__('Link devices', 'fellowship') . '</h1>';
 
         $this->notice();
+
+        if ($canManage) {
+            $this->resetCodeForm();
+        }
 
         if ($rows === []) {
             echo '<p>' . esc_html__('No handsets have been enrolled yet.', 'fellowship') . '</p></div>';
@@ -169,6 +179,133 @@ final class DevicesPage
         }
 
         $this->redirect('removed');
+    }
+
+    /**
+     * Email a member a code for setting a Link password.
+     *
+     * <b>Triggering is not setting, and the difference is the whole
+     * reason this is safe.</b> The code goes to the member's own address;
+     * an admin can start the flow but cannot finish it, so this does not
+     * become a way to enrol a handset as somebody else and read their
+     * messages. An admin screen that set a password directly would be
+     * exactly that, which is why there is not one.
+     *
+     * Gated on MANAGE_DEVICES rather than a capability of its own: it is
+     * the same question that capability already answers — control over a
+     * member's ability to sign in — and revoking a handset is the more
+     * drastic half of it.
+     */
+    public function handleSendResetCode(): void
+    {
+        if (!current_user_can(self::MANAGE_CAPABILITY)) {
+            wp_die(esc_html__('You are not allowed to manage devices.', 'fellowship'), '', ['response' => 403]);
+        }
+
+        check_admin_referer(self::NONCE . '_reset');
+
+        $this->redirect($this->sendResetCodeFromRequest());
+    }
+
+    /**
+     * The body of the above, split out so it can be driven directly.
+     *
+     * The handler ends in wp_safe_redirect() and exit, which a test
+     * cannot follow. Splitting the decision from the redirect is the
+     * suite's existing answer to that -- see Reach's
+     * CallRequestsPage::completeFromRequest() -- and it is
+     * behaviour-identical.
+     *
+     * @return string The result code the notice is keyed on.
+     */
+    public function sendResetCodeFromRequest(): string
+    {
+        // sanitize_email + is_email rather than filter_input, which the
+        // revoke handler above uses. filter_input reads the *original*
+        // request rather than $_POST, so a split-out method cannot be
+        // driven through it -- which is the entire reason this method is
+        // split out. The validation is not weaker for it: is_email is
+        // WordPress's own check and the value is only ever used to look a
+        // member up.
+        $posted = isset($_POST['member_email']) ? wp_unslash($_POST['member_email']) : '';
+        $email = strtolower(trim(sanitize_email(is_string($posted) ? $posted : '')));
+
+        if ($email === '' || !is_email($email)) {
+            return 'code_bad_address';
+        }
+
+        // <b>Deliberately not the REST endpoint's non-answer.</b> There,
+        // saying whether an address belongs to a member would let anybody
+        // enumerate the fellowship, so the response never varies. Here the
+        // operator is authenticated and can already read the member list,
+        // so refusing to say leaks nothing and only wastes their time --
+        // they would be left watching for a mail that was never going to
+        // arrive.
+        $member = $this->gate->authorisedMember($email);
+        if ($member === null) {
+            return 'code_not_a_member';
+        }
+
+        if (!$this->passwords->beginReset($email, time())) {
+            // The address is a member's, so the only thing that stops a
+            // send now is the anti-flood cooldown. Reported rather than
+            // swallowed: a button that silently does nothing is a button
+            // somebody presses four more times.
+            return 'code_too_soon';
+        }
+
+        $this->auditLogger->log(
+            AuditLogger::ACTION_UPDATE,
+            AuditLogger::ENTITY_MEMBER,
+            $member->getId(),
+            'authentication',
+            'Link password code sent;by:admin:' . get_current_user_id(),
+        );
+
+        return 'code_sent';
+    }
+
+    /**
+     * The one thing on this screen that is not about a device.
+     *
+     * <b>An address rather than a row, deliberately.</b> The member who
+     * most needs this has no handset yet — they cannot use any of the
+     * four sign-in buttons and have nothing in the table below — so a
+     * per-row button would be missing for exactly the case it exists to
+     * solve.
+     *
+     * Shown only to somebody who can manage devices, and checked again in
+     * the handler: what the page chose to render is not a permission
+     * check.
+     */
+    private function resetCodeForm(): void
+    {
+        echo '<h2>' . esc_html__('Password code', 'fellowship') . '</h2>';
+
+        echo '<p class="description">'
+            . esc_html__(
+                'Emails a member a one-time code for setting a Link password. Most members sign in with Google, Microsoft, Apple or Facebook and never need one; this is for a member whose address is not one of those accounts.',
+                'fellowship'
+            )
+            . '</p>';
+
+        echo '<p class="description">'
+            . esc_html__(
+                'The code goes to the member, not to you. You can start this and they finish it in the app — nobody here can set a password on their behalf.',
+                'fellowship'
+            )
+            . '</p>';
+
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+        echo '<input type="hidden" name="action" value="' . esc_attr(self::RESET_ACTION) . '">';
+        wp_nonce_field(self::NONCE . '_reset');
+
+        echo '<input type="email" name="member_email" class="regular-text" required '
+            . 'placeholder="' . esc_attr__('The address the intergroup holds for them', 'fellowship') . '"> ';
+
+        submit_button(__('Email a code', 'fellowship'), 'secondary', 'submit', false);
+
+        echo '</form>';
     }
 
     /**
@@ -302,13 +439,29 @@ final class DevicesPage
         $result = sanitize_key((string) filter_input(INPUT_GET, 'fellowship_result'));
 
         $message = match ($result) {
-            'revoked' => __('The device was revoked. Its record has been kept.', 'fellowship'),
-            'removed' => __('The device was removed.', 'fellowship'),
-            default   => '',
+            'revoked'   => __('The device was revoked. Its record has been kept.', 'fellowship'),
+            'removed'   => __('The device was removed.', 'fellowship'),
+            'code_sent' => __('A code has been emailed to that member. It lasts an hour and can be used once.', 'fellowship'),
+            default     => '',
         };
 
         if ($message !== '') {
             echo '<div class="notice notice-success is-dismissible"><p>' . esc_html($message) . '</p></div>';
+
+            return;
+        }
+
+        // The three ways it does not work, each needing a different thing
+        // from whoever is reading it.
+        $warning = match ($result) {
+            'code_bad_address' => __('That is not a valid email address.', 'fellowship'),
+            'code_not_a_member' => __('No member holds that address. Check it against the membership record — sign-in matches on the address the intergroup has.', 'fellowship'),
+            'code_too_soon' => __('A code was sent to that member less than two minutes ago. Wait, then try again — the first one is still valid.', 'fellowship'),
+            default => '',
+        };
+
+        if ($warning !== '') {
+            echo '<div class="notice notice-warning is-dismissible"><p>' . esc_html($warning) . '</p></div>';
         }
     }
 }

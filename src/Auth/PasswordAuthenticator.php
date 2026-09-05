@@ -128,16 +128,25 @@ final class PasswordAuthenticator
      * any other address this is a silent no-op, so the REST layer can
      * always answer "if that address is registered, we've emailed a link"
      * without revealing whether it was.
+     *
+     * <b>Answers whether a code was actually queued, and the REST layer
+     * must go on ignoring that.</b> The public endpoint's whole point is
+     * that its response does not vary; returning a bool does not change
+     * it, because nothing there reads one. What the answer is for is the
+     * admin screen, where the operator is already authenticated, can
+     * already see the member list, and is owed the truth about whether
+     * their click did anything — a button that silently no-ops on the
+     * cooldown is a button somebody presses four more times.
      */
-    public function beginReset(string $email, int $now): void
+    public function beginReset(string $email, int $now): bool
     {
         $email = $this->normaliseEmail($email);
         if ($email === '') {
-            return;
+            return false;
         }
 
         if (!$this->isEligibleMember($email)) {
-            return;
+            return false;
         }
 
         // Anti-flood: if a reset link was issued for this address within the
@@ -148,7 +157,7 @@ final class PasswordAuthenticator
         if ($existing !== null && $existing->resetTokenHash !== '') {
             $issuedAt = $existing->resetExpiresAt - self::RESET_TTL_SECONDS;
             if ($issuedAt > $now - self::RESET_COOLDOWN_SECONDS) {
-                return;
+                return false;
             }
         }
 
@@ -160,6 +169,8 @@ final class PasswordAuthenticator
         // an eligible address and an ineligible one take the same time
         // to answer. See PasswordResetMailer for the full reasoning.
         $this->mailer->queue($email, $rawToken);
+
+        return true;
     }
 
     /**
