@@ -139,6 +139,15 @@ final class DevicesPage
 
     public function handleRevoke(): void
     {
+        $this->redirect($this->revokeFromRequest());
+    }
+
+    /**
+     * The body of the above, split out so it can be driven directly.
+     * See ComposePage::sendFromRequest() for the reasoning.
+     */
+    public function revokeFromRequest(): string
+    {
         $id = $this->authoriseAction();
 
         if ($this->devices->revoke($id, time())) {
@@ -151,10 +160,18 @@ final class DevicesPage
             );
         }
 
-        $this->redirect('revoked');
+        return 'revoked';
     }
 
     public function handleRemove(): void
+    {
+        $this->redirect($this->removeFromRequest());
+    }
+
+    /**
+     * The body of the above, split out so it can be driven directly.
+     */
+    public function removeFromRequest(): string
     {
         $id = $this->authoriseAction();
 
@@ -178,7 +195,7 @@ final class DevicesPage
             );
         }
 
-        $this->redirect('removed');
+        return 'removed';
     }
 
     /**
@@ -318,13 +335,15 @@ final class DevicesPage
             wp_die(esc_html__('You are not allowed to manage devices.', 'fellowship'), '', ['response' => 403]);
         }
 
-        // filter_input rather than a cast on the superglobal: it
-        // *validates* where a cast merely coerces, so "12abc" is refused
-        // instead of quietly becoming 12. That matters here more than it
-        // looks, because this value is concatenated into the nonce action
-        // name on the next line — a coerced id would check a nonce for a
-        // device other than the one the form named.
-        $id = (int) filter_input(INPUT_POST, 'device', FILTER_VALIDATE_INT);
+        // <b>Validated, not cast.</b> "12abc" must be refused rather than
+        // quietly becoming 12, because this value is concatenated into the
+        // nonce action name on the next line — a coerced id would check a
+        // nonce for a device other than the one the form named.
+        //
+        // filter_var on the superglobal rather than filter_input, which
+        // reads the *original* request and so cannot be driven by a test
+        // at all. The validation is identical; only the source differs.
+        $id = (int) filter_var($_POST['device'] ?? null, FILTER_VALIDATE_INT);
 
         check_admin_referer(self::NONCE . '_' . $id);
 
