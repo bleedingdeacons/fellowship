@@ -169,6 +169,13 @@ final class MessagesPage
         ]);
 
         if (is_string($links)) {
+            // Taint traced from $_GET['paged'], which is cast to int before it
+            // goes anywhere: max(1, (int) filter_var(..., FILTER_VALIDATE_INT)),
+            // then passed to pagination(int $page, ...) under strict_types. An
+            // int cannot carry a payload, and the generated markup is run through
+            // wp_kses_post on top. Semgrep follows the superglobal to the echo
+            // without treating either the cast or wp_kses_post as a sanitiser.
+            // nosemgrep: php.lang.security.taint-unsafe-echo-tag.taint-unsafe-echo-tag
             echo '<div class="tablenav"><div class="tablenav-pages">' . wp_kses_post($links) . '</div></div>';
         }
     }
