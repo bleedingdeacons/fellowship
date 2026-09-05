@@ -141,6 +141,13 @@ final class DevicesPage
 
     public function handleRevoke(): void
     {
+        // A Symfony rule matching ->redirect() with a non-literal argument. This
+        // is not Symfony's redirect: it is the private helper below, which builds
+        // wp_safe_redirect(add_query_arg([...], admin_url('admin.php'))). The base
+        // URL is fixed, the argument only ever becomes a query-parameter *value*,
+        // and wp_safe_redirect refuses an off-site host regardless. It matched on
+        // the method name alone.
+        // nosemgrep: php.symfony.security.audit.symfony-non-literal-redirect.symfony-non-literal-redirect
         $this->redirect($this->revokeFromRequest());
     }
 
@@ -167,6 +174,13 @@ final class DevicesPage
 
     public function handleRemove(): void
     {
+        // A Symfony rule matching ->redirect() with a non-literal argument. This
+        // is not Symfony's redirect: it is the private helper below, which builds
+        // wp_safe_redirect(add_query_arg([...], admin_url('admin.php'))). The base
+        // URL is fixed, the argument only ever becomes a query-parameter *value*,
+        // and wp_safe_redirect refuses an off-site host regardless. It matched on
+        // the method name alone.
+        // nosemgrep: php.symfony.security.audit.symfony-non-literal-redirect.symfony-non-literal-redirect
         $this->redirect($this->removeFromRequest());
     }
 
@@ -223,6 +237,13 @@ final class DevicesPage
 
         check_admin_referer(self::NONCE . '_reset');
 
+        // A Symfony rule matching ->redirect() with a non-literal argument. This
+        // is not Symfony's redirect: it is the private helper below, which builds
+        // wp_safe_redirect(add_query_arg([...], admin_url('admin.php'))). The base
+        // URL is fixed, the argument only ever becomes a query-parameter *value*,
+        // and wp_safe_redirect refuses an off-site host regardless. It matched on
+        // the method name alone.
+        // nosemgrep: php.symfony.security.audit.symfony-non-literal-redirect.symfony-non-literal-redirect
         $this->redirect($this->sendResetCodeFromRequest());
     }
 
