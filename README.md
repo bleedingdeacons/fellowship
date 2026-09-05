@@ -5,7 +5,7 @@
 [![Coverage Status](https://coveralls.io/repos/github/bleedingdeacons/fellowship/badge.svg?branch=main)](https://coveralls.io/github/bleedingdeacons/fellowship?branch=main)
 ![PHPStan](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbleedingdeacons%2Ffellowship%2Fmain%2Fphpstan.neon.dist&query=%24.parameters.level&label=PHPStan&prefix=level%20&color=brightgreen)
 ![PHPCS](https://img.shields.io/badge/dynamic/xml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbleedingdeacons%2Ffellowship%2Fmain%2F.phpcs.xml.dist&query=%2Fruleset%2Frule%5B1%5D%2F%40ref&label=PHPCS&color=brightgreen)
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.1.1-blue)
 
 The WordPress half of a messaging system for an AA intergroup. The other
 half is [Link](https://github.com/bleedingdeacons/link), a .NET MAUI app
