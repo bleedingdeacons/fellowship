@@ -229,3 +229,33 @@ if (!class_exists('wpdb')) {
         }
     }
 }
+
+// A minimal WP_Role, because Capabilities::ensureAssigned() type-checks
+// the real one.
+//
+// Without a class to satisfy that instanceof, the method returns early
+// and the capability grant is untestable — worse, it would *look* tested
+// while asserting only that nothing happened. Only add_cap and has_cap
+// are declared; those are the two the grant uses.
+if (!class_exists('WP_Role')) {
+    class WP_Role
+    {
+        /** @var array<string, bool> */
+        public array $capabilities = [];
+
+        public function has_cap(string $cap): bool
+        {
+            return !empty($this->capabilities[$cap]);
+        }
+
+        public function add_cap(string $cap, bool $grant = true): void
+        {
+            $this->capabilities[$cap] = $grant;
+        }
+
+        public function remove_cap(string $cap): void
+        {
+            unset($this->capabilities[$cap]);
+        }
+    }
+}
