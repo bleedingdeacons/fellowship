@@ -44,9 +44,24 @@ use Fellowship\Tests\Support\RecordingWpdb;
  * the guard is what makes it optional — but proving the guard rather
  * than the logging would be testing the absence of a dependency.)
  *
+ * The four repositories are named in the annotations below as well as
+ * Schema, because that list restricts what a test is credited with:
+ * calling install() on them without naming them runs the code and
+ * records none of it. Same per-class attribution that makes an extracted
+ * method look untested until its new class is listed.
+ *
+ * (Written without the annotation's own name in this sentence — a bare
+ * one in prose parses as an annotation with no argument, and PHPUnit
+ * then discards every real one in the block. Which is how this comment
+ * came to be worth writing.)
+ *
  * @covers \Fellowship\Core\Schema
  * @covers \Fellowship\Core\Capabilities
  * @covers \Fellowship\Logger\HasLogger
+ * @covers \Fellowship\Devices\WpdbDeviceRepository
+ * @covers \Fellowship\Messaging\WpdbMessageRepository
+ * @covers \Fellowship\Messaging\WpdbRecipientRepository
+ * @covers \Fellowship\Auth\WpdbPasswordCredentialRepository
  */
 final class SchemaAndLoggingTest extends TestCase
 {
