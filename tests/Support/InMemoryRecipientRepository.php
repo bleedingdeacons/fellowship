@@ -14,7 +14,10 @@ use Fellowship\Messaging\RecipientRepository;
  * is. A double that ignored the address would let a controller test pass
  * while the real thing let any handset mark any message read.
  */
-final class InMemoryRecipientRepository implements RecipientRepository
+// Not final: PluginBootstrapTest extends it to record the order the
+// retention sweep calls things in, which is the property that matters
+// there and cannot be seen any other way.
+class InMemoryRecipientRepository implements RecipientRepository
 {
     /** @var list<Recipient> */
     public array $rows = [];
