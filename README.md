@@ -74,9 +74,11 @@ disagree about it.
 `wp_reach_credentials` one, so a member who set a password in one could
 not sign into the other with it and a reset in one left the other stale
 with nothing to say so. A member has one password. It lives in
-`wp_unity_credentials` now, bound as
-`Unity\Auth\Interfaces\PasswordCredentialRepository`, and Unity migrates
-the old rows on its first admin page load after the upgrade.
+`wp_unity_credentials` now. Unity declares the contract,
+`Unity\Auth\Interfaces\PasswordCredentialRepository`, and binds nothing
+to it as it does for every repository; tsml-for-unity supplies the table
+and the implementation, and migrates the old rows on the first page load
+after the upgrade.
 
 **What the server does not hold is any handset's private key.** It is
 generated on the device at enrolment and only the public half is sent, so

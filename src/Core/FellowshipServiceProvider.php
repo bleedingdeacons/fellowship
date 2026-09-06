@@ -155,9 +155,10 @@ final class FellowshipServiceProvider
         // not sign into the other with it, and a reset in one left the
         // other stale with nothing to say so. A member has one password.
         //
-        // Unity registers the binding in UnityServiceProvider, into the
-        // same container this provider writes into, so PasswordAuthenticator
-        // below resolves it unchanged.
+        // Unity declares the contract and binds nothing to it, as it
+        // does for every repository; tsml-for-unity supplies the
+        // implementation, into the same container this provider writes
+        // into. PasswordAuthenticator below resolves it unchanged.
 
         $container->register(PasswordPolicy::class, fn(): PasswordPolicy => new PasswordPolicy());
 
