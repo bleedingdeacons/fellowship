@@ -20,7 +20,7 @@ use Fellowship\Devices\CurrentDevice;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Rest\DeviceAuthController;
 use Fellowship\Tests\Support\InMemoryDeviceRepository;
-use Fellowship\Tests\Support\InMemoryPasswordCredentialRepository;
+use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
 use Fellowship\Tests\Support\StubProvider;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;
 use Unity\Testing\Doubles\InMemoryMemberRepository;

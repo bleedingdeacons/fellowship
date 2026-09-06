@@ -21,7 +21,7 @@ use Fellowship\Devices\Device;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Rest\DeviceAuthController;
 use Fellowship\Tests\Support\InMemoryDeviceRepository;
-use Fellowship\Tests\Support\InMemoryPasswordCredentialRepository;
+use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
 use Fellowship\Tests\Support\StubProvider;
 use RuntimeException;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;

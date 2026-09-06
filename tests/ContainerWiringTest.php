@@ -11,7 +11,8 @@ use Fellowship\Admin\DevicesPage;
 use Fellowship\Admin\MessagesPage;
 use Fellowship\Admin\SettingsPage;
 use Fellowship\Auth\PasswordAuthenticator;
-use Fellowship\Auth\PasswordCredentialRepository;
+use Unity\Auth\Interfaces\PasswordCredentialRepository;
+use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
 use Fellowship\Auth\ProviderRegistry;
 use Fellowship\Auth\Providers\AppleProvider;
 use Fellowship\Auth\Providers\FacebookProvider;
@@ -72,6 +73,11 @@ final class ContainerWiringTest extends TestCase
             'Unity\\Members\\Interfaces\\MemberRepository' => new InMemoryMemberRepository(),
             'Unity\\Committees\\Interfaces\\CommitteeRepository' => new InMemoryCommitteeRepository(),
             'Scrutiny\\Audit\\Interfaces\\AuditLogger' => new \Scrutiny\Testing\Doubles\SpyAuditLogger(),
+            // The password store is Unity's too, from the same upgrade
+            // that gave it a table of its own. Fellowship no longer binds
+            // one, so if this line goes the failure is the honest one:
+            // PasswordAuthenticator cannot be built.
+            PasswordCredentialRepository::class => new InMemoryPasswordCredentialRepository(),
         ]);
 
         (new FellowshipServiceProvider())->register($this->container);

@@ -17,11 +17,10 @@ use Fellowship\Auth\DeviceRedirectValidator;
 use Fellowship\Auth\DeviceTokenMinter;
 use Fellowship\Auth\JwtVerifier;
 use Fellowship\Auth\PasswordAuthenticator;
-use Fellowship\Auth\PasswordCredentialRepository;
+use Unity\Auth\Interfaces\PasswordCredentialRepository;
 use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
 use Fellowship\Auth\Providers\AppleProvider;
-use Fellowship\Auth\WpdbPasswordCredentialRepository;
 use Fellowship\Auth\Providers\FacebookProvider;
 use Fellowship\Auth\Providers\GoogleProvider;
 use Fellowship\Auth\Providers\MicrosoftProvider;
@@ -149,22 +148,17 @@ final class FellowshipServiceProvider
 
         // ── Password sign-in ──
         //
-        // Registered whether or not anybody has set a password: the
-        // credential table is empty until somebody asks for a link, and a
-        // conditional registration would only move the decision somewhere
-        // it is harder to see.
-        $container->register(
-            PasswordCredentialRepository::class,
-            function (): PasswordCredentialRepository {
-                global $wpdb;
-
-                if (!$wpdb instanceof \wpdb) {
-                    throw new \RuntimeException('Password credentials need $wpdb.');
-                }
-
-                return new WpdbPasswordCredentialRepository($wpdb);
-            }
-        );
+        // The credential store is Unity's, and is deliberately not
+        // registered here. Fellowship used to bind its own implementation
+        // over its own wp_fellowship_credentials table, and Reach did the
+        // same over its own — so a member who set a password in one could
+        // not sign into the other with it, and a reset in one left the
+        // other stale with nothing to say so. A member has one password.
+        //
+        // Unity declares the contract and binds nothing to it, as it
+        // does for every repository; tsml-for-unity supplies the
+        // implementation, into the same container this provider writes
+        // into. PasswordAuthenticator below resolves it unchanged.
 
         $container->register(PasswordPolicy::class, fn(): PasswordPolicy => new PasswordPolicy());
 

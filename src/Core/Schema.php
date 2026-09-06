@@ -8,7 +8,6 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-use Fellowship\Auth\WpdbPasswordCredentialRepository;
 use Fellowship\Devices\WpdbDeviceRepository;
 use Fellowship\Logger\HasLogger;
 use Fellowship\Messaging\WpdbMessageRepository;
@@ -113,7 +112,9 @@ final class Schema
      */
     public static function install(wpdb $wpdb): void
     {
-        WpdbPasswordCredentialRepository::install($wpdb);
+        // Password credentials are not here: the table is Unity's, and
+        // Unity installs it on its own version change. See
+        // Unity\Auth\WpdbPasswordCredentialRepository.
         WpdbDeviceRepository::install($wpdb);
         WpdbMessageRepository::install($wpdb);
         WpdbRecipientRepository::install($wpdb);

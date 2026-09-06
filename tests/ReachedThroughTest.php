@@ -8,7 +8,6 @@ use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
 use Brain\Monkey\Functions;
 use Fellowship\Admin\MessagesPage;
-use Fellowship\Auth\WpdbPasswordCredentialRepository;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Devices\WpdbDeviceRepository;
 use Fellowship\Directory\DirectoryPresenter;
@@ -55,7 +54,6 @@ use WP_Error;
  * @covers \Fellowship\Messaging\WpdbRecipientRepository
  * @covers \Fellowship\Messaging\WpdbMessageRepository
  * @covers \Fellowship\Devices\WpdbDeviceRepository
- * @covers \Fellowship\Auth\WpdbPasswordCredentialRepository
  * @covers \Fellowship\Admin\MessagesPage
  */
 final class ReachedThroughTest extends TestCase
@@ -326,31 +324,6 @@ final class ReachedThroughTest extends TestCase
 
         self::assertSame(['key_fault_at' => null], $this->wpdb->updates[0]['data']);
         self::assertSame(['id' => 4], $this->wpdb->updates[0]['where']);
-    }
-
-    public function testACredentialIsFoundByItsResetToken(): void
-    {
-        $this->wpdb->results = [[
-            'email' => 'dave@example.org',
-            'password_hash' => '$argon2id$v=19$m=1,t=1,p=1$x$y',
-            'reset_token_hash' => str_repeat('a', 64),
-            'reset_expires_at' => 1788003600,
-            'failed_attempts' => 0,
-            'locked_until' => 0,
-            'updated_at' => 1788000000,
-        ]];
-
-        $found = (new WpdbPasswordCredentialRepository($this->wpdb))->findByResetTokenHash(str_repeat('a', 64));
-
-        self::assertNotNull($found);
-        self::assertSame('dave@example.org', $found->email);
-    }
-
-    public function testABlankResetTokenResolvesToNothingWithoutAQuery(): void
-    {
-        // An empty hash would otherwise match every reset-free row.
-        self::assertNull((new WpdbPasswordCredentialRepository($this->wpdb))->findByResetTokenHash(''));
-        self::assertSame([], $this->wpdb->queries);
     }
 
     // ── The log's own rendering ───────────────────────────────────────
