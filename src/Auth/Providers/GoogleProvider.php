@@ -11,6 +11,7 @@ if (!defined('ABSPATH')) {
 use Fellowship\Auth\JwtVerifier;
 use Fellowship\Auth\VerifiedIdentity;
 use Fellowship\Core\Settings;
+use Fellowship\Core\UserAgent;
 
 /**
  * Sign in with Google — the server-side code-exchange flow, and the
@@ -132,6 +133,7 @@ final class GoogleProvider implements OAuthProvider
     {
         $response = wp_remote_post(self::TOKEN_URL, [
             'timeout' => 10,
+            'user-agent' => UserAgent::plugin(),
             'headers' => ['Accept' => 'application/json'],
             'body'    => [
                 'code'          => $code,

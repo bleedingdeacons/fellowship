@@ -11,6 +11,7 @@ if (!defined('ABSPATH')) {
 use Fellowship\Auth\JwtVerifier;
 use Fellowship\Auth\VerifiedIdentity;
 use Fellowship\Core\Settings;
+use Fellowship\Core\UserAgent;
 
 /**
  * Microsoft sign-in via the Entra v2.0 endpoint, consumers tenant.
@@ -168,6 +169,7 @@ final class MicrosoftProvider implements OAuthProvider
     {
         $response = wp_remote_post(self::TOKEN_URL, [
             'timeout' => 10,
+            'user-agent' => UserAgent::plugin(),
             'headers' => ['Accept' => 'application/json'],
             'body'    => [
                 'client_id'     => $this->settings->getClientId(self::PROVIDER_NAME),

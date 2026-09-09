@@ -43,6 +43,12 @@ if (!defined('FELLOWSHIP_PLUGIN_FILE')) {
     define('FELLOWSHIP_PLUGIN_FILE', dirname(__DIR__) . '/fellowship.php');
 }
 
+// The user-agent builder reports the plugin version, so the tests run the
+// same branch production does rather than the "no version defined" fallback.
+if (!defined('FELLOWSHIP_VERSION')) {
+    define('FELLOWSHIP_VERSION', '9.9.9');
+}
+
 // Fellowship autoloader.
 spl_autoload_register(function ($class) {
     $prefix = 'Fellowship\\';

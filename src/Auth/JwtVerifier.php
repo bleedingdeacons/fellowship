@@ -8,6 +8,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+use Fellowship\Core\UserAgent;
 use Fellowship\Logger\HasLogger;
 
 /**
@@ -184,6 +185,7 @@ final class JwtVerifier
     {
         $response = wp_remote_get($url, [
             'timeout' => self::HTTP_TIMEOUT,
+            'user-agent' => UserAgent::plugin(),
             'headers' => ['Accept' => 'application/json'],
         ]);
 

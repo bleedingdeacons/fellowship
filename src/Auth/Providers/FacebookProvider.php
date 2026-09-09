@@ -12,6 +12,7 @@ use Fellowship\Auth\Base64Url;
 use Fellowship\Auth\JwtVerifier;
 use Fellowship\Auth\VerifiedIdentity;
 use Fellowship\Core\Settings;
+use Fellowship\Core\UserAgent;
 
 /**
  * Facebook Login, through the OIDC authorisation-code flow with PKCE.
@@ -163,6 +164,7 @@ final class FacebookProvider implements OAuthProvider
     {
         $response = wp_remote_post(self::TOKEN_URL, [
             'timeout' => 10,
+            'user-agent' => UserAgent::plugin(),
             'headers' => [
                 'Accept'       => 'application/json',
                 'Content-Type' => 'application/x-www-form-urlencoded',
