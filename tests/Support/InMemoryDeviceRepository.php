@@ -80,6 +80,30 @@ class InMemoryDeviceRepository implements DeviceRepository
         return $this->rows[$id] ?? null;
     }
 
+    public function keepIfWithinCap(int $deviceId, string $memberEmail, int $max): bool
+    {
+        // Same rule as WpdbDeviceRepository: rank by id among the member's
+        // live rows, so a racing pair reach different answers.
+        $rank = count(array_filter(
+            $this->rows,
+            static fn(Device $d): bool => $d->memberEmail === $memberEmail
+                && !$d->isRevoked()
+                && $d->id <= $deviceId,
+        ));
+
+        if ($rank <= $max) {
+            return true;
+        }
+
+        $hash = array_search($deviceId, $this->hashes, true);
+        if ($hash !== false) {
+            unset($this->hashes[$hash]);
+        }
+        unset($this->rows[$deviceId]);
+
+        return false;
+    }
+
     public function findByMemberEmail(string $memberEmail): array
     {
         return array_values(array_filter(

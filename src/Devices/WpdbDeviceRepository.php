@@ -174,6 +174,33 @@ final class WpdbDeviceRepository implements DeviceRepository
         return is_array($row) ? $this->hydrate($row) : null;
     }
 
+    public function keepIfWithinCap(int $deviceId, string $memberEmail, int $max): bool
+    {
+        $table = self::tableName($this->wpdb);
+
+        // This row's rank among the member's live devices, oldest first. A
+        // property of this row, so two racing enrolments reach different
+        // answers and only the surplus one acts.
+        $rank = (int) $this->wpdb->get_var($this->wpdb->prepare(
+            "SELECT COUNT(*)
+               FROM {$table}
+              WHERE member_email = %s AND revoked_at IS NULL AND id <= %d",
+            strtolower(trim($memberEmail)),
+            $deviceId,
+        ));
+
+        if ($rank <= $max) {
+            return true;
+        }
+
+        // Hard delete rather than revoke: this credential was never returned
+        // to anyone, so there is nothing to revoke and a revoked row would
+        // only clutter the admin list with an enrolment that never happened.
+        $this->wpdb->delete($table, ['id' => $deviceId], ['%d']);
+
+        return false;
+    }
+
     /** @return list<Device> */
     public function findByMemberEmail(string $memberEmail): array
     {

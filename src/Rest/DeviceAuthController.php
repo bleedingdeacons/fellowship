@@ -460,6 +460,20 @@ final class DeviceAuthController
             return new WP_Error('fellowship_enrolment_failed', $e->getMessage(), ['status' => 500]);
         }
 
+        // The count above is a read, and the create is a write, with nothing
+        // atomic in between — so concurrent enrolments from one member could
+        // all pass it. This is the authoritative check: the row decides,
+        // after the fact, whether it was within the cap, and removes itself
+        // if not. The token minted for it is never returned, so nothing is
+        // left holding a credential for a row that has gone.
+        if (!$this->devices->keepIfWithinCap($device->id, $identity->email, self::MAX_DEVICES_PER_MEMBER)) {
+            return new WP_Error(
+                'fellowship_too_many_devices',
+                'This member already has ' . self::MAX_DEVICES_PER_MEMBER . ' devices enrolled. Remove one before adding another.',
+                ['status' => 409],
+            );
+        }
+
         // Scrutiny's log takes an entity it can point at, and the entity
         // here is the member — a device is not one of its types, so it
         // goes in the detail rather than being forced into entityId.
