@@ -44,6 +44,27 @@ interface DeviceRepository
         int $now,
     ): Device;
 
+    /**
+     * Keep a freshly created device only if it is within the per-member cap,
+     * deleting it otherwise. Returns whether it survived.
+     *
+     * The cap was a read-then-write: findByMemberEmail() was counted, then
+     * create() was called, with nothing atomic in between — so concurrent
+     * enrolments from one member could all pass the count and land, leaving
+     * more rows than the cap allows. Each row is, as DeviceAuthController's
+     * docblock says, "a credential and a push target", and the cap exists
+     * specifically to bound a retry loop, which is the case most likely to
+     * race it.
+     *
+     * Decided by rank rather than by re-counting: the implementation asks
+     * how many live rows this member has with an id at or below this one,
+     * which is a property of this row alone. Two rows racing past a cap of
+     * five each compute their own rank, the sixth deletes itself and the
+     * fifth stays — where a plain re-count would have both see six and both
+     * delete.
+     */
+    public function keepIfWithinCap(int $deviceId, string $memberEmail, int $max): bool;
+
     /** Live devices only; a revoked row is never returned. */
     public function findByTokenHash(string $tokenHash): ?Device;
 
