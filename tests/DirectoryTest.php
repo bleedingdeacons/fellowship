@@ -17,6 +17,8 @@ use Fellowship\Rest\DirectoryController;
 use Fellowship\Tests\Support\InMemoryDeviceRepository;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;
 use Unity\Testing\Doubles\InMemoryCommitteeRepository;
+use Unity\Testing\Doubles\GroupStub;
+use Unity\Testing\Doubles\InMemoryGroupRepository;
 use Unity\Testing\Doubles\InMemoryMemberRepository;
 use Unity\Testing\Doubles\MemberStub;
 use WP_Error;
@@ -211,12 +213,95 @@ final class DirectoryTest extends TestCase
 
     // ── Fixtures ──────────────────────────────────────────────────────
 
-    private function presenter(): DirectoryPresenter
+    // ── Home group and GSR ────────────────────────────────────────────
+
+    public function testAMemberCarriesTheirHomeGroupAndGsrStanding(): void
+    {
+        // A first name does not identify anybody in an intergroup with
+        // several Daves, which is why the group travels beside it — the
+        // same reason Hand shows one on its own member list.
+        $this->members = new InMemoryMemberRepository([
+            new MemberStub(
+                id: 7,
+                anonymousName: 'Dave P',
+                showMemberProfile: true,
+                homeGroup: 3,
+                isGSR: true,
+                personalEmail: self::MEMBER,
+            ),
+        ]);
+
+        $groups = new InMemoryGroupRepository([new GroupStub(id: 3, title: 'Tuesday Bristol')]);
+
+        $member = $this->presenter($groups)->forApp(false)['members'][0];
+
+        self::assertSame('Tuesday Bristol', $member['group']);
+        self::assertTrue($member['gsr']);
+    }
+
+    public function testStillNoAddressesTravelWithTheNewFields(): void
+    {
+        // The point of the whole class, and the fields added beside the
+        // name must not quietly become a way round it.
+        $this->members = new InMemoryMemberRepository([
+            new MemberStub(
+                id: 7,
+                anonymousName: 'Dave P',
+                showMemberProfile: true,
+                homeGroup: 3,
+                isGSR: true,
+                personalEmail: self::MEMBER,
+                mobileNumber: '07700 900123',
+            ),
+        ]);
+
+        $encoded = (string) json_encode(
+            $this->presenter(new InMemoryGroupRepository([new GroupStub(id: 3, title: 'Tuesday Bristol')]))
+                ->forApp(false),
+        );
+
+        self::assertStringNotContainsString(self::MEMBER, $encoded);
+        self::assertStringNotContainsString('07700', $encoded);
+    }
+
+    public function testAMemberWithNoHomeGroupGetsAnEmptyOne(): void
+    {
+        // Ordinary rather than exceptional: a member need not have a
+        // group recorded, and a group can be deleted while members still
+        // point at it. The app leaves the line out.
+        $this->members = new InMemoryMemberRepository([
+            new MemberStub(
+                id: 7,
+                anonymousName: 'Dave P',
+                showMemberProfile: true,
+                homeGroup: 99,
+                personalEmail: self::MEMBER,
+            ),
+        ]);
+
+        $member = $this->presenter(new InMemoryGroupRepository([]))->forApp(false)['members'][0];
+
+        self::assertSame('', $member['group']);
+        self::assertFalse($member['gsr']);
+    }
+
+    public function testTheDirectoryStillBuildsWithNoGroupRepositoryAtAll(): void
+    {
+        // Unity ships headless and need not have groups bound. Absent,
+        // the list is built without home groups rather than not at all.
+        $member = $this->presenter()->forApp(false)['members'][0];
+
+        self::assertSame('', $member['group']);
+        self::assertArrayHasKey('name', $member);
+    }
+
+    private function presenter(?InMemoryGroupRepository $groups = null): DirectoryPresenter
     {
         return new DirectoryPresenter(
             $this->members,
             new InMemoryCommitteeRepository(),
             new MemberGate($this->members),
+            $groups,
         );
     }
 

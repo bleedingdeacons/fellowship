@@ -47,6 +47,7 @@ use Fellowship\Rest\MessageController;
 use Psr\Container\ContainerInterface;
 use Scrutiny\Audit\Interfaces\AuditLogger;
 use Unity\Committees\Interfaces\CommitteeRepository;
+use Unity\Groups\Interfaces\GroupRepository;
 use Unity\Core\Interfaces\Container;
 use Unity\Members\Interfaces\MemberRepository;
 
@@ -144,6 +145,12 @@ final class FellowshipServiceProvider
             $c->get(MemberRepository::class),
             $c->get(CommitteeRepository::class),
             $c->get(MemberGate::class),
+            // Feature-detected, the way Promises detects Unity's
+            // repositories: Unity ships headless and a deployment need not
+            // have groups bound. Absent, the directory is built without
+            // home groups rather than failing to build — see
+            // DirectoryPresenter::groupTitle().
+            $c->has(GroupRepository::class) ? $c->get(GroupRepository::class) : null,
         ));
 
         // ── Password sign-in ──
