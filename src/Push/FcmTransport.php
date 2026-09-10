@@ -89,18 +89,23 @@ final class FcmTransport
             return false;
         }
 
+        // Named once so the two places it travels cannot disagree. It goes
+        // in the data block, which is what Android reads, and again in the
+        // APNs payload, which is what iOS reads.
+        $envelope = [
+            'v'  => '1',
+            'id' => (string) $message->id,
+            'k'  => $sealed['k'],
+            'p'  => $sealed['p'],
+        ];
+
         return $this->client->send($account, [
             'token' => $device->pushToken,
             // Every value in an FCM data payload must be a string; ints
             // here would be rejected by the API rather than coerced. Both
             // fields are opaque — see MessageSealer on why nothing
             // readable travels beside them.
-            'data'  => [
-                'v'  => '1',
-                'id' => (string) $message->id,
-                'k'  => $sealed['k'],
-                'p'  => $sealed['p'],
-            ],
+            'data'  => $envelope,
             'android' => [
                 // Wakes the app from Doze. A data-only message at normal
                 // priority can be held until the next maintenance window,
@@ -116,9 +121,18 @@ final class FcmTransport
                     'apns-priority'  => '5',
                     'apns-push-type' => 'background',
                 ],
-                'payload' => [
-                    'aps' => ['content-available' => 1],
-                ],
+                // <b>The envelope is placed here explicitly.</b> FCM does
+                // merge a top-level `data` block into the APNs payload as
+                // custom keys, and Link's app delegate would find `k` and
+                // `p` either way — but that is a documented behaviour of
+                // FCM's rather than a guarantee of ours, and a silent push
+                // whose fields did not arrive would do nothing at all
+                // rather than fail. Saying it here costs a line and means
+                // the shape does not depend on it.
+                //
+                // `+` keeps the left operand on a collision, so `aps`
+                // cannot be displaced by an envelope key called `aps`.
+                'payload' => ['aps' => ['content-available' => 1]] + $envelope,
             ],
         ]);
     }
