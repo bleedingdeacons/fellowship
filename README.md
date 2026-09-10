@@ -167,12 +167,26 @@ about.
 
 ## Identity, and what the app never learns
 
-The directory Link shows when composing contains **anonymous names and
-opaque member ids**. No email addresses, no telephone numbers. A member
-picks a recipient and Fellowship does the addressing server-side, so a
-stolen handset yields a list of first names rather than the intergroup's
-contact database — and a message cannot be addressed to a non-member by
-inventing an address.
+The directory Link shows when composing contains **anonymous names,
+opaque member ids, a home group and whether the member is a GSR**. No
+email addresses, no telephone numbers. A member picks a recipient and
+Fellowship does the addressing server-side, so a stolen handset yields a
+list of first names rather than the intergroup's contact database — and a
+message cannot be addressed to a non-member by inventing an address.
+
+The home group is there because a first name identifies nobody in an
+intergroup with several Daves, and GSR because it is the reason a member
+is most often written to. Neither is a contact detail, and a test asserts
+that adding them did not become a way round the paragraph above.
+
+**Everybody authorised is listed, whether or not they use Link.** The
+only test is the gate below — has this member a usable email address,
+that is, *could* they enrol — not whether they have. Someone who has
+never installed the app can still be written to; the message waits and
+arrives when they enrol. A list that showed only enrolled handsets would
+change shape as people came and went, and would quietly make somebody
+unreachable for the ordinary reason that they had not got round to
+installing anything.
 
 Members who have turned off `showMemberProfile()` in Unity are not
 listed. They can still receive a committee message: being contactable by
