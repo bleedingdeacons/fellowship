@@ -41,3 +41,9 @@ parameters:
     # uses are define()d. Scanned, not analysed.
     scanFiles:
         - fellowship.php
+        # WP-CLI's own symbols. php-stubs/wp-cli-stubs would be the
+        # obvious answer and Concordance uses it, but every published
+        # version pins php-stubs/wordpress-stubs to ^6 and this plugin
+        # is on v7 - taking it would mean holding WordPress's stubs a
+        # major version back to describe one class and two functions.
+        - stubs/wp-cli.php

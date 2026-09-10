@@ -12,6 +12,7 @@ use Fellowship\Admin\ComposePage;
 use Fellowship\Admin\DevicesPage;
 use Fellowship\Admin\MessagesPage;
 use Fellowship\Admin\SettingsPage;
+use Fellowship\Cli\DirectoryCli;
 use Fellowship\Core\Capabilities;
 use Fellowship\Core\FellowshipServiceProvider;
 use Fellowship\Core\Schema;
@@ -98,6 +99,13 @@ final class Plugin
         // declared in the plugin bootstrap and resolves through the
         // container when called.
         $container->get(MessageApi::class)->register();
+
+        // WP-CLI only, and resolved lazily inside the guard: the command
+        // pulls the whole directory graph, and a web request has no use
+        // for it. Same shape as Concordance's.
+        if (defined('WP_CLI') && \WP_CLI) {
+            \WP_CLI::add_command('fellowship directory', $container->get(DirectoryCli::class));
+        }
 
         self::registerPurge();
 

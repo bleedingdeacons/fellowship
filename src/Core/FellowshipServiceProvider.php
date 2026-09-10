@@ -31,6 +31,7 @@ use Fellowship\Devices\CurrentDevice;
 use Fellowship\Devices\DeviceRepository;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Devices\WpdbDeviceRepository;
+use Fellowship\Cli\DirectoryCli;
 use Fellowship\Directory\DirectoryPresenter;
 use Fellowship\Messaging\MessageApi;
 use Fellowship\Messaging\MessageDispatcher;
@@ -139,6 +140,11 @@ final class FellowshipServiceProvider
             $c->get(MessageDispatcher::class),
             $c->get(RecipientResolver::class),
             $c->get(AuditLogger::class),
+        ));
+
+        $container->register(DirectoryCli::class, fn(ContainerInterface $c) => new DirectoryCli(
+            $c->get(DirectoryPresenter::class),
+            $c->get(Settings::class),
         ));
 
         $container->register(DirectoryPresenter::class, fn(ContainerInterface $c) => new DirectoryPresenter(
