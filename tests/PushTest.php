@@ -298,6 +298,60 @@ not-a-real-key
         self::assertStringNotContainsString('Intergroup moved', $body);
     }
 
+    public function testTheSealedEnvelopeReachesIosInTheApnsPayload(): void
+    {
+        // iOS never sees the top-level data block as such — it reads an
+        // APNs payload. FCM does merge one into the other, and the app
+        // would find `k` and `p` either way, but that is a behaviour of
+        // FCM's rather than a guarantee of ours: a silent push whose
+        // fields did not arrive would do nothing at all rather than fail,
+        // which is the hardest kind of gap to notice.
+        $settings = new Settings();
+        $settings->setFcmServiceAccount($this->accountJson());
+
+        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+        FakeWpHttp::pushResponse(200, '{}');
+
+        $this->transport($settings)->send($this->device(publicKey: $this->publicKey()), $this->message());
+
+        $sent = json_decode((string) (FakeWpHttp::sentArgs(1)['body'] ?? ''), true);
+        self::assertIsArray($sent);
+
+        $message = $sent['message'];
+        $payload = $message['apns']['payload'];
+
+        // The same envelope in both places, and the aps dictionary intact
+        // beside it.
+        self::assertSame($message['data']['k'], $payload['k']);
+        self::assertSame($message['data']['p'], $payload['p']);
+        self::assertSame($message['data']['id'], $payload['id']);
+        self::assertSame(['content-available' => 1], $payload['aps']);
+    }
+
+    public function testTheApnsPushIsSilentBecauseTheServerCannotWriteTheNotification(): void
+    {
+        // Fellowship cannot read the message, so it cannot say anything
+        // about it — the handset opens the envelope and raises its own
+        // notification. A silent push is the shape that permits that, and
+        // APNs refuses priority 10 for one.
+        $settings = new Settings();
+        $settings->setFcmServiceAccount($this->accountJson());
+
+        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+        FakeWpHttp::pushResponse(200, '{}');
+
+        $this->transport($settings)->send($this->device(publicKey: $this->publicKey()), $this->message());
+
+        $sent = json_decode((string) (FakeWpHttp::sentArgs(1)['body'] ?? ''), true);
+        self::assertIsArray($sent);
+
+        $apns = $sent['message']['apns'];
+
+        self::assertSame('5', $apns['headers']['apns-priority']);
+        self::assertSame('background', $apns['headers']['apns-push-type']);
+        self::assertArrayNotHasKey('alert', $apns['payload']['aps'], 'the server has nothing to display');
+    }
+
     public function testAHandsetWhoseKeyWillNotLoadIsSkippedRatherThanSentToInTheClear(): void
     {
         // A key that is present but unusable is the case worth being
