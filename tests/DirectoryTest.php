@@ -20,7 +20,9 @@ use Unity\Testing\Doubles\InMemoryCommitteeRepository;
 use Unity\Testing\Doubles\GroupStub;
 use Unity\Testing\Doubles\InMemoryGroupRepository;
 use Unity\Testing\Doubles\InMemoryMemberRepository;
+use Unity\Testing\Doubles\InMemoryPositionRepository;
 use Unity\Testing\Doubles\MemberStub;
+use Unity\Testing\Doubles\PositionStub;
 use WP_Error;
 use WP_REST_Request;
 use WP_REST_Response;
@@ -295,13 +297,116 @@ final class DirectoryTest extends TestCase
         self::assertArrayHasKey('name', $member);
     }
 
-    private function presenter(?InMemoryGroupRepository $groups = null): DirectoryPresenter
+    // ── Intergroup service position ───────────────────────────────────
+
+    public function testAMemberCarriesTheirIntergroupServicePosition(): void
     {
+        // Somebody writing to the Secretary is looking for a job rather
+        // than a name, and has no way to tell which of these people holds
+        // it from a first name and a home group.
+        $this->members = new InMemoryMemberRepository([
+            new MemberStub(
+                id: 7,
+                anonymousName: 'Dave P',
+                showMemberProfile: true,
+                intergroupPosition: 855,
+                personalEmail: self::MEMBER,
+            ),
+        ]);
+
+        $positions = new InMemoryPositionRepository([
+            new PositionStub(id: 855, longName: 'Intergroup Secretary'),
+        ]);
+
+        $member = $this->presenter(positions: $positions)->forApp(false)['members'][0];
+
+        self::assertSame('Intergroup Secretary', $member['position']);
+    }
+
+    public function testAMemberHoldingNoPositionGetsAnEmptyOne(): void
+    {
+        // The ordinary case by a distance: most of the fellowship holds
+        // no intergroup position at all.
+        $member = $this->presenter(positions: new InMemoryPositionRepository([]))
+            ->forApp(false)['members'][0];
+
+        self::assertSame('', $member['position']);
+    }
+
+    public function testAPositionThatCannotBeNamedIsLeftEmptyRatherThanGuessed(): void
+    {
+        // A position can be deleted while members still point at it.
+        $this->members = new InMemoryMemberRepository([
+            new MemberStub(
+                id: 7,
+                anonymousName: 'Dave P',
+                showMemberProfile: true,
+                intergroupPosition: 404,
+                personalEmail: self::MEMBER,
+            ),
+        ]);
+
+        $member = $this->presenter(positions: new InMemoryPositionRepository([]))
+            ->forApp(false)['members'][0];
+
+        self::assertSame('', $member['position']);
+    }
+
+    public function testTheDirectoryStillBuildsWithNoPositionRepositoryAtAll(): void
+    {
+        // Feature-detected exactly as groups are, and for the same
+        // reason: a headless Unity need not have positions bound.
+        $this->members = new InMemoryMemberRepository([
+            new MemberStub(
+                id: 7,
+                anonymousName: 'Dave P',
+                showMemberProfile: true,
+                intergroupPosition: 855,
+                personalEmail: self::MEMBER,
+            ),
+        ]);
+
+        $member = $this->presenter()->forApp(false)['members'][0];
+
+        self::assertSame('', $member['position']);
+        self::assertArrayHasKey('name', $member);
+    }
+
+    public function testNoAddressTravelsWithThePositionEither(): void
+    {
+        // A Position carries an email of its own — the role's, not the
+        // member's, but an address all the same, and this class hands out
+        // none of either sort.
+        $this->members = new InMemoryMemberRepository([
+            new MemberStub(
+                id: 7,
+                anonymousName: 'Dave P',
+                showMemberProfile: true,
+                intergroupPosition: 855,
+                personalEmail: self::MEMBER,
+            ),
+        ]);
+
+        $positions = new InMemoryPositionRepository([
+            new PositionStub(id: 855, longName: 'Intergroup Secretary', email: 'secretary@example.org'),
+        ]);
+
+        $encoded = (string) json_encode($this->presenter(positions: $positions)->forApp(false));
+
+        self::assertStringNotContainsString('secretary@example.org', $encoded);
+        self::assertStringNotContainsString(self::MEMBER, $encoded);
+    }
+
+    private function presenter(
+        ?InMemoryGroupRepository $groups = null,
+        ?InMemoryPositionRepository $positions = null,
+    ): DirectoryPresenter {
         return new DirectoryPresenter(
             $this->members,
             new InMemoryCommitteeRepository(),
             new MemberGate($this->members),
             $groups,
+            $positions,
         );
     }
 

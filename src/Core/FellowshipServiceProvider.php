@@ -51,6 +51,7 @@ use Unity\Committees\Interfaces\CommitteeRepository;
 use Unity\Groups\Interfaces\GroupRepository;
 use Unity\Core\Interfaces\Container;
 use Unity\Members\Interfaces\MemberRepository;
+use Unity\Positions\Interfaces\PositionRepository;
 
 /**
  * Registers Fellowship's services into Unity's container.
@@ -157,6 +158,8 @@ final class FellowshipServiceProvider
             // home groups rather than failing to build — see
             // DirectoryPresenter::groupTitle().
             $c->has(GroupRepository::class) ? $c->get(GroupRepository::class) : null,
+            // The same, for intergroup service positions.
+            $c->has(PositionRepository::class) ? $c->get(PositionRepository::class) : null,
         ));
 
         // ── Password sign-in ──
