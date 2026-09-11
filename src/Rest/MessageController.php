@@ -107,6 +107,7 @@ final class MessageController
                     'body'       => ['type' => 'string', 'required' => true],
                     'member_ids' => ['type' => 'array', 'required' => false, 'items' => ['type' => 'integer']],
                     'committee'  => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
+                    'committees' => ['type' => 'array', 'required' => false, 'items' => ['type' => 'string']],
                     'reply_to'   => ['type' => 'integer', 'required' => false, 'default' => 0],
                 ],
             ],
@@ -219,8 +220,15 @@ final class MessageController
             return new WP_Error('fellowship_unauthenticated', 'This device is not signed in.', ['status' => 401]);
         }
 
-        $committee = (string) $request->get_param('committee');
-        if ($committee !== '' && !$this->settings->allowsCommitteeSendFromApp()) {
+        // Both shapes, because a handset older than `committees` sends
+        // `committee` and both must meet the same gate. MessageRequest
+        // does the same merge; this one exists only to answer 403 before
+        // anything is built.
+        $committee  = (string) $request->get_param('committee');
+        $committees = $request->get_param('committees');
+        $committees = is_array($committees) ? $committees : [];
+
+        if (($committee !== '' || $committees !== []) && !$this->settings->allowsCommitteeSendFromApp()) {
             return new WP_Error(
                 'fellowship_committee_send_disabled',
                 'Sending to a committee from the app is not enabled on this site.',
@@ -240,6 +248,7 @@ final class MessageController
             'subject'       => $request->get_param('subject'),
             'body'          => $request->get_param('body'),
             'committee'     => $committee,
+            'committees'    => $committees,
             'member_emails' => $this->emailsForIds($request->get_param('member_ids')),
             'reply_to'      => $replyTo,
         ]);

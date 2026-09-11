@@ -9,6 +9,7 @@ use Fellowship\Core\Cipher;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Messaging\MessageRequest;
 use Fellowship\Messaging\RecipientResolver;
+use Unity\Testing\Doubles\CommitteeStub;
 use Unity\Testing\Doubles\InMemoryCommitteeRepository;
 use Unity\Testing\Doubles\InMemoryMemberRepository;
 use Unity\Testing\Doubles\MemberStub;
@@ -126,6 +127,61 @@ final class RecipientResolverTest extends TestCase
         $resolved = $this->resolve(['committee' => 'nobody-is-on-this']);
 
         self::assertSame([], $resolved);
+    }
+
+    public function testSeveralCommitteesResolveToTheUnionOfTheirMembers(): void
+    {
+        $this->committees = new InMemoryCommitteeRepository(
+            [
+                new CommitteeStub(id: 2, slug: 'literature', name: 'Literature'),
+                new CommitteeStub(id: 3, slug: 'public-information', name: 'Public Information'),
+            ],
+            ['literature' => [7], 'public-information' => [8]],
+        );
+
+        $resolved = $this->resolve(['committees' => ['literature', 'public-information']]);
+
+        self::assertSame(
+            ['dave@example.org', 'sue@example.org'],
+            array_column($resolved, 'email'),
+        );
+    }
+
+    public function testACommitteeAndNamedMembersReachBothAtOnce(): void
+    {
+        $this->committees = new InMemoryCommitteeRepository(
+            [new CommitteeStub(id: 2, slug: 'literature', name: 'Literature')],
+            ['literature' => [7]],
+        );
+
+        $resolved = $this->resolve([
+            'committees'    => ['literature'],
+            'member_emails' => ['sue@example.org'],
+        ]);
+
+        self::assertSame(
+            ['dave@example.org', 'sue@example.org'],
+            array_column($resolved, 'email'),
+        );
+    }
+
+    public function testSomebodyBothNamedAndOnACommitteeStillGetsOneCopy(): void
+    {
+        // The reason mixed audiences are safe to allow: de-duplication
+        // was always there, because a member can sit on two branches of
+        // one committee tree. Being named as well is the same problem.
+        $this->committees = new InMemoryCommitteeRepository(
+            [new CommitteeStub(id: 2, slug: 'literature', name: 'Literature')],
+            ['literature' => [7]],
+        );
+
+        $resolved = $this->resolve([
+            'committees'    => ['literature'],
+            'member_emails' => ['dave@example.org'],
+        ]);
+
+        self::assertCount(1, $resolved);
+        self::assertSame('dave@example.org', $resolved[0]['email']);
     }
 
     // ── The secret store ──────────────────────────────────────────────

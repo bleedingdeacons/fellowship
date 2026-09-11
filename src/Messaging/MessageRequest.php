@@ -36,6 +36,19 @@ final class MessageRequest
     /** Most members one send may name explicitly. */
     public const MAX_EXPLICIT_RECIPIENTS = 200;
 
+    /**
+     * Most committees one send may name.
+     *
+     * Low on purpose: the slugs are stored joined in a 200-character
+     * column, and a send that named more than a handful is a send that
+     * wanted {@see Message::AUDIENCE_ALL} and should be refused as such
+     * rather than assembled out of parts.
+     */
+    public const MAX_COMMITTEES = 10;
+
+    /** How much room {@see Message} has for the joined slugs. */
+    private const AUDIENCE_REF_MAX = 200;
+
     private function __construct(
         public readonly string $subject,
         public readonly string $body,
@@ -44,6 +57,17 @@ final class MessageRequest
         /** @var list<string> */
         public readonly array $memberEmails,
         public readonly int $replyToId,
+        /**
+         * The committee slugs this is addressed to, in the order given.
+         *
+         * {@see $audienceRef} is these joined with commas, which is what
+         * is stored; this is what the resolver walks. One is derived from
+         * the other, kept apart so nothing has to re-split a string it
+         * just built.
+         *
+         * @var list<string>
+         */
+        public readonly array $committees = [],
     ) {
     }
 
@@ -65,20 +89,11 @@ final class MessageRequest
             return new WP_Error('fellowship_no_body', 'A message needs a body.', ['status' => 400]);
         }
 
-        $committee = isset($input['committee']) ? trim((string) $input['committee']) : '';
-        $emails    = self::emails($input['member_emails'] ?? []);
-
-        // Addressing is exclusive on purpose. "This committee, and also
-        // these four people" reads as one intention but stores as two,
-        // and the recipient list it produces cannot be explained back to
-        // the sender afterwards. One audience per message.
-        if ($committee !== '' && $emails !== []) {
-            return new WP_Error(
-                'fellowship_ambiguous_audience',
-                'Address a message to a committee or to named members, not both.',
-                ['status' => 400],
-            );
-        }
+        // `committees` is the shape; `committee` is the one it replaced
+        // and is still accepted, because handsets in the field send it and
+        // fellowship_send_message() callers wrote against it.
+        $committees = self::committees($input['committees'] ?? $input['committee'] ?? []);
+        $emails     = self::emails($input['member_emails'] ?? []);
 
         if (count($emails) > self::MAX_EXPLICIT_RECIPIENTS) {
             return new WP_Error(
@@ -88,7 +103,32 @@ final class MessageRequest
             );
         }
 
-        if ($committee !== '') {
+        if (count($committees) > self::MAX_COMMITTEES) {
+            return new WP_Error(
+                'fellowship_too_many_committees',
+                'A message may name at most ' . self::MAX_COMMITTEES . ' committees.',
+                ['status' => 400],
+            );
+        }
+
+        $ref = implode(',', $committees);
+
+        // Refused rather than truncated, and this is the whole reason the
+        // cap above is not the only check: a silently shortened list is a
+        // send that reaches fewer people than it says it did, and nothing
+        // downstream could tell. Storage is the constraint, so storage
+        // gets to refuse.
+        if (strlen($ref) > self::AUDIENCE_REF_MAX) {
+            return new WP_Error(
+                'fellowship_too_many_committees',
+                'Those committee names are too long to record together. Send to fewer at once.',
+                ['status' => 400],
+            );
+        }
+
+        if ($committees !== [] && $emails !== []) {
+            $audience = Message::AUDIENCE_MIXED;
+        } elseif ($committees !== []) {
             $audience = Message::AUDIENCE_COMMITTEE;
         } elseif ($emails !== []) {
             $audience = Message::AUDIENCE_MEMBERS;
@@ -100,10 +140,54 @@ final class MessageRequest
             $subject,
             $body,
             $audience,
-            $committee,
+            $ref,
             $emails,
             max(0, (int) ($input['reply_to'] ?? 0)),
+            $committees,
         );
+    }
+
+    /**
+     * Normalise whatever a caller offered as committees into a list of
+     * slugs: a single string, a comma-separated string, or an array.
+     *
+     * Deduplicated, because the resolver would produce one copy per
+     * member anyway and a doubled slug in the stored ref would only
+     * mislead whoever read it later.
+     *
+     * @return list<string>
+     */
+    private static function committees(mixed $value): array
+    {
+        if (is_string($value)) {
+            $value = explode(',', $value);
+        }
+
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $slugs = [];
+
+        foreach ($value as $slug) {
+            if (is_int($slug)) {
+                // A committee id. The resolver accepts either, and the
+                // admin screen has ids to hand.
+                $slug = (string) $slug;
+            }
+
+            if (!is_string($slug)) {
+                continue;
+            }
+
+            $slug = trim($slug);
+
+            if ($slug !== '' && !in_array($slug, $slugs, true)) {
+                $slugs[] = $slug;
+            }
+        }
+
+        return $slugs;
     }
 
     /**

@@ -127,9 +127,14 @@ final class MessagesPage
 
     private function audience(string $type, string $ref): string
     {
+        // The ref holds slugs joined with commas, so a send to several
+        // reads as a list rather than as one oddly-named committee.
+        $named = str_replace(',', ', ', $ref);
+
         return match ($type) {
-            'committee' => sprintf(__('Committee: %s', 'fellowship'), $ref),
+            'committee' => sprintf(__('Committee: %s', 'fellowship'), $named),
             'members'   => __('Named members', 'fellowship'),
+            'mixed'     => sprintf(__('Named members and committee: %s', 'fellowship'), $named),
             default     => __('Everyone', 'fellowship'),
         };
     }
