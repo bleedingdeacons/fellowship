@@ -13,6 +13,7 @@ use Unity\Committees\Interfaces\CommitteeRepository;
 use Unity\Groups\Interfaces\GroupRepository;
 use Unity\Members\Interfaces\Member;
 use Unity\Members\Interfaces\MemberRepository;
+use Unity\Positions\Interfaces\PositionRepository;
 
 /**
  * The address book Link shows when a member composes.
@@ -42,20 +43,17 @@ use Unity\Members\Interfaces\MemberRepository;
  * make a member unreachable for the ordinary reason that they had not got
  * round to installing anything.
  *
- * <b>Home group and GSR travel with the name, and no contact details
- * do.</b> A first name alone does not identify anybody in an intergroup
- * with several Daves, which is the whole reason Hand shows a home group
- * beside its own member list. GSR is there because it is the reason a
- * member is most often written to. Neither is a contact detail, and the
- * paragraph above still holds exactly as written.
+ * <b>Home group, GSR and intergroup service position travel with the
+ * name, and no contact details do.</b> A first name alone does not
+ * identify anybody in an intergroup with several Daves, which is the
+ * whole reason Hand shows a home group beside its own member list. GSR
+ * and the service position are there because between them they are why a
+ * member is most often written to — somebody looking for the Secretary is
+ * looking for a job, not a name. None of the three is a contact detail,
+ * and the paragraph above still holds exactly as written.
  */
 final class DirectoryPresenter
 {
-    /**
-     * @param GroupRepository|null $groups Unity ships headless, so the
-     *     group repository is not guaranteed to be bound. Null means the
-     *     list is built without home groups rather than not at all.
-     */
     /**
      * Group id to title, built on first use. Null until then, so a
      * request that lists no members never asks Unity for groups at all.
@@ -64,11 +62,26 @@ final class DirectoryPresenter
      */
     private ?array $groupTitles = null;
 
+    /**
+     * Position id to title, on the same terms as {@see $groupTitles}.
+     *
+     * @var array<int, string>|null
+     */
+    private ?array $positionTitles = null;
+
+    /**
+     * @param GroupRepository|null    $groups    Unity ships headless, so the
+     *     group repository is not guaranteed to be bound. Null means the
+     *     list is built without home groups rather than not at all.
+     * @param PositionRepository|null $positions The same, for intergroup
+     *     service positions.
+     */
     public function __construct(
         private readonly MemberRepository $members,
         private readonly CommitteeRepository $committees,
         private readonly MemberGate $gate,
         private readonly ?GroupRepository $groups = null,
+        private readonly ?PositionRepository $positions = null,
     ) {
     }
 
@@ -108,12 +121,13 @@ final class DirectoryPresenter
             }
 
             $listed[] = [
-                'id'    => $member->getId(),
-                'name'  => $name,
-                'group' => $this->groupTitle($member->getHomeGroup()),
+                'id'       => $member->getId(),
+                'name'     => $name,
+                'group'    => $this->groupTitle($member->getHomeGroup()),
                 // A bool rather than a label, so the app decides how to
                 // say it and a translation never has to come from here.
-                'gsr'   => $member->isGSR(),
+                'gsr'      => $member->isGSR(),
+                'position' => $this->positionTitle($member->getIntergroupPosition()),
             ];
         }
 
@@ -151,6 +165,35 @@ final class DirectoryPresenter
         }
 
         return $this->groupTitles[$id] ?? '';
+    }
+
+    /**
+     * One intergroup service position's name, or empty.
+     *
+     * <b>The long name, which is what Integrity publishes</b> for the same
+     * field — "Intergroup Secretary" rather than a short code. Two things
+     * naming the same job differently is how a member ends up looking for
+     * somebody who appears to hold two.
+     *
+     * Built once for the same reason as {@see groupTitle()}, and empty is
+     * just as ordinary: most of the fellowship holds no intergroup
+     * position at all.
+     */
+    private function positionTitle(int $id): string
+    {
+        if ($id <= 0 || $this->positions === null) {
+            return '';
+        }
+
+        if ($this->positionTitles === null) {
+            $this->positionTitles = [];
+
+            foreach ($this->positions->findAll() as $position) {
+                $this->positionTitles[$position->getId()] = trim($position->getLongName());
+            }
+        }
+
+        return $this->positionTitles[$id] ?? '';
     }
 
     /**

@@ -95,7 +95,7 @@ final class DirectoryCli extends WP_CLI_Command
             // not guess.
             WP_CLI::warning('The directory has no members. Link would show an empty list.');
         } else {
-            Utils\format_items($format, $members, ['id', 'name', 'group', 'gsr']);
+            Utils\format_items($format, $members, ['id', 'name', 'group', 'gsr', 'position']);
         }
 
         if (!$wantsCommittees) {
