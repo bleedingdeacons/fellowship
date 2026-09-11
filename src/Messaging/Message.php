@@ -33,13 +33,35 @@ final class Message
     /** Addressed to an explicit list of members. */
     public const AUDIENCE_MEMBERS = 'members';
 
-    /** Addressed to everyone on a committee, resolved at send time. */
+    /**
+     * Addressed to everyone on one or more committees, resolved at send
+     * time. The audience ref holds the slugs, comma-separated.
+     */
     public const AUDIENCE_COMMITTEE = 'committee';
+
+    /**
+     * Addressed to named members *and* to committees at once.
+     *
+     * <b>This used to be refused.</b> "One audience per message" was the
+     * rule, on the grounds that a committee plus four names reads as one
+     * intention and stores as two, and that the resulting recipient list
+     * could not be explained back to the sender. The second half is what
+     * did not survive contact: the recipient list is stored per member in
+     * the recipients table either way, so it is exactly as explicable as
+     * any other — and the workaround people actually used was to send the
+     * same message twice, which is worse for everyone who is in both.
+     */
+    public const AUDIENCE_MIXED = 'mixed';
 
     /** Addressed to every member with a live handset. */
     public const AUDIENCE_ALL = 'all';
 
-    public const AUDIENCES = [self::AUDIENCE_MEMBERS, self::AUDIENCE_COMMITTEE, self::AUDIENCE_ALL];
+    public const AUDIENCES = [
+        self::AUDIENCE_MEMBERS,
+        self::AUDIENCE_COMMITTEE,
+        self::AUDIENCE_MIXED,
+        self::AUDIENCE_ALL,
+    ];
 
     public function __construct(
         public readonly int $id,

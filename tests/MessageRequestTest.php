@@ -48,20 +48,96 @@ final class MessageRequestTest extends TestCase
         self::assertSame(Message::AUDIENCE_ALL, $request->audienceType);
     }
 
-    public function testACommitteeAndNamedMembersTogetherAreRefused(): void
+    public function testACommitteeAndNamedMembersTogetherAreAllowed(): void
     {
-        // "This committee, and also these four people" reads as one
-        // intention but stores as two, and the resulting recipient list
-        // cannot be explained back to the sender.
-        $result = MessageRequest::fromArray([
+        // This was refused until 2026-09-11, on the grounds that the
+        // recipient list could not be explained back to the sender. It
+        // can: the list is stored per member in the recipients table
+        // whatever the audience, and the workaround people used instead
+        // was to send twice — which is worse for anyone in both.
+        $request = MessageRequest::fromArray([
             'subject'       => 'Both',
             'body'          => 'At once.',
-            'committee'     => 'literature',
+            'committees'    => ['literature'],
             'member_emails' => ['a@example.org'],
         ]);
 
+        self::assertInstanceOf(MessageRequest::class, $request);
+        self::assertSame(Message::AUDIENCE_MIXED, $request->audienceType);
+        self::assertSame(['literature'], $request->committees);
+        self::assertSame(['a@example.org'], $request->memberEmails);
+    }
+
+    public function testSeveralCommitteesTravelTogether(): void
+    {
+        $request = MessageRequest::fromArray([
+            'subject'    => 'Two committees',
+            'body'       => 'At once.',
+            'committees' => ['literature', 'public-information'],
+        ]);
+
+        self::assertInstanceOf(MessageRequest::class, $request);
+        self::assertSame(Message::AUDIENCE_COMMITTEE, $request->audienceType);
+        self::assertSame(['literature', 'public-information'], $request->committees);
+
+        // Joined for storage, because that is the shape of the column.
+        self::assertSame('literature,public-information', $request->audienceRef);
+    }
+
+    public function testTheOlderSingleCommitteeFieldStillWorks(): void
+    {
+        // Handsets in the field send this one, and so does every caller
+        // written against fellowship_send_message().
+        $request = MessageRequest::fromArray([
+            'subject'   => 'One',
+            'body'      => 'Committee.',
+            'committee' => 'literature',
+        ]);
+
+        self::assertInstanceOf(MessageRequest::class, $request);
+        self::assertSame(Message::AUDIENCE_COMMITTEE, $request->audienceType);
+        self::assertSame(['literature'], $request->committees);
+    }
+
+    public function testARepeatedCommitteeIsNamedOnce(): void
+    {
+        $request = MessageRequest::fromArray([
+            'subject'    => 'Twice',
+            'body'       => 'Named.',
+            'committees' => ['literature', 'literature'],
+        ]);
+
+        self::assertInstanceOf(MessageRequest::class, $request);
+        self::assertSame(['literature'], $request->committees);
+    }
+
+    public function testTooManyCommitteesAreRefused(): void
+    {
+        $result = MessageRequest::fromArray([
+            'subject'    => 'Everyone, really',
+            'body'       => 'Assembled out of parts.',
+            'committees' => array_map(
+                static fn(int $i): string => 'committee-' . $i,
+                range(1, MessageRequest::MAX_COMMITTEES + 1),
+            ),
+        ]);
+
         self::assertInstanceOf(WP_Error::class, $result);
-        self::assertSame('fellowship_ambiguous_audience', $result->get_error_code());
+        self::assertSame('fellowship_too_many_committees', $result->get_error_code());
+    }
+
+    public function testCommitteeNamesTooLongToStoreAreRefusedRatherThanTruncated(): void
+    {
+        // A silently shortened list is a send that reaches fewer people
+        // than it says it did, and nothing downstream could tell.
+        $result = MessageRequest::fromArray([
+            'subject'    => 'Long',
+            'body'       => 'Slugs.',
+            'committees' => [str_repeat('a', 150), str_repeat('b', 150)],
+        ]);
+
+        self::assertInstanceOf(WP_Error::class, $result);
+        self::assertSame('fellowship_too_many_committees', $result->get_error_code());
     }
 
     public function testASubjectIsRequired(): void

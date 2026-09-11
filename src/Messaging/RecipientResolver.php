@@ -51,9 +51,17 @@ final class RecipientResolver
      */
     public function resolve(MessageRequest $request, string $senderEmail = ''): array
     {
+        // Mixed is a concatenation, not a third way of resolving: the
+        // de-duplication below already had to handle a member reachable
+        // through two branches of one committee tree, and somebody who is
+        // both named and on a committee is the same problem.
         $members = match ($request->audienceType) {
-            Message::AUDIENCE_COMMITTEE => $this->fromCommittee($request->audienceRef),
+            Message::AUDIENCE_COMMITTEE => $this->fromCommittees($request->committees),
             Message::AUDIENCE_MEMBERS   => $this->fromEmails($request->memberEmails),
+            Message::AUDIENCE_MIXED     => array_merge(
+                $this->fromCommittees($request->committees),
+                $this->fromEmails($request->memberEmails),
+            ),
             default                     => $this->everyone(),
         };
 
@@ -76,6 +84,28 @@ final class RecipientResolver
         }
 
         return array_values($resolved);
+    }
+
+    /**
+     * Every member of every committee named, concatenated.
+     *
+     * Duplicates are left in: {@see resolve()} keys by email and has had
+     * to do that since committees included their descendants.
+     *
+     * @param list<string> $committees
+     * @return list<Member>
+     */
+    private function fromCommittees(array $committees): array
+    {
+        $members = [];
+
+        foreach ($committees as $committee) {
+            foreach ($this->fromCommittee($committee) as $member) {
+                $members[] = $member;
+            }
+        }
+
+        return $members;
     }
 
     /**
