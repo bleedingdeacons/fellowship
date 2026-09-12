@@ -55,6 +55,9 @@ use WP_REST_Response;
 final class DeviceAuthControllerTest extends TestCase
 {
     private const MEMBER = 'member@example.org';
+
+    /** A second member, for the "not your handset" case. */
+    private const OTHER = 'other@example.org';
     private const CALLBACK = 'link://auth';
 
     private InMemoryDeviceRepository $devices;
@@ -85,6 +88,7 @@ final class DeviceAuthControllerTest extends TestCase
 
         $this->members = new InMemoryMemberRepository([
             new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: self::MEMBER),
+            new MemberStub(id: 8, anonymousName: 'Sue M', personalEmail: self::OTHER),
         ]);
     }
 
@@ -346,11 +350,92 @@ final class DeviceAuthControllerTest extends TestCase
     {
         $token = $this->enrol();
         $this->devices->markKeyFault(1, time());
+        $this->givenPassword('correct horse battery staple');
 
-        $response = $this->controller()->rotateKey($this->request(['public_key' => $this->publicKey()], $token));
+        $response = $this->controller()->rotateKey($this->request([
+            'public_key' => $this->publicKey(),
+            'email'      => self::MEMBER,
+            'password'   => 'correct horse battery staple',
+        ], $token));
 
         self::assertInstanceOf(WP_REST_Response::class, $response);
         self::assertFalse($this->devices->rows[1]->hasKeyFault());
+    }
+
+    /**
+     * The point of the whole change. Substituting the key is enough to
+     * have every retained message re-sealed to it, so a captured bearer
+     * token on its own must not be able to do it.
+     */
+    public function testATokenAloneNoLongerRotatesAKey(): void
+    {
+        $token = $this->enrol();
+        $before = $this->devices->rows[1]->publicKey;
+
+        $response = $this->controller()->rotateKey($this->request(['public_key' => $this->publicKey()], $token));
+
+        self::assertInstanceOf(WP_Error::class, $response);
+        self::assertSame('fellowship_no_credential', $response->get_error_code());
+        self::assertSame($before, $this->devices->rows[1]->publicKey);
+    }
+
+    public function testAWrongPasswordDoesNotRotateAKey(): void
+    {
+        $token = $this->enrol();
+        $this->givenPassword('correct horse battery staple');
+        $before = $this->devices->rows[1]->publicKey;
+
+        $response = $this->controller()->rotateKey($this->request([
+            'public_key' => $this->publicKey(),
+            'email'      => self::MEMBER,
+            'password'   => 'wrong',
+        ], $token));
+
+        self::assertInstanceOf(WP_Error::class, $response);
+        self::assertSame('fellowship_bad_credentials', $response->get_error_code());
+        self::assertSame($before, $this->devices->rows[1]->publicKey);
+    }
+
+    /**
+     * Proving your own identity does not let you rotate somebody else's
+     * key. Without this check the attack simply puts on a hat: capture a
+     * token, sign in as yourself, substitute the key on their handset.
+     */
+    public function testACredentialForAnotherMemberDoesNotRotateThisKey(): void
+    {
+        $token = $this->enrol();
+        $this->credentials->upsertPasswordHash(
+            self::OTHER,
+            (string) password_hash('correct horse battery staple', PASSWORD_DEFAULT),
+            time(),
+        );
+        $before = $this->devices->rows[1]->publicKey;
+
+        $response = $this->controller()->rotateKey($this->request([
+            'public_key' => $this->publicKey(),
+            'email'      => self::OTHER,
+            'password'   => 'correct horse battery staple',
+        ], $token));
+
+        self::assertInstanceOf(WP_Error::class, $response);
+        self::assertSame('fellowship_wrong_member', $response->get_error_code());
+        self::assertSame(403, $response->get_error_data()['status']);
+        self::assertSame($before, $this->devices->rows[1]->publicKey);
+    }
+
+    public function testACredentialWithoutATokenRotatesNothing(): void
+    {
+        $this->enrol();
+        $this->givenPassword('correct horse battery staple');
+
+        $response = $this->controller()->rotateKey($this->request([
+            'public_key' => $this->publicKey(),
+            'email'      => self::MEMBER,
+            'password'   => 'correct horse battery staple',
+        ]));
+
+        self::assertInstanceOf(WP_Error::class, $response);
+        self::assertSame('fellowship_unauthenticated', $response->get_error_code());
     }
 
     public function testAKeyFaultIsRecorded(): void

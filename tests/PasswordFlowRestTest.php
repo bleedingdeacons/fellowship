@@ -179,9 +179,16 @@ final class PasswordFlowRestTest extends TestCase
     {
         // Storing it would leave a device that receives nothing and looks
         // perfectly healthy.
+        //
+        // Carries a credential because rotation needs one since
+        // 2026-09-12 — this is about the key, so it has to get past the
+        // gate in front of it.
         $token = $this->enrol();
 
-        $response = $this->controller()->rotateKey($this->request(['public_key' => 'not-a-key'], $token));
+        $response = $this->controller()->rotateKey($this->request(
+            ['public_key' => 'not-a-key'] + $this->credential(),
+            $token,
+        ));
 
         self::assertInstanceOf(WP_Error::class, $response);
         self::assertSame('fellowship_bad_public_key', $response->get_error_code());
@@ -194,11 +201,33 @@ final class PasswordFlowRestTest extends TestCase
 
         self::assertInstanceOf(
             WP_Error::class,
-            $this->controller()->rotateKey($this->request(['public_key' => $this->publicKey()], $token)),
+            $this->controller()->rotateKey($this->request(
+                ['public_key' => $this->publicKey()] + $this->credential(),
+                $token,
+            )),
         );
     }
 
     // ── Fixtures ──────────────────────────────────────────────────────
+
+    /**
+     * A working password credential for the member, as the parameters a
+     * request carries.
+     *
+     * @return array{email: string, password: string}
+     */
+    private function credential(): array
+    {
+        $password = 'correct horse battery staple';
+
+        $this->credentials->upsertPasswordHash(
+            self::MEMBER,
+            (string) password_hash($password, PASSWORD_DEFAULT),
+            time(),
+        );
+
+        return ['email' => self::MEMBER, 'password' => $password];
+    }
 
     /** Ask for a code and read it back out of the email. */
     private function requestCode(): string
