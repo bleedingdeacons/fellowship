@@ -217,6 +217,17 @@ final class DeviceAuthController
             'permission_callback' => '__return_true',
             'args'                => [
                 'public_key' => ['type' => 'string', 'required' => true],
+                // And a credential, of whichever shape this member signs
+                // in with. The same three the exchange accepts: a device
+                // token alone no longer rotates a key.
+                'code'     => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
+                'state'    => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
+                'id_token' => ['type' => 'string', 'required' => false],
+                'email'    => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_email'],
+                // Deliberately not sanitized, as on the password route: a
+                // password is an arbitrary string and sanitising it would
+                // quietly alter one into a value that never matches.
+                'password' => ['type' => 'string', 'required' => false],
             ],
         ]);
 
@@ -651,6 +662,18 @@ final class DeviceAuthController
      * and tell them nothing useful; letting the handset present a new key
      * keeps the row and its history.
      *
+     * <b>It needs a credential, not just the device token.</b> Since
+     * 2026-09-12, and for the reason set out below: substituting the key
+     * is enough to have every retained message re-sealed to it, so a
+     * captured bearer token alone must not be able to do it. The
+     * credential may be any of the three enrolment accepts, and it has to
+     * belong to the member the handset does — proving your own identity
+     * does not let you rotate somebody else's key.
+     *
+     * Proof of possession of the *old* key would be the tidier control
+     * and cannot work here: this route exists precisely because that key
+     * is gone.
+     *
      * <b>And the messages come back.</b> This said they stayed unreadable,
      * and reasoned that the server never held the private half so could
      * not re-seal them. It does not need the private half: {@see
@@ -672,6 +695,36 @@ final class DeviceAuthController
         $device = $this->authenticate($request);
         if ($device instanceof WP_Error) {
             return $device;
+        }
+
+        if ($limited = $this->rateLimited('exchange')) {
+            return $limited;
+        }
+
+        // A live token is not enough on its own. See the remarks above:
+        // substituting the key is sufficient to have every retained
+        // message re-sealed to it, so this asks for the same proof
+        // enrolment asks for.
+        $identity = $this->reauthenticate($request);
+        if ($identity instanceof WP_Error) {
+            return $identity;
+        }
+
+        // And it has to be this handset's member. Without this check a
+        // caller holding somebody else's token could prove their own
+        // identity and rotate that handset's key with it, which is the
+        // whole attack wearing a hat.
+        if (!$this->sameMember($device->memberEmail, $identity->email)) {
+            self::logWarning('A key rotation was refused: the credential is not this member', [
+                'device'   => $device->id,
+                'provider' => $identity->provider,
+            ]);
+
+            return new WP_Error(
+                'fellowship_wrong_member',
+                'Sign in as the member this phone belongs to.',
+                ['status' => 403],
+            );
         }
 
         $publicKey = DevicePublicKey::normalise((string) $request->get_param('public_key'));
@@ -770,6 +823,49 @@ final class DeviceAuthController
         );
 
         return new WP_REST_Response(['ok' => true], 200);
+    }
+
+    /**
+     * Prove, again, who is holding this handset — by any of the three
+     * routes enrolment accepts.
+     *
+     * A password is tried first only because it is the one shape
+     * {@see identityFor()} does not handle; there is no precedence being
+     * expressed, and a request carrying two credentials is a wiring
+     * mistake rather than a decision this has to arbitrate.
+     */
+    private function reauthenticate(WP_REST_Request $request): VerifiedIdentity|WP_Error
+    {
+        $email    = (string) $request->get_param('email');
+        $password = (string) $request->get_param('password');
+
+        if ($email !== '' && $password !== '') {
+            $identity = $this->passwords->attemptLogin($email, $password, time());
+
+            return $identity ?? new WP_Error(
+                'fellowship_bad_credentials',
+                'Email or password is incorrect.',
+                ['status' => 401],
+            );
+        }
+
+        return $this->identityFor($request);
+    }
+
+    /**
+     * Whether a verified address is the one a device belongs to.
+     *
+     * Compared the way {@see MemberGate} resolves them — lowercased and
+     * trimmed — so a capitalisation difference between what a provider
+     * returns and what Unity holds cannot refuse somebody their own
+     * handset.
+     */
+    private function sameMember(string $deviceEmail, string $verifiedEmail): bool
+    {
+        return hash_equals(
+            strtolower(trim($deviceEmail)),
+            strtolower(trim($verifiedEmail)),
+        );
     }
 
     /**
