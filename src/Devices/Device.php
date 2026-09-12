@@ -22,10 +22,18 @@ if (!defined('ABSPATH')) {
  * their messages every twelve hours.
  *
  * `publicKey` is the half of the handset's own keypair it sent at
- * enrolment. The private half never leaves the device, so a message
- * sealed to this key can be opened by this handset and by nothing else —
- * this server included. That is the whole difference from Reach's
+ * enrolment. The private half never leaves the device, so a sealed
+ * *envelope* can be opened by this handset and by nothing else, this
+ * server included. That is the whole difference from Reach's
  * arrangement, where the server issues the key and keeps a copy.
+ *
+ * It is not a claim about the message. This server holds the body in
+ * plain text and seals it afresh on every fetch — see
+ * {@see \Fellowship\Rest\MessageController::inbox()} — so it can seal
+ * the same message to whatever key a device presents next. What the
+ * keypair protects is the wire and the notification tray, not the
+ * database. This comment said otherwise until 2026-09-12, and the
+ * stronger reading of it had reached five other files.
  *
  * `memberEmail` is the identity the token was minted for. It is
  * re-resolved to a member and re-checked against {@see MemberGate} on
