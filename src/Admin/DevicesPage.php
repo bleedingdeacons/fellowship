@@ -126,7 +126,17 @@ final class DevicesPage
             echo '<td>' . esc_html($this->memberName($device)) . '</td>';
             echo '<td>' . esc_html($device->label !== '' ? $device->label : __('(unnamed)', 'fellowship'));
             echo ' <span class="description">' . esc_html($device->platform) . '</span></td>';
-            echo '<td>' . esc_html($device->wantsPush() ? __('Yes', 'fellowship') : __('Poll only', 'fellowship')) . '</td>';
+            // "Poll only" on its own sends somebody to the Firebase
+            // console for a handset that simply has not been given a
+            // token yet. The reason is the actionable half.
+            echo '<td>';
+            if ($device->wantsPush()) {
+                echo esc_html__('Yes', 'fellowship');
+            } else {
+                echo esc_html__('Poll only', 'fellowship');
+                echo ' <span class="description">' . esc_html($device->pushBlocker()) . '</span>';
+            }
+            echo '</td>';
             echo '<td>' . esc_html($this->when($device->createdAt)) . '</td>';
             echo '<td>' . esc_html($device->lastSeenAt > 0 ? $this->when($device->lastSeenAt) : '—') . '</td>';
             echo '<td>';

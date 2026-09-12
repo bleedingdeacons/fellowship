@@ -117,10 +117,24 @@ final class MessageDispatcher
             return;
         }
 
+        // Collected across the whole message and reported once, for the
+        // same reason the service-account check above is asked once: a
+        // broadcast to a large fellowship would otherwise write a line per
+        // handset, and the twentieth is no more informative than the
+        // first. One line naming the devices is actionable; twenty is a
+        // log nobody reads.
+        $pollOnly = [];
+
         foreach ($members as $member) {
             $pushed = false;
 
             foreach ($this->devices->findByMemberEmail($member['email']) as $device) {
+                $blocker = $device->pushBlocker();
+                if ($blocker !== '') {
+                    $pollOnly[] = $device->id . ': ' . $blocker;
+                    continue;
+                }
+
                 if ($this->transport->send($device, $message)) {
                     $pushed = true;
                 }
@@ -133,6 +147,22 @@ final class MessageDispatcher
             if ($pushed) {
                 $this->recipients->markPushed($message->id, $member['email'], $now);
             }
+        }
+
+        // Said out loud because the alternative is a handset that is
+        // simply quiet. A device in this state collects the message on its
+        // next poll and nothing is lost — but on a phone that is idle,
+        // "the next poll" can be a long time, and somebody wondering why
+        // an alert did not arrive has no way to tell this apart from a
+        // push that failed in flight.
+        if ($pollOnly !== []) {
+            self::logWarning(
+                'Some handsets were not pushed to and will collect this message on their next poll.',
+                [
+                    'message' => $message->id,
+                    'devices' => implode(', ', $pollOnly),
+                ],
+            );
         }
     }
 }
