@@ -59,18 +59,43 @@ final class CurrentDevice
      */
     public function fromRequest(WP_REST_Request $request): ?Device
     {
+        return $this->resolve($request)->device;
+    }
+
+    /**
+     * The device this request authenticates as, and — for the one case
+     * where saying so is safe — why not.
+     *
+     * Null still covers almost every refusal without distinguishing
+     * between them: no header, a malformed token, an unknown one, a
+     * revoked one. The app has nothing useful to do differently with any
+     * of them, and telling an unauthenticated caller which of its guesses
+     * was closest is how enrolled emails get enumerated.
+     *
+     * The exception is a token that matched a live device row whose
+     * member the gate then refused. That caller already holds a
+     * credential this site issued, so naming the reason tells it nothing
+     * it did not have — and it is the only refusal a member can act on.
+     * See {@see DeviceResolution}.
+     */
+    public function resolve(WP_REST_Request $request): DeviceResolution
+    {
         $token = $this->minter->bearerFrom((string) $request->get_header('authorization'));
         if ($token === '' || !$this->minter->looksLikeToken($token)) {
-            return null;
+            return DeviceResolution::unauthenticated();
         }
 
         $device = $this->devices->findByTokenHash($this->minter->hash($token));
         if ($device === null) {
-            return null;
+            return DeviceResolution::unauthenticated();
         }
 
         if ($this->gate->authorisedMember($device->memberEmail) === null) {
-            return null;
+            // The token is this site's and the row is live; the person is
+            // not. A handset told only "unauthenticated" here would put
+            // its member through a sign-in that refuses them for the same
+            // reason, with nothing on screen saying what to fix.
+            return DeviceResolution::notAMember();
         }
 
         $now = time();
@@ -78,7 +103,7 @@ final class CurrentDevice
             $this->devices->touchLastSeen($device->id, $now);
         }
 
-        return $device;
+        return DeviceResolution::found($device);
     }
 
     /**

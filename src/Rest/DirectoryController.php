@@ -10,6 +10,7 @@ if (!defined('ABSPATH')) {
 
 use Fellowship\Core\Settings;
 use Fellowship\Devices\CurrentDevice;
+use Fellowship\Devices\DeviceResolution;
 use Fellowship\Directory\DirectoryPresenter;
 use Scrutiny\Audit\Interfaces\AuditLogger;
 use WP_Error;
@@ -68,9 +69,18 @@ final class DirectoryController
             return $insecure;
         }
 
-        $device = $this->currentDevice->fromRequest($request);
+        $resolved = $this->currentDevice->resolve($request);
+        $device = $resolved->device;
         if ($device === null) {
-            return new WP_Error('fellowship_unauthenticated', 'This device is not signed in.', ['status' => 401]);
+            // Same split as the inbox, for the same reason: a caller
+            // holding a live token is owed the one refusal it can act on.
+            return $resolved->refusal === DeviceResolution::NOT_A_MEMBER
+                ? new WP_Error(
+                    'fellowship_not_a_member',
+                    'That address no longer matches a member record.',
+                    ['status' => 403],
+                )
+                : new WP_Error('fellowship_unauthenticated', 'This device is not signed in.', ['status' => 401]);
         }
 
         $directory = $this->presenter->forApp($this->settings->allowsCommitteeSendFromApp());

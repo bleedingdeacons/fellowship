@@ -12,6 +12,7 @@ use Fellowship\Core\RateLimiter;
 use Fellowship\Core\Settings;
 use Fellowship\Crypto\MessageSealer;
 use Fellowship\Devices\CurrentDevice;
+use Fellowship\Devices\DeviceResolution;
 use Fellowship\Devices\Device;
 use Fellowship\Logger\HasLogger;
 use Fellowship\Messaging\AuditDetail;
@@ -431,9 +432,26 @@ final class MessageController
             return $insecure;
         }
 
-        $device = $this->currentDevice->fromRequest($request);
+        $resolved = $this->currentDevice->resolve($request);
+        if ($resolved->device !== null) {
+            return $resolved->device;
+        }
 
-        return $device ?? new WP_Error(
+        // 403 rather than 401, and a code of its own, for the single case
+        // where the caller has already proved it holds one of this site's
+        // tokens. Link reads this to tell a member "the intergroup no
+        // longer has a member record for your address" instead of "could
+        // not be reached". Every other refusal stays the generic 401 —
+        // see DeviceResolution for why that line is where it is.
+        if ($resolved->refusal === DeviceResolution::NOT_A_MEMBER) {
+            return new WP_Error(
+                'fellowship_not_a_member',
+                'That address no longer matches a member record.',
+                ['status' => 403],
+            );
+        }
+
+        return new WP_Error(
             'fellowship_unauthenticated',
             'This device is not signed in.',
             ['status' => 401],
