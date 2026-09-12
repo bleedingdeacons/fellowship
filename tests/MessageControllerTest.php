@@ -481,6 +481,47 @@ final class MessageControllerTest extends TestCase
         self::assertInstanceOf(WP_Error::class, $this->controller()->markRead($this->request(['id' => 1])));
     }
 
+    // ── Which refusal it was ──────────────────────────────────────────
+
+    /**
+     * A handset holding a live token whose member the gate now refuses is
+     * told which, because it is the only refusal a member can act on and
+     * because that caller has already proved it holds one of this site's
+     * credentials. Link shows it instead of "could not be reached".
+     */
+    public function testATokenWhoseMemberHasGoneSaysSo(): void
+    {
+        $token = $this->enrolFor('nobody@example.test');
+
+        $response = $this->controller()->inbox($this->request([], $token));
+
+        self::assertInstanceOf(WP_Error::class, $response);
+        self::assertSame('fellowship_not_a_member', $response->get_error_code());
+        self::assertSame(403, $response->get_error_data()['status']);
+    }
+
+    /**
+     * And every other refusal stays exactly as undifferentiated as it was.
+     * A caller who has proved nothing learns nothing — which is what stops
+     * this endpoint being used to find out which addresses are enrolled.
+     */
+    public function testATokenThisSiteNeverIssuedIsStillJustUnauthenticated(): void
+    {
+        $response = $this->controller()->inbox($this->request([], $this->minter->mint()));
+
+        self::assertInstanceOf(WP_Error::class, $response);
+        self::assertSame('fellowship_unauthenticated', $response->get_error_code());
+        self::assertSame(401, $response->get_error_data()['status']);
+    }
+
+    public function testAMalformedTokenIsStillJustUnauthenticated(): void
+    {
+        $response = $this->controller()->inbox($this->request([], 'not-a-token'));
+
+        self::assertInstanceOf(WP_Error::class, $response);
+        self::assertSame('fellowship_unauthenticated', $response->get_error_code());
+    }
+
     // ── Fixtures ──────────────────────────────────────────────────────
 
     private function controller(?Settings $settings = null, ?InMemoryMessageRepository $store = null): MessageController
@@ -555,6 +596,31 @@ final class MessageControllerTest extends TestCase
     private function enrol(): string
     {
         return $this->enrolWithKey($this->publicKey);
+    }
+
+    /**
+     * A device row for an address the member repository does not know —
+     * a member removed from Unity, or one whose personal email was
+     * changed while their handset went on holding a perfectly valid
+     * token.
+     */
+    private function enrolFor(string $email): string
+    {
+        $token = $this->minter->mint();
+
+        $this->devices->create(
+            $this->minter->hash($token),
+            $email,
+            7,
+            'Pixel 6a',
+            'android',
+            $this->publicKey,
+            'fcm',
+            'token-1',
+            1788000000,
+        );
+
+        return $token;
     }
 
     private function enrolWithKey(string $publicKey): string
