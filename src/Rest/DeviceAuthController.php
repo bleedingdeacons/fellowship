@@ -651,11 +651,21 @@ final class DeviceAuthController
      * and tell them nothing useful; letting the handset present a new key
      * keeps the row and its history.
      *
-     * <b>Messages already sent stay unreadable, and here that is a fact
-     * rather than a policy.</b> They were sealed to content keys wrapped
-     * to the old public key, and this server never held the private half —
-     * so it could not re-seal them even if it wanted to. The app clears
-     * what it cannot open.
+     * <b>And the messages come back.</b> This said they stayed unreadable,
+     * and reasoned that the server never held the private half so could
+     * not re-seal them. It does not need the private half: {@see
+     * MessageController::inbox()} seals from a body stored in plain text,
+     * per fetch, to whatever key the asking device presents. So the next
+     * sync after a rotation re-delivers everything inside the retention
+     * window.
+     *
+     * What is genuinely lost is narrower — messages the sweep has already
+     * taken, and any push sealed and sent before the rotation.
+     *
+     * <b>Which is why this route authenticating on the bearer token alone
+     * is worth a second look.</b> The old comment made key substitution
+     * look harmless; it is not, because substituting the key is enough to
+     * have every retained message re-sealed to it.
      */
     public function rotateKey(WP_REST_Request $request): WP_REST_Response|WP_Error
     {
