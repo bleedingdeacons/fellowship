@@ -153,6 +153,44 @@ final class AdminBranchesTest extends TestCase
         self::assertSame('', $settings->getFcmServiceAccount());
     }
 
+    public function testAPastedServiceAccountSurvivesTheSlashesWordPressAdds(): void
+    {
+        // Every other test on this handler sets $_POST unslashed, and that
+        // is not how a request arrives. WordPress runs wp_magic_quotes()
+        // over $_POST, so a pasted service account reaches the handler with
+        // every quote and every escape backslashed. Without wp_unslash()
+        // json_decode refuses it, and the screen tells somebody a perfectly
+        // valid file is not a service account -- meaning no correct one can
+        // be saved on any site at all. That shipped, and the tests stayed
+        // green throughout, because they all set $_POST by hand.
+        //
+        // So setting it the way the runtime really does is the entire point
+        // here. Do not 'tidy' the addslashes away.
+        $settings = new Settings();
+        $json = $this->accountJson();
+
+        $_POST['fcm_service_account'] = addslashes($json);
+
+        self::assertSame('saved', (new SettingsPage($settings))->saveFromRequest());
+        self::assertSame($json, $settings->getFcmServiceAccount());
+    }
+
+    public function testAClientSecretSurvivesTheSlashesWordPressAdds(): void
+    {
+        // The same omission sat on every field here and only the service
+        // account showed it, because ids and secrets are usually
+        // alphanumeric and addslashes leaves them alone. A secret holding a
+        // quote would have been stored corrupted and silently failed to
+        // authenticate, which is worse than being refused.
+        $settings = new Settings();
+        $secret = 'a"secret\with-both';
+
+        $_POST['google_client_secret'] = addslashes($secret);
+
+        self::assertSame('saved', (new SettingsPage($settings))->saveFromRequest());
+        self::assertSame($secret, $settings->getClientSecret('google'));
+    }
+
     // ── The device list ───────────────────────────────────────────────
 
     public function testARevokedHandsetIsShownAsRevokedRatherThanHidden(): void

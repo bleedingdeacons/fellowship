@@ -211,20 +211,20 @@ final class SettingsPage
     {
         $this->settings->setClientId(
             GoogleProvider::PROVIDER_NAME,
-            sanitize_text_field((string) ($_POST['google_client_id'] ?? '')),
+            sanitize_text_field((string) wp_unslash($_POST['google_client_id'] ?? '')),
         );
         $this->settings->setClientId(
             AppleProvider::PROVIDER_NAME,
-            sanitize_text_field((string) ($_POST['apple_client_id'] ?? '')),
+            sanitize_text_field((string) wp_unslash($_POST['apple_client_id'] ?? '')),
         );
 
         $this->settings->setClientId(
             MicrosoftProvider::PROVIDER_NAME,
-            sanitize_text_field((string) ($_POST['microsoft_client_id'] ?? '')),
+            sanitize_text_field((string) wp_unslash($_POST['microsoft_client_id'] ?? '')),
         );
         $this->settings->setClientId(
             FacebookProvider::PROVIDER_NAME,
-            sanitize_text_field((string) ($_POST['facebook_client_id'] ?? '')),
+            sanitize_text_field((string) wp_unslash($_POST['facebook_client_id'] ?? '')),
         );
 
         // An empty secret field means "leave it alone", not "clear it" —
@@ -242,7 +242,7 @@ final class SettingsPage
             FacebookProvider::PROVIDER_NAME  => 'facebook_client_secret',
             ] as $provider => $field
         ) {
-            $submitted = trim((string) ($_POST[$field] ?? ''));
+            $submitted = trim((string) wp_unslash($_POST[$field] ?? ''));
 
             if (!empty($_POST['clear_' . $field])) {
                 $this->settings->setClientSecret($provider, '');
@@ -251,7 +251,22 @@ final class SettingsPage
             }
         }
 
-        $fcm = trim((string) ($_POST['fcm_service_account'] ?? ''));
+        // wp_unslash, and this is the field that made the omission
+        // visible. WordPress runs wp_magic_quotes() over $_POST on every
+        // request, so a pasted service account arrives with every quote
+        // and every escape backslashed. json_decode refuses it, fromJson()
+        // answers null, and the screen tells somebody their file does not
+        // look like a service account -- of a file that is perfectly valid.
+        // No correct service account could be saved here at all, which is
+        // why the field had never been populated on any site.
+        //
+        // The fields above are slashed identically and simply never showed
+        // it: client ids and OAuth secrets are alphanumeric with dashes,
+        // so addslashes leaves them byte-for-byte alone. They are unslashed
+        // now because the next secret with a quote or a backslash in it
+        // would be corrupted silently rather than refused loudly, which is
+        // the worse of the two failures.
+        $fcm = trim((string) wp_unslash($_POST['fcm_service_account'] ?? ''));
         if (!empty($_POST['clear_fcm'])) {
             $this->settings->setFcmServiceAccount('');
         } elseif ($fcm !== '') {
