@@ -116,6 +116,41 @@ final class Device
     }
 
     /**
+     * Why {@see wantsPush()} is false, or '' when it is true.
+     *
+     * <b>"Poll only" is a diagnosis without a cause.</b> All three of the
+     * conditions above are ordinary states a real handset passes through,
+     * and they call for quite different things: a missing token usually
+     * fixes itself the moment Firebase answers, a provider of none means
+     * the handset enrolled claiming no push transport at all, and a
+     * missing public key is a device row that cannot be sent anything
+     * sealed by any route. Telling somebody only that push is off leaves
+     * them to guess which, and the guess is normally "Firebase is
+     * broken".
+     *
+     * Phrased for a person reading an admin table or a log line, so it is
+     * deliberately not a machine-readable code. Nothing branches on it.
+     */
+    public function pushBlocker(): string
+    {
+        if ($this->pushProvider !== self::PUSH_FCM) {
+            return $this->pushProvider === self::PUSH_NONE
+                ? 'enrolled with no push transport'
+                : sprintf('push transport is "%s", not FCM', $this->pushProvider);
+        }
+
+        if ($this->pushToken === '') {
+            return 'no push token yet';
+        }
+
+        if ($this->publicKey === '') {
+            return 'no public key';
+        }
+
+        return '';
+    }
+
+    /**
      * Normalise a claimed platform to one of {@see PLATFORMS}, or '' if it
      * is not one we recognise. Callers treat '' as a bad request — the
      * platform decides the delivery path, so guessing would mean silently

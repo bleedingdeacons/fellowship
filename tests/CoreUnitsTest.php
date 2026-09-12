@@ -95,6 +95,59 @@ final class CoreUnitsTest extends TestCase
         self::assertFalse($this->device(pushProvider: '')->wantsPush());
     }
 
+    public function testAPushableHandsetHasNoBlockerToReport(): void
+    {
+        self::assertSame('', $this->device()->pushBlocker());
+    }
+
+    public function testTheBlockerNamesTheMissingToken(): void
+    {
+        // The one that resolves itself. Saying so stops somebody going to
+        // the Firebase console over a handset that is merely new.
+        self::assertSame('no push token yet', $this->device(pushToken: '')->pushBlocker());
+    }
+
+    public function testTheBlockerNamesTheMissingKey(): void
+    {
+        self::assertSame('no public key', $this->device(publicKey: '')->pushBlocker());
+    }
+
+    public function testTheBlockerNamesAnAbsentTransport(): void
+    {
+        self::assertSame('enrolled with no push transport', $this->device(pushProvider: '')->pushBlocker());
+    }
+
+    public function testTheBlockerQuotesAnUnrecognisedTransport(): void
+    {
+        // Not the same fault as none at all: a value here means the
+        // handset claimed something this build does not deliver through,
+        // which is a wiring mistake rather than a handset waiting on
+        // Firebase.
+        self::assertSame(
+            'push transport is "apns", not FCM',
+            $this->device(pushProvider: 'apns')->pushBlocker(),
+        );
+    }
+
+    public function testEveryBlockerAgreesWithWantsPush(): void
+    {
+        // The two must never disagree: a device that is pushed while
+        // reporting a reason it cannot be, or refused while reporting
+        // none, would make the admin table and the log lie in opposite
+        // directions.
+        $devices = [
+            $this->device(),
+            $this->device(pushToken: ''),
+            $this->device(publicKey: ''),
+            $this->device(pushProvider: ''),
+            $this->device(pushProvider: 'apns'),
+        ];
+
+        foreach ($devices as $device) {
+            self::assertSame($device->wantsPush(), $device->pushBlocker() === '');
+        }
+    }
+
     public function testARevokedHandsetSaysSo(): void
     {
         self::assertTrue($this->device(revokedAt: 1788000500)->isRevoked());
