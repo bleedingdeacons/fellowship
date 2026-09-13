@@ -397,6 +397,59 @@ final class DirectoryTest extends TestCase
         self::assertStringNotContainsString(self::MEMBER, $encoded);
     }
 
+    // ── Whether a member has a device ─────────────────────────────────
+
+    public function testAMemberWithALiveDeviceIsMarkedAsHavingOne(): void
+    {
+        // The app lets a member be chosen only when this is true.
+        $this->enrol();
+
+        $members = $this->presenter()->forApp(false)['members'];
+
+        self::assertSame([true, false], array_column($members, 'hasDevice'));
+    }
+
+    public function testAMemberWithNoDeviceIsStillListed(): void
+    {
+        // Listed and flagged, not left out: the address book keeps its
+        // shape as people enrol and drop off.
+        $members = $this->presenter()->forApp(false)['members'];
+
+        self::assertSame(['Dave P', 'Sue M'], array_column($members, 'name'));
+        self::assertSame([false, false], array_column($members, 'hasDevice'));
+    }
+
+    public function testARevokedDeviceDoesNotCount(): void
+    {
+        // A revoked handset will never receive anything, so it cannot be
+        // what makes a member reachable.
+        $this->enrol();
+        $this->devices->revoke(1, time());
+
+        self::assertFalse($this->presenter()->forApp(false)['members'][0]['hasDevice']);
+    }
+
+    public function testADeviceWithNoMemberIdIsMatchedByEmail(): void
+    {
+        $this->devices->create('hash', 'SUE@example.org', 0, 'Galaxy', 'android', 'spki', 'fcm', 'token-2', 1788000000);
+
+        $members = $this->presenter()->forApp(false)['members'];
+
+        self::assertSame([false, true], array_column($members, 'hasDevice'));
+    }
+
+    public function testNothingAboutTheDeviceTravelsWithTheFlag(): void
+    {
+        // A bool and no more: the label, platform and push token stay on
+        // the server.
+        $this->enrol();
+
+        $encoded = (string) json_encode($this->presenter()->forApp(false));
+
+        self::assertStringNotContainsString('Pixel 6a', $encoded);
+        self::assertStringNotContainsString('token-1', $encoded);
+    }
+
     private function presenter(
         ?InMemoryGroupRepository $groups = null,
         ?InMemoryPositionRepository $positions = null,
@@ -405,6 +458,7 @@ final class DirectoryTest extends TestCase
             $this->members,
             new InMemoryCommitteeRepository(),
             new MemberGate($this->members),
+            $this->devices,
             $groups,
             $positions,
         );

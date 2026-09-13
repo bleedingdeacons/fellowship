@@ -152,6 +152,9 @@ final class FellowshipServiceProvider
             $c->get(MemberRepository::class),
             $c->get(CommitteeRepository::class),
             $c->get(MemberGate::class),
+            // Whether each member has a live device, for the app's
+            // hasDevice flag. One findAllLive() per directory read.
+            $c->get(DeviceRepository::class),
             // Feature-detected, the way Promises detects Unity's
             // repositories: Unity ships headless and a deployment need not
             // have groups bound. Absent, the directory is built without
