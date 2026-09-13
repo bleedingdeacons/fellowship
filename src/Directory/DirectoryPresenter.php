@@ -8,6 +8,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+use Fellowship\Devices\DeviceRepository;
 use Fellowship\Devices\MemberGate;
 use Unity\Committees\Interfaces\CommitteeRepository;
 use Unity\Groups\Interfaces\GroupRepository;
@@ -33,15 +34,22 @@ use Unity\Positions\Interfaces\PositionRepository;
  * They can still receive a committee message — being contactable by the
  * intergroup is not the same as being browsable by everyone.
  *
- * <b>Everybody else is, whether or not they use Link.</b> The only test
- * is {@see MemberGate::isAuthorised()}, which asks whether a member has
- * a usable email address — that is, whether they *could* enrol, not
- * whether they have. Someone who has never installed the app is listed
- * and can be written to; the message waits on the server and arrives
- * when they enrol. Filtering the list to enrolled handsets would make the
- * address book change shape as people came and went, and would quietly
- * make a member unreachable for the ordinary reason that they had not got
- * round to installing anything.
+ * <b>Everybody else is listed, and each member says whether they have a
+ * device.</b> The listing test is still only
+ * {@see MemberGate::isAuthorised()}, a usable email address, so the
+ * address book does not change shape as people enrol and drop off. What
+ * changed is that each member now carries `hasDevice`: whether any live,
+ * unrevoked handset is enrolled to them. The app shows a member without
+ * one but will not let them be chosen.
+ *
+ * That reverses what this class used to say, which was that a message to
+ * somebody who had never installed Link should wait on the server until
+ * they enrolled. In practice a member writing to somebody wants to know it
+ * will be read, and a message sitting unread for an unknown time, with
+ * nothing to say so, is worse than being told up front that the person
+ * cannot be reached through Link. A committee message still reaches every
+ * member of the committee regardless; this flag governs choosing an
+ * individual, not delivery.
  *
  * <b>Home group, GSR and intergroup service position travel with the
  * name, and no contact details do.</b> A first name alone does not
@@ -70,6 +78,22 @@ final class DirectoryPresenter
     private ?array $positionTitles = null;
 
     /**
+     * Member ids with at least one live device, keyed for lookup. Built on
+     * first use, like the title maps.
+     *
+     * @var array<int, true>|null
+     */
+    private ?array $enrolledIds = null;
+
+    /**
+     * Lower-cased emails with at least one live device, for device rows that
+     * carry no member id.
+     *
+     * @var array<string, true>|null
+     */
+    private ?array $enrolledEmails = null;
+
+    /**
      * @param GroupRepository|null    $groups    Unity ships headless, so the
      *     group repository is not guaranteed to be bound. Null means the
      *     list is built without home groups rather than not at all.
@@ -80,6 +104,7 @@ final class DirectoryPresenter
         private readonly MemberRepository $members,
         private readonly CommitteeRepository $committees,
         private readonly MemberGate $gate,
+        private readonly DeviceRepository $devices,
         private readonly ?GroupRepository $groups = null,
         private readonly ?PositionRepository $positions = null,
     ) {
@@ -128,12 +153,55 @@ final class DirectoryPresenter
                 // say it and a translation never has to come from here.
                 'gsr'      => $member->isGSR(),
                 'position' => $this->positionTitle($member->getIntergroupPosition()),
+                // Whether this member can be written to individually from
+                // the app. A bool, and nothing about the device itself:
+                // no label, platform or count travels with it.
+                'hasDevice' => $this->hasDevice($member),
             ];
         }
 
         usort($listed, static fn(array $a, array $b): int => strcasecmp((string) $a['name'], (string) $b['name']));
 
         return $listed;
+    }
+
+    /**
+     * Whether any live device is enrolled to this member.
+     *
+     * <b>One query for the whole list, not one per member.</b> The same
+     * reasoning as {@see groupTitle()}: a per-member lookup on an endpoint
+     * that returns the whole address book is an N+1.
+     *
+     * Matched on member id, and on email as well. A device row records both,
+     * but the id is what the directory already keys on and the email is the
+     * fallback for any row enrolled without one. Revoked rows never count,
+     * because {@see DeviceRepository::findAllLive()} does not return them.
+     */
+    private function hasDevice(Member $member): bool
+    {
+        if ($this->enrolledIds === null || $this->enrolledEmails === null) {
+            $this->enrolledIds = [];
+            $this->enrolledEmails = [];
+
+            foreach ($this->devices->findAllLive() as $device) {
+                if ($device->memberId > 0) {
+                    $this->enrolledIds[$device->memberId] = true;
+                }
+
+                $email = strtolower(trim($device->memberEmail));
+                if ($email !== '') {
+                    $this->enrolledEmails[$email] = true;
+                }
+            }
+        }
+
+        if (isset($this->enrolledIds[$member->getId()])) {
+            return true;
+        }
+
+        $email = strtolower(trim($member->getPersonalEmail()));
+
+        return $email !== '' && isset($this->enrolledEmails[$email]);
     }
 
     /**

@@ -246,7 +246,12 @@ final class ReachedThroughTest extends TestCase
             new MemberStub(id: 7, anonymousName: 'Dave P', showMemberProfile: true, personalEmail: ''),
         ]);
 
-        $directory = new DirectoryPresenter($members, new InMemoryCommitteeRepository(), new MemberGate($members));
+        $directory = new DirectoryPresenter(
+            $members,
+            new InMemoryCommitteeRepository(),
+            new MemberGate($members),
+            $this->devices,
+        );
 
         self::assertSame([], $directory->forApp(false)['members']);
     }
@@ -425,6 +430,7 @@ final class ReachedThroughTest extends TestCase
             $members,
             new InMemoryCommitteeRepository($committees),
             new MemberGate($members),
+            $this->devices,
         );
     }
 
