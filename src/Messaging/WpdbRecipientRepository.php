@@ -67,6 +67,7 @@ final class WpdbRecipientRepository implements RecipientRepository
             created_at BIGINT UNSIGNED NOT NULL,
             read_at BIGINT UNSIGNED NULL,
             pushed_at BIGINT UNSIGNED NULL,
+            received_at BIGINT UNSIGNED NULL,
             PRIMARY KEY  (id),
             UNIQUE KEY message_member (message_id, member_email(191)),
             KEY member_email (member_email(191)),
@@ -156,10 +157,16 @@ final class WpdbRecipientRepository implements RecipientRepository
         // read what was actually addressed to its member, so a request
         // naming somebody else's message affects nothing and answers the
         // same as a message that does not exist.
+        //
+        // Received as well, where it is not already: a member who has read
+        // a message has certainly received it, and a handset whose
+        // acknowledgement was lost should not leave its sender being told
+        // otherwise.
         $sql = $this->wpdb->prepare(
             "UPDATE {$table}
-                SET read_at = %d
+                SET read_at = %d, received_at = COALESCE(received_at, %d)
               WHERE message_id = %d AND member_email = %s AND read_at IS NULL",
+            $now,
             $now,
             $messageId,
             strtolower(trim($memberEmail)),
@@ -190,6 +197,82 @@ final class WpdbRecipientRepository implements RecipientRepository
             ['%d'],
             ['%d', '%s'],
         );
+    }
+
+    public function markReceived(array $messageIds, string $memberEmail, int $now): int
+    {
+        $ids = $this->ids($messageIds);
+        if ($ids === []) {
+            return 0;
+        }
+
+        $table = self::tableName($this->wpdb);
+
+        // The placeholder list is built from a count, not from the values,
+        // so the query string stays a literal as far as wpdb::prepare is
+        // concerned and every id still goes through %d.
+        $placeholders = implode(',', array_fill(0, count($ids), '%d'));
+
+        // Scoped to the member in the WHERE clause, as markRead is, so an
+        // id that was never addressed to them is simply not matched. And
+        // only rows not yet marked: the first handset to open a message
+        // is when it arrived, and a tablet catching up a week later is not.
+        $sql = $this->wpdb->prepare(
+            "UPDATE {$table}
+                SET received_at = %d
+              WHERE member_email = %s AND received_at IS NULL AND message_id IN ({$placeholders})",
+            $now,
+            strtolower(trim($memberEmail)),
+            ...$ids,
+        );
+
+        // wpdb::prepare() answers null when the query and its arguments
+        // do not agree, and query() is typed to refuse that. Prepared
+        // separately so the null is handled rather than becoming a
+        // TypeError on a code path that only runs in production.
+        $updated = is_string($sql) ? $this->wpdb->query($sql) : false;
+
+        return is_int($updated) ? $updated : 0;
+    }
+
+    public function receiptsFor(array $messageIds): array
+    {
+        $ids = $this->ids($messageIds);
+        if ($ids === []) {
+            return [];
+        }
+
+        $table = self::tableName($this->wpdb);
+        $placeholders = implode(',', array_fill(0, count($ids), '%d'));
+
+        // One grouped query rather than three counts per message: a sync
+        // asks about every sent message still waiting to be read, and that
+        // is the query that runs on every handset's poll.
+        $rows = $this->wpdb->get_results($this->wpdb->prepare(
+            "SELECT message_id,
+                    COUNT(*) AS recipients,
+                    SUM(CASE WHEN received_at IS NOT NULL OR read_at IS NOT NULL THEN 1 ELSE 0 END) AS received,
+                    SUM(CASE WHEN read_at IS NOT NULL THEN 1 ELSE 0 END) AS read_count
+               FROM {$table}
+              WHERE message_id IN ({$placeholders})
+              GROUP BY message_id",
+            ...$ids,
+        ), ARRAY_A);
+
+        $receipts = [];
+        foreach (is_array($rows) ? $rows : [] as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $receipts[(int) ($row['message_id'] ?? 0)] = [
+                'recipients' => (int) ($row['recipients'] ?? 0),
+                'received'   => (int) ($row['received'] ?? 0),
+                'read'       => (int) ($row['read_count'] ?? 0),
+            ];
+        }
+
+        return $receipts;
     }
 
     /** @return list<Recipient> */
@@ -265,6 +348,20 @@ final class WpdbRecipientRepository implements RecipientRepository
         return is_int($deleted) ? $deleted : 0;
     }
 
+    /**
+     * Positive, distinct ids, in order.
+     *
+     * @param list<int> $ids
+     * @return list<int>
+     */
+    private function ids(array $ids): array
+    {
+        return array_values(array_unique(array_filter(
+            array_map('intval', $ids),
+            static fn(int $id): bool => $id > 0,
+        )));
+    }
+
     private function exists(int $messageId, string $memberEmail): bool
     {
         $table = self::tableName($this->wpdb);
@@ -278,7 +375,7 @@ final class WpdbRecipientRepository implements RecipientRepository
     /** @return literal-string */
     private function columns(): string
     {
-        return 'id, message_id, member_email, member_id, created_at, read_at, pushed_at';
+        return 'id, message_id, member_email, member_id, created_at, read_at, pushed_at, received_at';
     }
 
     /**
@@ -305,6 +402,7 @@ final class WpdbRecipientRepository implements RecipientRepository
                 (int) ($row['created_at'] ?? 0),
                 isset($row['read_at']) ? (int) $row['read_at'] : null,
                 isset($row['pushed_at']) ? (int) $row['pushed_at'] : null,
+                isset($row['received_at']) ? (int) $row['received_at'] : null,
             );
         }
 

@@ -41,6 +41,30 @@ interface RecipientRepository
 
     public function markPushed(int $messageId, string $memberEmail, int $now): void;
 
+    /**
+     * Record that one of the member's handsets has opened these messages.
+     *
+     * Scoped to the member exactly as {@see markRead()} is, so an id that
+     * was never addressed to them changes nothing. A row already marked
+     * keeps its first time.
+     *
+     * @param list<int> $messageIds
+     * @return int How many rows were newly marked.
+     */
+    public function markReceived(array $messageIds, string $memberEmail, int $now): int;
+
+    /**
+     * How far each of these messages has got: recipients, how many of them
+     * have received it, and how many have read it.
+     *
+     * A read counts as received. A message with no recipient rows is
+     * absent from the answer rather than present with zeroes.
+     *
+     * @param list<int> $messageIds
+     * @return array<int, array{recipients: int, received: int, read: int}> Keyed by message id.
+     */
+    public function receiptsFor(array $messageIds): array;
+
     /** @return list<Recipient> */
     public function forMessage(int $messageId): array;
 

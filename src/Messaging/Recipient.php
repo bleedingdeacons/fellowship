@@ -40,11 +40,38 @@ final class Recipient
          * a message did not arrive.
          */
         public readonly ?int $pushedAt = null,
+        /**
+         * When one of this member's handsets said it had opened the
+         * message, or null.
+         *
+         * <b>This is the delivery {@see $pushedAt} cannot be.</b> It is
+         * written only by a handset that has the message in its hands —
+         * see {@see \Fellowship\Rest\MessageController::markReceived()} —
+         * and never inferred from a fetch: a message that arrived by push
+         * is never fetched again, so a server that counted fetches would
+         * report the fastest deliveries as the ones that never arrived.
+         *
+         * Like read state it is the member's rather than the handset's.
+         * The first of their devices to open it sets it, and later ones
+         * leave it alone.
+         */
+        public readonly ?int $receivedAt = null,
     ) {
     }
 
     public function isRead(): bool
     {
         return $this->readAt !== null;
+    }
+
+    /**
+     * Whether it reached the member, counting a read as proof it did.
+     *
+     * A handset can open a message and lose the acknowledgement on the
+     * way back; once the member reads it, the read is the receipt.
+     */
+    public function isReceived(): bool
+    {
+        return $this->receivedAt !== null || $this->readAt !== null;
     }
 }

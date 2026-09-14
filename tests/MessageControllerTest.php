@@ -244,6 +244,127 @@ final class MessageControllerTest extends TestCase
         self::assertSame('fellowship_no_such_message', $response->get_error_code());
     }
 
+    // ── Receipts ──────────────────────────────────────────────────────
+
+    public function testAHandsetSaysWhichMessagesItHasOpened(): void
+    {
+        $token = $this->enrol();
+        $id = $this->giveMessage('Intergroup moved', 'Now the 14th.');
+
+        $response = $this->controller()->markReceived($this->request(['ids' => [$id]], $token));
+
+        self::assertInstanceOf(WP_REST_Response::class, $response);
+        self::assertNotNull($this->recipients->forMessage($id)[0]->receivedAt);
+    }
+
+    public function testTheIdsMayArriveAsACommaSeparatedList(): void
+    {
+        // WordPress accepts either for an array argument, and a query
+        // string built by hand is the likelier of the two.
+        $token = $this->enrol();
+        $first = $this->giveMessage('One', 'First.');
+        $second = $this->giveMessage('Two', 'Second.');
+
+        $this->controller()->markReceived($this->request(['ids' => $first . ',' . $second], $token));
+
+        self::assertNotNull($this->recipients->forMessage($first)[0]->receivedAt);
+        self::assertNotNull($this->recipients->forMessage($second)[0]->receivedAt);
+    }
+
+    public function testAcknowledgingSomebodyElsesMessageChangesNothingAndSaysNothing(): void
+    {
+        // The same "ok" as for a message of their own. Anything else would
+        // let a handset learn which ids were sent to other people.
+        $token = $this->enrol();
+        $strangers = $this->storeFrom('sender@example.org', 'Not for you');
+        $this->recipients->addMany($strangers, [['email' => self::OTHER, 'member_id' => 8]], 1788000000);
+
+        $response = $this->controller()->markReceived($this->request(['ids' => [$strangers]], $token));
+
+        self::assertInstanceOf(WP_REST_Response::class, $response);
+        self::assertTrue(((array) $response->get_data())['ok']);
+        self::assertNull($this->recipients->forMessage($strangers)[0]->receivedAt);
+    }
+
+    public function testAcknowledgingNothingIsABadRequest(): void
+    {
+        $token = $this->enrol();
+
+        $response = $this->controller()->markReceived($this->request(['ids' => []], $token));
+
+        self::assertInstanceOf(WP_Error::class, $response);
+        self::assertSame('fellowship_no_ids', $response->get_error_code());
+    }
+
+    public function testAcknowledgingWithNoTokenIsRefused(): void
+    {
+        self::assertInstanceOf(WP_Error::class, $this->controller()->markReceived($this->request(['ids' => [1]])));
+    }
+
+    public function testReadingAMessageCountsAsReceivingIt(): void
+    {
+        $token = $this->enrol();
+        $id = $this->giveMessage('Intergroup moved', 'Now the 14th.');
+
+        $this->controller()->markRead($this->request(['id' => $id], $token));
+
+        self::assertTrue($this->recipients->forMessage($id)[0]->isReceived());
+    }
+
+    public function testASenderIsToldHowFarTheirMessageHasGot(): void
+    {
+        $token = $this->enrol();
+        $sent = $this->storeFrom(self::MEMBER, 'Literature order');
+        $this->recipients->addMany($sent, [
+            ['email' => self::OTHER, 'member_id' => 8],
+            ['email' => 'third@example.org', 'member_id' => 9],
+            ['email' => 'fourth@example.org', 'member_id' => 10],
+        ], 1788000000);
+        $this->recipients->markReceived([$sent], self::OTHER, 1788000050);
+        $this->recipients->markRead($sent, 'third@example.org', 1788000100);
+
+        $response = $this->controller()->receipts($this->request(['ids' => [$sent]], $token));
+
+        self::assertInstanceOf(WP_REST_Response::class, $response);
+        self::assertSame(
+            [['id' => $sent, 'recipients' => 3, 'received' => 2, 'read' => 1]],
+            ((array) $response->get_data())['receipts'],
+        );
+    }
+
+    public function testReceiptsLeaveOutMessagesTheMemberDidNotSend(): void
+    {
+        // Left out rather than refused, so the answer cannot be used to
+        // walk the id space — including for a message addressed to them.
+        $token = $this->enrol();
+        $theirs = $this->storeFrom(self::OTHER, 'Not yours to ask about');
+        $this->recipients->addMany($theirs, [['email' => self::MEMBER, 'member_id' => 7]], 1788000000);
+
+        $response = $this->controller()->receipts($this->request(['ids' => [$theirs, 999]], $token));
+
+        self::assertInstanceOf(WP_REST_Response::class, $response);
+        self::assertSame([], ((array) $response->get_data())['receipts']);
+    }
+
+    public function testReceiptsCarryNothingOfTheMessageItself(): void
+    {
+        $token = $this->enrol();
+        $sent = $this->storeFrom(self::MEMBER, 'Secretary report');
+        $this->recipients->addMany($sent, [['email' => self::OTHER, 'member_id' => 8]], 1788000000);
+
+        $response = $this->controller()->receipts($this->request(['ids' => [$sent]], $token));
+
+        self::assertInstanceOf(WP_REST_Response::class, $response);
+        $encoded = (string) json_encode($response->get_data());
+        self::assertStringNotContainsString('Secretary report', $encoded);
+        self::assertStringNotContainsString(self::OTHER, $encoded);
+    }
+
+    public function testReceiptsWithNoTokenAreRefused(): void
+    {
+        self::assertInstanceOf(WP_Error::class, $this->controller()->receipts($this->request(['ids' => [1]])));
+    }
+
     // ── Sending ───────────────────────────────────────────────────────
 
     public function testAHandsetMayNotAddressTheWholeFellowship(): void

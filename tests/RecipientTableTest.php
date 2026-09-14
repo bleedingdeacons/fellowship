@@ -105,6 +105,64 @@ final class RecipientTableTest extends TestCase
         );
     }
 
+    public function testMarkingReceivedIsScopedToTheMembersOwnRows(): void
+    {
+        $this->wpdb->queryResult = 2;
+
+        self::assertSame(2, $this->repository->markReceived([9, 10], 'Dave@Example.org', 1788000100));
+
+        $sql = $this->wpdb->lastQuery();
+        self::assertStringContainsString('dave@example.org', $sql);
+        self::assertStringContainsString('message_id IN (9,10)', $sql);
+    }
+
+    public function testMarkingReceivedKeepsTheFirstTime(): void
+    {
+        // A tablet catching up a week later is not when the message arrived.
+        $this->repository->markReceived([9], 'dave@example.org', 1788000100);
+
+        self::assertStringContainsString('received_at IS NULL', $this->wpdb->lastQuery());
+    }
+
+    public function testMarkingNothingReceivedRunsNoQuery(): void
+    {
+        self::assertSame(0, $this->repository->markReceived([0, -3], 'dave@example.org', 1788000100));
+        self::assertSame([], $this->wpdb->queries);
+    }
+
+    public function testReadingMarksReceivedWhereItWasNot(): void
+    {
+        $this->wpdb->queryResult = 1;
+
+        $this->repository->markRead(9, 'dave@example.org', 1788000100);
+
+        self::assertStringContainsString('received_at = COALESCE(received_at, 1788000100)', $this->wpdb->lastQuery());
+    }
+
+    public function testReceiptsAreCountedInOneGroupedQuery(): void
+    {
+        $this->wpdb->results = [
+            ['message_id' => '9', 'recipients' => '5', 'received' => '3', 'read_count' => '2'],
+        ];
+
+        self::assertSame(
+            [9 => ['recipients' => 5, 'received' => 3, 'read' => 2]],
+            $this->repository->receiptsFor([9, 9]),
+        );
+
+        $sql = $this->wpdb->lastQuery();
+        self::assertStringContainsString('GROUP BY message_id', $sql);
+        self::assertStringContainsString('message_id IN (9)', $sql);
+        // A read is a receipt, even when the acknowledgement was lost.
+        self::assertStringContainsString('received_at IS NOT NULL OR read_at IS NOT NULL', $sql);
+    }
+
+    public function testAskingForNoReceiptsRunsNoQuery(): void
+    {
+        self::assertSame([], $this->repository->receiptsFor([]));
+        self::assertSame([], $this->wpdb->queries);
+    }
+
     public function testTheRecipientsOfAMessageAreListedInOrder(): void
     {
         $this->wpdb->results = [];

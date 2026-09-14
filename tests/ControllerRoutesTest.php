@@ -138,6 +138,8 @@ final class ControllerRoutesTest extends TestCase
         $registered = array_column($this->routes, 'route');
 
         self::assertContains('/messages', $registered);
+        self::assertContains('/messages/received', $registered);
+        self::assertContains('/messages/receipts', $registered);
     }
 
     public function testEveryRouteLivesUnderFellowshipsOwnNamespace(): void

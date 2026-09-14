@@ -85,6 +85,7 @@ class InMemoryRecipientRepository implements RecipientRepository
                 $row->createdAt,
                 $now,
                 $row->pushedAt,
+                $row->receivedAt ?? $now,
             );
 
             return true;
@@ -107,9 +108,58 @@ class InMemoryRecipientRepository implements RecipientRepository
                     $row->createdAt,
                     $row->readAt,
                     $now,
+                    $row->receivedAt,
                 );
             }
         }
+    }
+
+    public function markReceived(array $messageIds, string $memberEmail, int $now): int
+    {
+        $email = strtolower(trim($memberEmail));
+        $marked = 0;
+
+        foreach ($this->rows as $index => $row) {
+            if (
+                !in_array($row->messageId, $messageIds, true)
+                || $row->memberEmail !== $email
+                || $row->receivedAt !== null
+            ) {
+                continue;
+            }
+
+            $this->rows[$index] = new Recipient(
+                $row->id,
+                $row->messageId,
+                $row->memberEmail,
+                $row->memberId,
+                $row->createdAt,
+                $row->readAt,
+                $row->pushedAt,
+                $now,
+            );
+            $marked++;
+        }
+
+        return $marked;
+    }
+
+    public function receiptsFor(array $messageIds): array
+    {
+        $receipts = [];
+
+        foreach ($this->rows as $row) {
+            if (!in_array($row->messageId, $messageIds, true)) {
+                continue;
+            }
+
+            $receipts[$row->messageId] ??= ['recipients' => 0, 'received' => 0, 'read' => 0];
+            $receipts[$row->messageId]['recipients']++;
+            $receipts[$row->messageId]['received'] += $row->isReceived() ? 1 : 0;
+            $receipts[$row->messageId]['read'] += $row->isRead() ? 1 : 0;
+        }
+
+        return $receipts;
     }
 
     public function forMessage(int $messageId): array
