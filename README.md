@@ -249,7 +249,9 @@ Everything is under `fellowship/v1` and everything requires HTTPS.
 | `DELETE /auth/device` | device | Sign out (self-revoke). |
 | `GET /messages?since=&limit=` | device | Sealed inbox, paged by message id. |
 | `POST /messages` | device | Send. |
-| `POST /messages/{id}/read` | device | Mark read. |
+| `POST /messages/{id}/read` | device | Mark read. Marks it received too, if it was not. |
+| `POST /messages/received` | device | `ids`: messages this handset has opened. Ids not addressed to the member are ignored. |
+| `GET /messages/receipts` | device | `ids`: the member's own sent messages. Answers recipients, received and read counts for each; ids they did not send are left out. |
 | `GET /directory` | device | Address book. |
 
 Two sign-in flows meet at one exchange:

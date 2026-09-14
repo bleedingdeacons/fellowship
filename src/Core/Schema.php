@@ -47,8 +47,9 @@ final class Schema
      *
      * 1 — devices, messages and message recipients.
      * 2 — password credentials, for members who set one.
+     * 3 — recipients.received_at, for delivery receipts.
      */
-    public const VERSION = 2;
+    public const VERSION = 3;
 
     public const OPTION = 'fellowship_schema_version';
 

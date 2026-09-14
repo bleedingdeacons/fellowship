@@ -64,6 +64,14 @@ final class MessageController
     private const PAGE_DEFAULT = 50;
     private const PAGE_MAX = 200;
 
+    /**
+     * Ids one acknowledgement or one receipts request may name.
+     *
+     * The same as the largest poll page, so a handset that has just
+     * collected a full page can acknowledge all of it in one call.
+     */
+    private const IDS_MAX = self::PAGE_MAX;
+
     /** Sends allowed from one device per window, and the window. */
     private const SEND_MAX = 20;
     private const SEND_WINDOW = 900;
@@ -111,6 +119,24 @@ final class MessageController
                     'committees' => ['type' => 'array', 'required' => false, 'items' => ['type' => 'string']],
                     'reply_to'   => ['type' => 'integer', 'required' => false, 'default' => 0],
                 ],
+            ],
+        ]);
+
+        register_rest_route(self::NAMESPACE, '/messages/received', [
+            'methods'             => WP_REST_Server::CREATABLE,
+            'callback'            => [$this, 'markReceived'],
+            'permission_callback' => '__return_true',
+            'args'                => [
+                'ids' => ['type' => 'array', 'required' => true, 'items' => ['type' => 'integer']],
+            ],
+        ]);
+
+        register_rest_route(self::NAMESPACE, '/messages/receipts', [
+            'methods'             => WP_REST_Server::READABLE,
+            'callback'            => [$this, 'receipts'],
+            'permission_callback' => '__return_true',
+            'args'                => [
+                'ids' => ['type' => 'array', 'required' => true, 'items' => ['type' => 'integer']],
             ],
         ]);
 
@@ -341,6 +367,111 @@ final class MessageController
             'ok'     => true,
             'unread' => $this->recipients->countUnread($device->memberEmail),
         ], 200);
+    }
+
+    /**
+     * A handset saying it has opened these messages.
+     *
+     * <b>Both routes a message can arrive by end here.</b> The server
+     * cannot infer receipt from a fetch: the poll is strictly exclusive,
+     * so a message that arrived by push is never fetched at all, and a
+     * push handler has no session token to report with. So Link reports
+     * from the sync behind either, for whatever it opened.
+     *
+     * Ids that were never addressed to this member are ignored rather
+     * than refused, for the same reason {@see markRead()} answers them as
+     * not found: a different answer would let a handset probe for
+     * messages it was not sent. Only ever answering "ok" is what makes a
+     * batch of them safe.
+     */
+    public function markReceived(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        $device = $this->authenticate($request);
+        if ($device instanceof WP_Error) {
+            return $device;
+        }
+
+        $ids = $this->idsFrom($request->get_param('ids'));
+        if ($ids === []) {
+            return new WP_Error('fellowship_no_ids', 'Name at least one message.', ['status' => 400]);
+        }
+
+        $this->recipients->markReceived($ids, $device->memberEmail, time());
+
+        return new WP_REST_Response(['ok' => true], 200);
+    }
+
+    /**
+     * How far each of this member's sent messages has got.
+     *
+     * <b>Counts, in the clear, and only for the sender.</b> Nothing here
+     * is the message — no subject, no body, no name — so there is nothing
+     * to seal: what crosses the wire is that message 20 went to three
+     * people and two have read it, to the handset that sent it. An id the
+     * member did not send is left out of the answer rather than refused,
+     * so the reply cannot be used to learn which ids exist.
+     *
+     * Counts rather than who: a sender learns that two of five have read
+     * a committee message, not which two. Which members read what is the
+     * admin log's business, and a handset has no need of it.
+     */
+    public function receipts(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        $device = $this->authenticate($request);
+        if ($device instanceof WP_Error) {
+            return $device;
+        }
+
+        $ids = $this->idsFrom($request->get_param('ids'));
+        if ($ids === []) {
+            return new WP_REST_Response(['receipts' => []], 200);
+        }
+
+        $sender = strtolower(trim($device->memberEmail));
+        $sent = array_keys(array_filter(
+            $this->messages->findByIds($ids),
+            static fn(Message $message): bool => strtolower(trim($message->senderEmail)) === $sender,
+        ));
+
+        $receipts = [];
+        foreach ($this->recipients->receiptsFor($sent) as $messageId => $counts) {
+            $receipts[] = [
+                'id'         => $messageId,
+                'recipients' => $counts['recipients'],
+                'received'   => $counts['received'],
+                'read'       => $counts['read'],
+            ];
+        }
+
+        return new WP_REST_Response(['receipts' => $receipts], 200);
+    }
+
+    /**
+     * Message ids as a request carries them: an array, or the
+     * comma-separated list WordPress also accepts for an array argument.
+     * Positive and distinct, and no more than {@see IDS_MAX}.
+     *
+     * @return list<int>
+     */
+    private function idsFrom(mixed $ids): array
+    {
+        if (is_string($ids)) {
+            $ids = explode(',', $ids);
+        }
+
+        if (!is_array($ids)) {
+            return [];
+        }
+
+        $clean = [];
+        foreach ($ids as $id) {
+            $id = is_numeric($id) ? (int) $id : 0;
+            if ($id > 0) {
+                $clean[$id] = $id;
+            }
+        }
+
+        return array_slice(array_values($clean), 0, self::IDS_MAX);
     }
 
     /**
