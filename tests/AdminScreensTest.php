@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\Exceptions\WpDieException;
 use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
-use Brain\Monkey\Functions;
 use Fellowship\Admin\ComposePage;
 use Fellowship\Admin\DevicesPage;
 use Fellowship\Admin\MessagesPage;
@@ -55,12 +56,11 @@ use Unity\Testing\Doubles\MemberStub;
  * manage sees no buttons, and the handlers refuse them regardless — what
  * the page chose to render is not a permission check, and the tests treat
  * those as two separate claims because the code does.
- *
- * @covers \Fellowship\Admin\SettingsPage
- * @covers \Fellowship\Admin\MessagesPage
- * @covers \Fellowship\Admin\ComposePage
- * @covers \Fellowship\Admin\DevicesPage
  */
+#[CoversClass(\Fellowship\Admin\SettingsPage::class)]
+#[CoversClass(\Fellowship\Admin\MessagesPage::class)]
+#[CoversClass(\Fellowship\Admin\ComposePage::class)]
+#[CoversClass(\Fellowship\Admin\DevicesPage::class)]
 final class AdminScreensTest extends TestCase
 {
     private const MEMBER = 'member@example.org';
@@ -80,11 +80,11 @@ final class AdminScreensTest extends TestCase
 
         WpState::$userCan = true;
 
-        Functions\when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
-        Functions\when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
-        Functions\when('get_current_user_id')->justReturn(3);
-        Functions\when('submit_button')->justReturn(null);
-        Functions\when('paginate_links')->justReturn('');
+        when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
+        when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+        when('get_current_user_id')->justReturn(3);
+        when('submit_button')->justReturn(null);
+        when('paginate_links')->justReturn('');
 
         $this->messages = new InMemoryMessageRepository();
         $this->recipients = new InMemoryRecipientRepository();

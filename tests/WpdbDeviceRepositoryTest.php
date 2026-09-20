@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
 use BleedingDeacons\WpMocks\TestCase;
 use Fellowship\Devices\Device;
 use Fellowship\Tests\Support\RecordingWpdb;
@@ -27,9 +28,8 @@ use RuntimeException;
  * would return 201 with a working-looking credential for a row that does
  * not exist — a handset that 401s on its next request, an empty admin
  * list, and nothing anywhere saying why.
- *
- * @covers \Fellowship\Devices\WpdbDeviceRepository
  */
+#[CoversClass(\Fellowship\Devices\WpdbDeviceRepository::class)]
 final class WpdbDeviceRepositoryTest extends TestCase
 {
     private RecordingWpdb $wpdb;

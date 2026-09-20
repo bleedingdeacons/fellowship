@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use Scrutiny\Testing\Doubles\SpyAuditLogger;
+use PHPUnit\Framework\Attributes\DataProvider;
+use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\TestCase;
-use Brain\Monkey\Functions;
 use Fellowship\Admin\ComposePage;
 use Fellowship\Admin\DevicesPage;
 use Fellowship\Admin\MessagesPage;
@@ -53,9 +56,8 @@ use Unity\Testing\Doubles\InMemoryMemberRepository;
  * forgetting to register it produces a server that refuses that provider
  * with "unknown sign-in provider" while the app cheerfully offers the
  * button.
- *
- * @covers \Fellowship\Core\FellowshipServiceProvider
  */
+#[CoversClass(\Fellowship\Core\FellowshipServiceProvider::class)]
 final class ContainerWiringTest extends TestCase
 {
     private FakeContainer $container;
@@ -66,13 +68,13 @@ final class ContainerWiringTest extends TestCase
 
         $GLOBALS['wpdb'] = new RecordingWpdb();
 
-        Functions\when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+        when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
 
         // What Unity and Scrutiny are expected to have put there already.
         $this->container = new FakeContainer([
             'Unity\\Members\\Interfaces\\MemberRepository' => new InMemoryMemberRepository(),
             'Unity\\Committees\\Interfaces\\CommitteeRepository' => new InMemoryCommitteeRepository(),
-            'Scrutiny\\Audit\\Interfaces\\AuditLogger' => new \Scrutiny\Testing\Doubles\SpyAuditLogger(),
+            'Scrutiny\\Audit\\Interfaces\\AuditLogger' => new SpyAuditLogger(),
             // The password store is Unity's too, from the same upgrade
             // that gave it a table of its own. Fellowship no longer binds
             // one, so if this line goes the failure is the honest one:
@@ -110,7 +112,7 @@ final class ContainerWiringTest extends TestCase
     /**
      * @param class-string $service
      */
-    #[\PHPUnit\Framework\Attributes\DataProvider('services')]
+    #[DataProvider('services')]
     public function testEveryServiceCanBeBuilt(string $service): void
     {
         // Built, not merely registered. A factory that throws when called

@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
-use Brain\Monkey\Functions;
 use Fellowship\Admin\ComposePage;
 use Fellowship\Core\Settings;
 use Fellowship\Crypto\MessageSealer;
@@ -36,9 +37,8 @@ use Unity\Testing\Doubles\MemberStub;
  * travelling in the query string. A server-supplied message rendered out
  * of a URL is a reflected-content problem however carefully it is
  * escaped, and it was fixed that way once already.
- *
- * @covers \Fellowship\Admin\ComposePage
  */
+#[CoversClass(\Fellowship\Admin\ComposePage::class)]
 final class ComposeSendTest extends TestCase
 {
     private InMemoryMessageRepository $messages;
@@ -54,8 +54,8 @@ final class ComposeSendTest extends TestCase
 
         WpState::$userCan = true;
 
-        Functions\when('get_current_user_id')->justReturn(3);
-        Functions\when('wp_generate_uuid4')->alias(
+        when('get_current_user_id')->justReturn(3);
+        when('wp_generate_uuid4')->alias(
             static fn(): string => '11111111-2222-4333-8444-555555555555'
         );
 

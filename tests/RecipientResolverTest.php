@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
 use BleedingDeacons\WpMocks\TestCase;
 use Fellowship\Core\Cipher;
 use Fellowship\Devices\MemberGate;
@@ -32,10 +33,9 @@ use WP_Error;
  *  - recipients are deduped by address, so a member sitting on two
  *    branches of a committee tree gets one copy rather than two;
  *  - a member the gate refuses is dropped, not delivered to.
- *
- * @covers \Fellowship\Messaging\RecipientResolver
- * @covers \Fellowship\Core\Cipher
  */
+#[CoversClass(\Fellowship\Messaging\RecipientResolver::class)]
+#[CoversClass(\Fellowship\Core\Cipher::class)]
 final class RecipientResolverTest extends TestCase
 {
     private InMemoryMemberRepository $members;

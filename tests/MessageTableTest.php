@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
 use BleedingDeacons\WpMocks\TestCase;
 use Fellowship\Messaging\WpdbMessageRepository;
 use Fellowship\Tests\Support\RecordingWpdb;
@@ -15,9 +16,8 @@ use Fellowship\Tests\Support\RecordingWpdb;
  * with its subject: the store is Unity's now, and so are the tests for
  * it, because Reach was testing the same statements against an identical
  * copy of the same class.</p>
- *
- * @covers \Fellowship\Messaging\WpdbMessageRepository
  */
+#[CoversClass(\Fellowship\Messaging\WpdbMessageRepository::class)]
 final class MessageTableTest extends TestCase
 {
     private RecordingWpdb $wpdb;

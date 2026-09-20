@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use Fellowship\Auth\JwtVerifier;
 use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Auth\Providers\FacebookProvider;
 use Fellowship\Auth\Providers\GoogleProvider;
@@ -171,16 +172,16 @@ final class PkceStateStoreTest extends TestCase
 
     private function facebook(): FacebookProvider
     {
-        return new FacebookProvider(new Settings(), new \Fellowship\Auth\JwtVerifier());
+        return new FacebookProvider(new Settings(), new JwtVerifier());
     }
 
     private function microsoft(): MicrosoftProvider
     {
-        return new MicrosoftProvider(new Settings(), new \Fellowship\Auth\JwtVerifier());
+        return new MicrosoftProvider(new Settings(), new JwtVerifier());
     }
 
     private function google(): GoogleProvider
     {
-        return new GoogleProvider(new Settings(), new \Fellowship\Auth\JwtVerifier());
+        return new GoogleProvider(new Settings(), new JwtVerifier());
     }
 }

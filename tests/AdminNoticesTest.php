@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use function Brain\Monkey\Functions\when;
+use function Brain\Monkey\Actions\expectAdded;
 use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
-use Brain\Monkey\Actions;
-use Brain\Monkey\Functions;
 use Fellowship\Admin\ComposePage;
 use Fellowship\Admin\DevicesPage;
 use Fellowship\Admin\MessagesPage;
@@ -48,13 +49,12 @@ use Unity\Testing\Doubles\MemberStub;
  * all use the same admin_menu hook, so callbacks fire in registration
  * order and a submenu registered before its parent exists falls back to a
  * URL that goes nowhere.
- *
- * @covers \Fellowship\Admin\ComposePage
- * @covers \Fellowship\Admin\DevicesPage
- * @covers \Fellowship\Admin\SettingsPage
- * @covers \Fellowship\Admin\MessagesPage
- * @covers \Fellowship\Messaging\MessageApi
  */
+#[CoversClass(\Fellowship\Admin\ComposePage::class)]
+#[CoversClass(\Fellowship\Admin\DevicesPage::class)]
+#[CoversClass(\Fellowship\Admin\SettingsPage::class)]
+#[CoversClass(\Fellowship\Admin\MessagesPage::class)]
+#[CoversClass(\Fellowship\Messaging\MessageApi::class)]
 final class AdminNoticesTest extends TestCase
 {
     private InMemoryMessageRepository $messages;
@@ -71,15 +71,15 @@ final class AdminNoticesTest extends TestCase
         $_POST = [];
         WpState::$userCan = true;
 
-        Functions\when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
-        Functions\when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
-        Functions\when('get_current_user_id')->justReturn(3);
-        Functions\when('submit_button')->justReturn(null);
-        Functions\when('paginate_links')->justReturn('');
-        Functions\when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
-        Functions\when('add_menu_page')->justReturn('toplevel_page_fellowship');
-        Functions\when('add_submenu_page')->justReturn('fellowship_page_x');
-        Functions\when('wp_generate_uuid4')->alias(static fn(): string => '11111111-2222-4333-8444-555555555555');
+        when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
+        when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+        when('get_current_user_id')->justReturn(3);
+        when('submit_button')->justReturn(null);
+        when('paginate_links')->justReturn('');
+        when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
+        when('add_menu_page')->justReturn('toplevel_page_fellowship');
+        when('add_submenu_page')->justReturn('fellowship_page_x');
+        when('wp_generate_uuid4')->alias(static fn(): string => '11111111-2222-4333-8444-555555555555');
 
         $this->messages = new InMemoryMessageRepository();
         $this->recipients = new InMemoryRecipientRepository();
@@ -171,14 +171,14 @@ final class AdminNoticesTest extends TestCase
         // The others attach to its slug, and all four use the same hook,
         // so a submenu registered before its parent exists falls back to
         // a URL that goes nowhere.
-        Actions\expectAdded('admin_menu')->once();
+        expectAdded('admin_menu')->once();
 
         (new MessagesPage($this->messages, $this->recipients))->register();
     }
 
     public function testEveryScreenRegistersItsMenu(): void
     {
-        Actions\expectAdded('admin_menu')->times(4);
+        expectAdded('admin_menu')->times(4);
 
         (new MessagesPage($this->messages, $this->recipients))->register();
         $this->composePage()->register();
@@ -191,7 +191,7 @@ final class AdminNoticesTest extends TestCase
         // Compose registers one admin_post action; devices registers
         // three. A handler that is never hooked is a button that posts
         // to a URL WordPress answers with -1.
-        Actions\expectAdded('admin_post_' . ComposePage::SEND_ACTION)->once();
+        expectAdded('admin_post_' . ComposePage::SEND_ACTION)->once();
 
         $this->composePage()->register();
     }
@@ -199,7 +199,7 @@ final class AdminNoticesTest extends TestCase
     public function testTheDeviceScreenRegistersAllThreeOfItsActions(): void
     {
         foreach ([DevicesPage::REVOKE_ACTION, DevicesPage::REMOVE_ACTION, DevicesPage::RESET_ACTION] as $action) {
-            Actions\expectAdded('admin_post_' . $action)->once();
+            expectAdded('admin_post_' . $action)->once();
         }
 
         $this->devicesPage()->register();
@@ -211,7 +211,7 @@ final class AdminNoticesTest extends TestCase
     {
         // Another plugin sends by firing a hook rather than by resolving
         // anything out of Unity's container.
-        Actions\expectAdded('fellowship/send_message')->once();
+        expectAdded('fellowship/send_message')->once();
 
         $this->api()->register();
     }

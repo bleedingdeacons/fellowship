@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\Exceptions\WpDieException;
 use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
-use Brain\Monkey\Functions;
 use Fellowship\Admin\DevicesPage;
 use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Auth\PasswordPolicy;
@@ -36,9 +37,8 @@ use Unity\Testing\Doubles\MemberStub;
  * authenticated and can already read the member list, so saying so leaks
  * nothing — and not saying would leave them watching for a mail that was
  * never going to arrive.
- *
- * @covers \Fellowship\Admin\DevicesPage
  */
+#[CoversClass(\Fellowship\Admin\DevicesPage::class)]
 final class AdminPasswordCodeTest extends TestCase
 {
     private const MEMBER = 'member@example.org';
@@ -54,8 +54,8 @@ final class AdminPasswordCodeTest extends TestCase
 
         $_POST = [];
 
-        Functions\when('get_current_user_id')->justReturn(3);
-        Functions\when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
+        when('get_current_user_id')->justReturn(3);
+        when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
 
         $this->credentials = new InMemoryPasswordCredentialRepository();
         $this->mailer = new PasswordResetMailer();

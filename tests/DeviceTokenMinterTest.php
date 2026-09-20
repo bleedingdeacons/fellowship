@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use Fellowship\Auth\DeviceTokenMinter;
 use PHPUnit\Framework\TestCase;
 
@@ -53,9 +54,7 @@ final class DeviceTokenMinterTest extends TestCase
         self::assertSame($this->minter->hash($token), $this->minter->hash($token));
     }
 
-    /**
-     * @dataProvider notOurTokens
-     */
+    #[DataProvider('notOurTokens')]
     public function testSomebodyElsesBearerTokenIsRejectedBeforeTheDatabase(string $candidate): void
     {
         // Checked with a regex before the lookup, so a request carrying a
@@ -78,9 +77,7 @@ final class DeviceTokenMinterTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider headers
-     */
+    #[DataProvider('headers')]
     public function testTheBearerValueIsTakenFromTheHeader(string $header, string $expected): void
     {
         self::assertSame($expected, $this->minter->bearerFrom($header));

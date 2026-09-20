@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
+use function Brain\Monkey\Functions\when;
+use function Brain\Monkey\Actions\expectAdded;
 use BleedingDeacons\WpMocks\TestCase;
-use Brain\Monkey\Actions;
-use Brain\Monkey\Functions;
 use Fellowship\Auth\DeviceCodeStore;
 use Fellowship\Auth\DeviceRedirectValidator;
 use Fellowship\Auth\DeviceTokenMinter;
@@ -45,9 +47,8 @@ use WP_REST_Request;
  * takes a credential counts the attempt rather than only the success;
  * asserting it per route is the only way to notice one that was added
  * without it.
- *
- * @covers \Fellowship\Rest\DeviceAuthController
  */
+#[CoversClass(\Fellowship\Rest\DeviceAuthController::class)]
 final class InsecureAndLimitedTest extends TestCase
 {
     private const MEMBER = 'member@example.org';
@@ -61,7 +62,7 @@ final class InsecureAndLimitedTest extends TestCase
     {
         parent::setUp();
 
-        Functions\when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+        when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
 
         $_SERVER['REMOTE_ADDR'] = '203.0.113.4';
 
@@ -75,13 +76,10 @@ final class InsecureAndLimitedTest extends TestCase
     }
 
     // ── Plain HTTP ────────────────────────────────────────────────────
-
-    /**
-     * @dataProvider routesThatRefusePlainHttp
-     */
+    #[DataProvider('routesThatRefusePlainHttp')]
     public function testEveryRouteRefusesAPlainRequest(string $route): void
     {
-        Functions\when('is_ssl')->justReturn(false);
+        when('is_ssl')->justReturn(false);
 
         $controller = $this->controller();
         $token = $this->enrol();
@@ -106,15 +104,13 @@ final class InsecureAndLimitedTest extends TestCase
     }
 
     // ── Too many attempts ─────────────────────────────────────────────
-
     /**
-     * @dataProvider routesThatCountAttempts
-     *
      * @param array<string, mixed> $params
      */
+    #[DataProvider('routesThatCountAttempts')]
     public function testEveryCredentialRouteCountsTheAttempt(string $route, array $params): void
     {
-        Functions\when('is_ssl')->justReturn(true);
+        when('is_ssl')->justReturn(true);
 
         $controller = $this->controller();
 
@@ -148,7 +144,7 @@ final class InsecureAndLimitedTest extends TestCase
     {
         // Routes registered anywhere but rest_api_init are routes that
         // exist on some requests and not others.
-        Actions\expectAdded('rest_api_init')->once();
+        expectAdded('rest_api_init')->once();
 
         $this->controller()->register();
     }
@@ -159,7 +155,7 @@ final class InsecureAndLimitedTest extends TestCase
         // the way back rather than trusted from the state row, because a
         // state row is the one thing an attacker who reached this route
         // has already influenced.
-        Functions\when('is_ssl')->justReturn(true);
+        when('is_ssl')->justReturn(true);
 
         $issued = $this->stateStore()->issue('google', 'https://example.invalid/steal');
 
@@ -178,7 +174,7 @@ final class InsecureAndLimitedTest extends TestCase
         // tell it anything is through the redirect it is waiting on. It
         // happens when an admin removes a client id while somebody is
         // half way through signing in.
-        Functions\when('is_ssl')->justReturn(true);
+        when('is_ssl')->justReturn(true);
 
         $issued = $this->stateStore()->issue('microsoft', 'link://auth');
 
@@ -192,7 +188,7 @@ final class InsecureAndLimitedTest extends TestCase
 
     public function testACallbackTheMemberDeclinedSendsTheAppBackToo(): void
     {
-        Functions\when('is_ssl')->justReturn(true);
+        when('is_ssl')->justReturn(true);
 
         $issued = $this->stateStore()->issue('google', 'link://auth');
 
@@ -206,7 +202,7 @@ final class InsecureAndLimitedTest extends TestCase
 
     public function testAHandsetThatCannotBeStoredIsFiveHundredRatherThanAFatal(): void
     {
-        Functions\when('is_ssl')->justReturn(true);
+        when('is_ssl')->justReturn(true);
 
         $issued = $this->stateStore()->issue('apple', '');
 
@@ -231,7 +227,7 @@ final class InsecureAndLimitedTest extends TestCase
         // Answering "ok" here would leave a handset holding a private
         // key the server has no public half for — it would receive
         // messages it could never open, indefinitely.
-        Functions\when('is_ssl')->justReturn(true);
+        when('is_ssl')->justReturn(true);
 
         $token = $this->enrol();
         $this->devices->rows = [];
@@ -243,7 +239,7 @@ final class InsecureAndLimitedTest extends TestCase
 
     public function testUpdatingAPushTokenWithoutATokenIsRefused(): void
     {
-        Functions\when('is_ssl')->justReturn(true);
+        when('is_ssl')->justReturn(true);
 
         self::assertInstanceOf(
             WP_Error::class,
@@ -253,7 +249,7 @@ final class InsecureAndLimitedTest extends TestCase
 
     public function testSigningOutWithoutATokenIsRefused(): void
     {
-        Functions\when('is_ssl')->justReturn(true);
+        when('is_ssl')->justReturn(true);
 
         self::assertInstanceOf(WP_Error::class, $this->controller()->signOut($this->request([])));
     }

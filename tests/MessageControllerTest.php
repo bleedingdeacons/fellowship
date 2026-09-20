@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\TestCase;
-use Brain\Monkey\Functions;
 use Fellowship\Auth\DeviceTokenMinter;
 use Fellowship\Core\RateLimiter;
 use Fellowship\Core\Settings;
@@ -45,9 +46,8 @@ use WP_REST_Response;
  * And a handset only ever sees its own. Every read is scoped to the
  * member behind the bearer token, so naming somebody else's message
  * answers exactly as naming one that does not exist.
- *
- * @covers \Fellowship\Rest\MessageController
  */
+#[CoversClass(\Fellowship\Rest\MessageController::class)]
 final class MessageControllerTest extends TestCase
 {
     private const MEMBER = 'member@example.org';
@@ -66,8 +66,8 @@ final class MessageControllerTest extends TestCase
     {
         parent::setUp();
 
-        Functions\when('is_ssl')->justReturn(true);
-        Functions\when('wp_generate_uuid4')->alias(static fn(): string => '1111-' . random_int(1, 999999999));
+        when('is_ssl')->justReturn(true);
+        when('wp_generate_uuid4')->alias(static fn(): string => '1111-' . random_int(1, 999999999));
 
         $this->devices = new InMemoryDeviceRepository();
         $this->messages = new InMemoryMessageRepository();

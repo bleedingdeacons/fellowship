@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\Test;
+use Fellowship\Devices\Device;
 use Fellowship\Tests\Support\InMemoryDeviceRepository;
 use PHPUnit\Framework\TestCase;
 
@@ -31,7 +33,7 @@ final class DeviceCapRaceTest extends TestCase
 {
     private const MAX = 5;
 
-    /** @test */
+    #[Test]
     public function a_row_within_the_cap_survives(): void
     {
         $repo = new InMemoryDeviceRepository();
@@ -41,7 +43,7 @@ final class DeviceCapRaceTest extends TestCase
         $this->assertCount(1, $repo->findByMemberEmail('a@example.com'));
     }
 
-    /** @test */
+    #[Test]
     public function the_surplus_row_removes_itself(): void
     {
         $repo = new InMemoryDeviceRepository();
@@ -57,9 +59,7 @@ final class DeviceCapRaceTest extends TestCase
         $this->assertCount(self::MAX, $repo->findByMemberEmail('a@example.com'));
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function a_race_past_the_cap_keeps_exactly_the_cap(): void
     {
         // The finding itself: both requests read a count of four, both pass
@@ -108,7 +108,7 @@ final class DeviceCapRaceTest extends TestCase
         );
     }
 
-    /** @test */
+    #[Test]
     public function one_members_devices_do_not_count_against_another(): void
     {
         $repo = new InMemoryDeviceRepository();
@@ -123,7 +123,7 @@ final class DeviceCapRaceTest extends TestCase
         $this->assertTrue($repo->keepIfWithinCap($other->id, 'b@example.com', self::MAX));
     }
 
-    /** @test */
+    #[Test]
     public function a_revoked_device_frees_its_slot(): void
     {
         $repo = new InMemoryDeviceRepository();
@@ -143,7 +143,7 @@ final class DeviceCapRaceTest extends TestCase
         );
     }
 
-    private function enrol(InMemoryDeviceRepository $repo, string $email): \Fellowship\Devices\Device
+    private function enrol(InMemoryDeviceRepository $repo, string $email): Device
     {
         static $n = 0;
         $n++;

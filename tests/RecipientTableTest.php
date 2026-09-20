@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
 use BleedingDeacons\WpMocks\TestCase;
 use Fellowship\Messaging\WpdbRecipientRepository;
 use Fellowship\Tests\Support\RecordingWpdb;
@@ -24,9 +25,8 @@ use Fellowship\Tests\Support\RecordingWpdb;
  * key is the arbiter, and letting it be one costs a duplicate-key warning
  * instead of a duplicate row — and a duplicate row here is a member
  * receiving the same message twice.
- *
- * @covers \Fellowship\Messaging\WpdbRecipientRepository
  */
+#[CoversClass(\Fellowship\Messaging\WpdbRecipientRepository::class)]
 final class RecipientTableTest extends TestCase
 {
     private RecordingWpdb $wpdb;

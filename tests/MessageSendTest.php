@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\TestCase;
-use Brain\Monkey\Functions;
 use Fellowship\Auth\DeviceTokenMinter;
 use Fellowship\Core\RateLimiter;
 use Fellowship\Core\Settings;
@@ -42,9 +43,8 @@ use WP_REST_Response;
  * and a reply it is not entitled to is refused as "not found" rather than
  * "not yours", because answering differently would let it walk the id
  * space to learn which messages exist.
- *
- * @covers \Fellowship\Rest\MessageController
  */
+#[CoversClass(\Fellowship\Rest\MessageController::class)]
 final class MessageSendTest extends TestCase
 {
     private const MEMBER = 'member@example.org';
@@ -61,11 +61,11 @@ final class MessageSendTest extends TestCase
     {
         parent::setUp();
 
-        Functions\when('is_ssl')->justReturn(true);
+        when('is_ssl')->justReturn(true);
 
         // Not in any shared stub group: it lives in wp-includes/functions.php
         // and only the dispatcher reaches for it.
-        Functions\when('wp_generate_uuid4')->alias(
+        when('wp_generate_uuid4')->alias(
             static fn(): string => '11111111-2222-4333-8444-555555555555'
         );
 

@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\TestCase;
-use Brain\Monkey\Functions;
 use Fellowship\Auth\DeviceCodeStore;
 use Fellowship\Auth\DeviceRedirectValidator;
 use Fellowship\Auth\DeviceTokenMinter;
@@ -17,7 +18,6 @@ use Fellowship\Auth\Providers\OAuthProvider;
 use Fellowship\Auth\StateStore;
 use Fellowship\Auth\VerifiedIdentity;
 use Fellowship\Core\RateLimiter;
-use Fellowship\Core\Settings;
 use Fellowship\Devices\CurrentDevice;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Rest\DeviceAuthController;
@@ -49,9 +49,8 @@ use WP_REST_Response;
  *
  * HTTPS is stubbed on throughout. Every route refuses plain HTTP, which
  * is asserted once rather than in each test.
- *
- * @covers \Fellowship\Rest\DeviceAuthController
  */
+#[CoversClass(\Fellowship\Rest\DeviceAuthController::class)]
 final class DeviceAuthControllerTest extends TestCase
 {
     private const MEMBER = 'member@example.org';
@@ -73,8 +72,8 @@ final class DeviceAuthControllerTest extends TestCase
     {
         parent::setUp();
 
-        Functions\when('is_ssl')->justReturn(true);
-        Functions\when('rest_url')->alias(
+        when('is_ssl')->justReturn(true);
+        when('rest_url')->alias(
             static fn(string $path = ''): string => 'https://aa-bristol.org/wp-json/' . ltrim($path, '/')
         );
 
@@ -144,7 +143,7 @@ final class DeviceAuthControllerTest extends TestCase
     {
         // Asserted once, on the route that would leak the most: the
         // exchange carries the credential.
-        Functions\when('is_ssl')->justReturn(false);
+        when('is_ssl')->justReturn(false);
 
         $response = $this->controller()->exchange($this->request([]));
 

@@ -21,10 +21,15 @@ parameters:
     # are correct at runtime, so PHPDoc informs types but does not prove
     # conditions. Native types are still checked normally.
     treatPhpDocTypesAsCertain: false
-    # Analyse as PHP 8.1 — the plugin's floor and the version CI runs.
-    # Without this PHPStan analyses using whatever PHP is executing it, so
-    # a developer on 8.5 and CI on 8.1 disagree.
-    phpVersion: 80100
+    # Analyse across the supported range — 8.4 is the floor, 8.5 the
+    # ceiling CI also runs. A single pin proves one end only: at the
+    # ceiling it misses an 8.5-only construct that breaks on 8.4, at the
+    # floor it misses what 8.5 deprecates. Without it PHPStan analyses
+    # using whatever PHP runs it, so a developer and CI disagree and the
+    # committed baseline stops matching.
+    phpVersion:
+        min: 80400
+        max: 80500
     # No baseline, and this is a new plugin — it starts clean and should
     # stay that way. A baseline added later is a decision to be taken
     # deliberately, not a place to put today's findings.

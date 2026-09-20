@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
 use BleedingDeacons\WpMocks\TestCase;
 use Fellowship\Messaging\AuditDetail;
 use Fellowship\Messaging\Message;
@@ -16,9 +17,8 @@ use Fellowship\Messaging\Message;
  * send paths build their detail through this, so an assertion here holds
  * for a message sent from WordPress and for the same message sent from a
  * handset.</p>
- *
- * @covers \Fellowship\Messaging\AuditDetail
  */
+#[CoversClass(\Fellowship\Messaging\AuditDetail::class)]
 final class AuditDetailTest extends TestCase
 {
     private static function message(

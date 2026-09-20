@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use Fellowship\Auth\DeviceRedirectValidator;
 use PHPUnit\Framework\TestCase;
 
@@ -33,9 +34,7 @@ final class DeviceRedirectValidatorTest extends TestCase
         self::assertTrue($this->validator->isAllowed('http://127.0.0.1:8765'));
     }
 
-    /**
-     * @dataProvider refused
-     */
+    #[DataProvider('refused')]
     public function testTheseAreRefused(string $uri): void
     {
         self::assertFalse($this->validator->isAllowed($uri));

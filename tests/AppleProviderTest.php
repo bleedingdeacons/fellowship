@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use Fellowship\Auth\VerifiedIdentity;
 use BleedingDeacons\WpMocks\Doubles\FakeWpHttp;
 use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Auth\JwtVerifier;
@@ -153,7 +154,7 @@ final class AppleProviderTest extends TestCase
         return new AppleProvider(new Settings(), new JwtVerifier());
     }
 
-    private function verify(string $jwt): ?\Fellowship\Auth\VerifiedIdentity
+    private function verify(string $jwt): ?VerifiedIdentity
     {
         FakeWpHttp::pushResponse(200, (string) json_encode(['keys' => [$this->jwk()]]));
 

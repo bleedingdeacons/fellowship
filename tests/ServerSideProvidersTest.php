@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use Fellowship\Auth\VerifiedIdentity;
 use BleedingDeacons\WpMocks\Doubles\FakeWpHttp;
 use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
@@ -35,11 +37,10 @@ use Fellowship\Core\Settings;
  * Every test here mints a real RS256 token and serves a real JWKS, so
  * what is exercised is the provider's decision rather than a stubbed
  * answer about it.
- *
- * @covers \Fellowship\Auth\Providers\GoogleProvider
- * @covers \Fellowship\Auth\Providers\MicrosoftProvider
- * @covers \Fellowship\Auth\Providers\FacebookProvider
  */
+#[CoversClass(\Fellowship\Auth\Providers\GoogleProvider::class)]
+#[CoversClass(\Fellowship\Auth\Providers\MicrosoftProvider::class)]
+#[CoversClass(\Fellowship\Auth\Providers\FacebookProvider::class)]
 final class ServerSideProvidersTest extends TestCase
 {
     private const REDIRECT = 'https://aa-bristol.org/wp-json/fellowship/v1/auth/callback';
@@ -271,7 +272,7 @@ final class ServerSideProvidersTest extends TestCase
         array $claims,
         array $remove = [],
         ?string $verifier = null
-    ): ?\Fellowship\Auth\VerifiedIdentity {
+    ): ?VerifiedIdentity {
         $token = $this->token($claims, $remove);
 
         // The token exchange, then the JWKS the verifier fetches.
