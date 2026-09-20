@@ -1,8 +1,8 @@
 === Fellowship ===
 Contributors: thebleedingdeacons
 Requires at least: 6.1
-Tested up to: 6.7
-Requires PHP: 8.1
+Tested up to: 7.1.1
+Requires PHP: 8.4
 Stable tag: 1.10.0
 Build date: 2026/09/14 11:27:47
 License: MIT (Modified)

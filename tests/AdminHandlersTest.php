@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\Exceptions\WpDieException;
 use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
-use Brain\Monkey\Functions;
 use Fellowship\Admin\DevicesPage;
 use Fellowship\Admin\SettingsPage;
 use Fellowship\Auth\PasswordAuthenticator;
@@ -38,11 +39,10 @@ use Unity\Testing\Doubles\MemberStub;
  * The service account is parsed before it is stored, because a setting
  * that looks saved and pushes nothing is the worst of both, and the
  * moment to find out is while somebody is looking at the screen.
- *
- * @covers \Fellowship\Admin\DevicesPage
- * @covers \Fellowship\Admin\SettingsPage
- * @covers \Fellowship\Core\Schema
  */
+#[CoversClass(\Fellowship\Admin\DevicesPage::class)]
+#[CoversClass(\Fellowship\Admin\SettingsPage::class)]
+#[CoversClass(\Fellowship\Core\Schema::class)]
 final class AdminHandlersTest extends TestCase
 {
     private const MEMBER = 'member@example.org';
@@ -58,9 +58,9 @@ final class AdminHandlersTest extends TestCase
         $_POST = [];
         WpState::$userCan = true;
 
-        Functions\when('get_current_user_id')->justReturn(3);
-        Functions\when('check_admin_referer')->justReturn(true);
-        Functions\when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+        when('get_current_user_id')->justReturn(3);
+        when('check_admin_referer')->justReturn(true);
+        when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
 
         $this->devices = new InMemoryDeviceRepository();
         $this->audit = new SpyAuditLogger();

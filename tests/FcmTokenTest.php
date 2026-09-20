@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
 use BleedingDeacons\WpMocks\Doubles\FakeWpHttp;
 use BleedingDeacons\WpMocks\TestCase;
-use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Core\Settings;
 use Fellowship\Crypto\MessageSealer;
 use Fellowship\Devices\Device;
@@ -31,10 +31,9 @@ use Fellowship\Push\ServiceAccount;
  * the subject and body travelling through Google in the clear and landing
  * on a lock screen. The test asserts the plaintext is nowhere in what
  * goes out.
- *
- * @covers \Fellowship\Push\FcmClient
- * @covers \Fellowship\Push\FcmTransport
  */
+#[CoversClass(\Fellowship\Push\FcmClient::class)]
+#[CoversClass(\Fellowship\Push\FcmTransport::class)]
 final class FcmTokenTest extends TestCase
 {
     /** @var resource|\OpenSSLAsymmetricKey */

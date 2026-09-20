@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use Scrutiny\Testing\Doubles\SpyAuditLogger;
+use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
+use function Brain\Monkey\Functions\when;
+use function Brain\Monkey\Actions\expectAdded;
 use BleedingDeacons\WpMocks\TestCase;
-use Brain\Monkey\Actions;
 use Brain\Monkey\Filters;
-use Brain\Monkey\Functions;
 use Fellowship\Core\Settings;
 use Fellowship\Devices\DeviceRepository;
 use Fellowship\Messaging\MessageRepository;
@@ -52,9 +55,8 @@ use WP_REST_Response;
  *    Their devices would fail the gate on the next request anyway, but
  *    until then they are live rows the dispatcher still counts as push
  *    targets.
- *
- * @covers \Fellowship\Plugin
  */
+#[CoversClass(\Fellowship\Plugin::class)]
 final class PluginBootstrapTest extends TestCase
 {
     private const MEMBER = 'member@example.org';
@@ -80,10 +82,10 @@ final class PluginBootstrapTest extends TestCase
 
         $GLOBALS['wpdb'] = new RecordingWpdb();
 
-        Functions\when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
-        Functions\when('is_admin')->justReturn(false);
-        Functions\when('wp_next_scheduled')->justReturn(false);
-        Functions\when('wp_schedule_event')->justReturn(true);
+        when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+        when('is_admin')->justReturn(false);
+        when('wp_next_scheduled')->justReturn(false);
+        when('wp_schedule_event')->justReturn(true);
 
         $this->devices = new InMemoryDeviceRepository();
         $this->recipients = new InMemoryRecipientRepository();
@@ -95,11 +97,11 @@ final class PluginBootstrapTest extends TestCase
                 new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: self::MEMBER),
             ]),
             'Unity\\Committees\\Interfaces\\CommitteeRepository' => new InMemoryCommitteeRepository(),
-            'Scrutiny\\Audit\\Interfaces\\AuditLogger' => new \Scrutiny\Testing\Doubles\SpyAuditLogger(),
+            'Scrutiny\\Audit\\Interfaces\\AuditLogger' => new SpyAuditLogger(),
             // Unity's, since it took ownership of the password
             // store. Fellowship no longer binds one.
             'Unity\\Auth\\Interfaces\\PasswordCredentialRepository' =>
-                new \Unity\Testing\Doubles\InMemoryPasswordCredentialRepository(),
+                new InMemoryPasswordCredentialRepository(),
         ]);
 
         // The in-memory halves, primed so the hooks act on something the
@@ -311,12 +313,12 @@ final class PluginBootstrapTest extends TestCase
     {
         // Four screens, and none of them has any business being built on
         // a front-end request.
-        Functions\when('is_admin')->justReturn(true);
-        Functions\when('add_menu_page')->justReturn('toplevel_page_fellowship');
-        Functions\when('add_submenu_page')->justReturn('fellowship_page_x');
-        Functions\when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
+        when('is_admin')->justReturn(true);
+        when('add_menu_page')->justReturn('toplevel_page_fellowship');
+        when('add_submenu_page')->justReturn('fellowship_page_x');
+        when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
 
-        Actions\expectAdded('admin_menu')->atLeast()->once();
+        expectAdded('admin_menu')->atLeast()->once();
 
         $this->resetPlugin();
         Plugin::init($this->container);
@@ -391,7 +393,7 @@ final class PluginBootstrapTest extends TestCase
     private function capture(): void
     {
         foreach (['fellowship_purge_messages', 'unity/member_deleted'] as $hook) {
-            Actions\expectAdded($hook)->zeroOrMoreTimes()->whenHappen(
+            expectAdded($hook)->zeroOrMoreTimes()->whenHappen(
                 function (callable $callback) use ($hook): void {
                     $this->actions[$hook][] = $callback;
                 }

@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\TestCase;
-use Brain\Monkey\Functions;
 use Fellowship\Auth\DeviceCodeStore;
 use Fellowship\Auth\DeviceRedirectValidator;
 use Fellowship\Auth\DeviceTokenMinter;
@@ -43,9 +44,8 @@ use WP_REST_Response;
  * a script working through addresses to find one the gate accepts, and it
  * has to count the attempt rather than only the success — otherwise
  * failing is free and only the last guess is charged for.
- *
- * @covers \Fellowship\Rest\DeviceAuthController
  */
+#[CoversClass(\Fellowship\Rest\DeviceAuthController::class)]
 final class EnrolmentEdgesTest extends TestCase
 {
     private const MEMBER = 'member@example.org';
@@ -60,8 +60,8 @@ final class EnrolmentEdgesTest extends TestCase
     {
         parent::setUp();
 
-        Functions\when('is_ssl')->justReturn(true);
-        Functions\when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+        when('is_ssl')->justReturn(true);
+        when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
 
         $_SERVER['REMOTE_ADDR'] = '203.0.113.4';
 

@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
-use Brain\Monkey\Functions;
 use Fellowship\Auth\DeviceCodeStore;
 use Fellowship\Auth\DeviceRedirectValidator;
 use Fellowship\Auth\DeviceTokenMinter;
@@ -41,9 +42,8 @@ use WP_REST_Response;
  * pedantry: the request was well formed and the code was good, so the
  * code stays usable and the member can try a different password without
  * asking for another email. A 400 would suggest the link was the problem.
- *
- * @covers \Fellowship\Rest\DeviceAuthController
  */
+#[CoversClass(\Fellowship\Rest\DeviceAuthController::class)]
 final class PasswordFlowRestTest extends TestCase
 {
     private const MEMBER = 'member@example.org';
@@ -59,8 +59,8 @@ final class PasswordFlowRestTest extends TestCase
     {
         parent::setUp();
 
-        Functions\when('is_ssl')->justReturn(true);
-        Functions\when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+        when('is_ssl')->justReturn(true);
+        when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
 
         $this->credentials = new InMemoryPasswordCredentialRepository();
         $this->devices = new InMemoryDeviceRepository();

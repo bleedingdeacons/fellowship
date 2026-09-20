@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\TestCase;
-use Brain\Monkey\Functions;
 use Fellowship\Auth\DeviceCodeStore;
 use Fellowship\Auth\DeviceTokenMinter;
 use Fellowship\Auth\VerifiedIdentity;
@@ -42,11 +43,10 @@ use WP_REST_Response;
  * through a browser redirect, where it lands in history and can be read
  * by anything else registered for the scheme, which is precisely why it
  * is worthless twice and worthless late.
- *
- * @covers \Fellowship\Directory\DirectoryPresenter
- * @covers \Fellowship\Rest\DirectoryController
- * @covers \Fellowship\Auth\DeviceCodeStore
  */
+#[CoversClass(\Fellowship\Directory\DirectoryPresenter::class)]
+#[CoversClass(\Fellowship\Rest\DirectoryController::class)]
+#[CoversClass(\Fellowship\Auth\DeviceCodeStore::class)]
 final class DirectoryTest extends TestCase
 {
     private const MEMBER = 'member@example.org';
@@ -61,7 +61,7 @@ final class DirectoryTest extends TestCase
     {
         parent::setUp();
 
-        Functions\when('is_ssl')->justReturn(true);
+        when('is_ssl')->justReturn(true);
 
         $this->devices = new InMemoryDeviceRepository();
         $this->minter = new DeviceTokenMinter();
@@ -175,7 +175,7 @@ final class DirectoryTest extends TestCase
 
     public function testPlainHttpGetsNoDirectory(): void
     {
-        Functions\when('is_ssl')->justReturn(false);
+        when('is_ssl')->justReturn(false);
 
         self::assertInstanceOf(WP_Error::class, $this->controller()->index($this->request($this->enrol())));
     }

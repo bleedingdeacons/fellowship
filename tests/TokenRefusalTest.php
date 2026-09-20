@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
 use BleedingDeacons\WpMocks\Doubles\FakeWpHttp;
 use BleedingDeacons\WpMocks\TestCase;
 use Fellowship\Auth\JwtVerifier;
@@ -27,10 +28,9 @@ use WP_Error;
  * authorise leg throws, because by that point the state has been
  * consumed and a browser is waiting — the only thing that can be done
  * with it is a redirect carrying an error.
- *
- * @covers \Fellowship\Auth\JwtVerifier
- * @covers \Fellowship\Auth\Providers\FacebookProvider
  */
+#[CoversClass(\Fellowship\Auth\JwtVerifier::class)]
+#[CoversClass(\Fellowship\Auth\Providers\FacebookProvider::class)]
 final class TokenRefusalTest extends TestCase
 {
     private const JWKS = 'https://example.org/jwks';

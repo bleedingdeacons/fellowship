@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
-use Brain\Monkey\Functions;
 use Fellowship\Admin\MessagesPage;
 use Fellowship\Auth\DeviceTokenMinter;
 use Fellowship\Devices\CurrentDevice;
@@ -33,10 +34,9 @@ use WP_REST_Request;
  * every request rather than trusting the token alone — so a member who
  * stops qualifying is refused on their next call rather than at their
  * next enrolment.
- *
- * @covers \Fellowship\Admin\MessagesPage
- * @covers \Fellowship\Devices\CurrentDevice
  */
+#[CoversClass(\Fellowship\Admin\MessagesPage::class)]
+#[CoversClass(\Fellowship\Devices\CurrentDevice::class)]
 final class MessageLogTest extends TestCase
 {
     private const MEMBER = 'member@example.org';
@@ -54,8 +54,8 @@ final class MessageLogTest extends TestCase
         $_GET = [];
         WpState::$userCan = true;
 
-        Functions\when('paginate_links')->justReturn('');
-        Functions\when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
+        when('paginate_links')->justReturn('');
+        when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
 
         $this->messages = new InMemoryMessageRepository();
         $this->recipients = new InMemoryRecipientRepository();

@@ -5,7 +5,7 @@
  * Description: Server side of the Link messaging app. Enrols Android and iOS handsets against Unity members by OAuth-verified email, exchanges a device public key at enrolment, and delivers messages to individuals and committees as encrypted push notifications. Requires Unity and Scrutiny.
  * Version: 1.10.0
  * Requires at least: 6.1
- * Requires PHP: 8.1
+ * Requires PHP: 8.4
  * Requires Plugins: unity, scrutiny
  * GitHub Plugin URI: https://github.com/bleedingdeacons/fellowship
  * GitHub Branch: main

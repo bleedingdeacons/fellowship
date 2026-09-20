@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use Fellowship\Crypto\MessageSealer;
 use PHPUnit\Framework\TestCase;
 
@@ -95,9 +96,7 @@ final class MessageSealerTest extends TestCase
         ));
     }
 
-    /**
-     * @dataProvider unusableKeys
-     */
+    #[DataProvider('unusableKeys')]
     public function testAnUnusableKeyIsRefusedRatherThanProducingAnEmptyPayload(string $key): void
     {
         // Null means "this handset cannot be sent to". An empty payload

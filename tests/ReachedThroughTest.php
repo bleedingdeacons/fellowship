@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
-use Brain\Monkey\Functions;
 use Fellowship\Admin\MessagesPage;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Devices\WpdbDeviceRepository;
@@ -48,14 +49,13 @@ use WP_Error;
  * `do_action` discards return values, so a message refused there is a
  * message that vanishes unless the refusal is logged — which is the only
  * thing separating "nobody sent one" from "one was thrown away".
- *
- * @covers \Fellowship\Messaging\MessageApi
- * @covers \Fellowship\Directory\DirectoryPresenter
- * @covers \Fellowship\Messaging\WpdbRecipientRepository
- * @covers \Fellowship\Messaging\WpdbMessageRepository
- * @covers \Fellowship\Devices\WpdbDeviceRepository
- * @covers \Fellowship\Admin\MessagesPage
  */
+#[CoversClass(\Fellowship\Messaging\MessageApi::class)]
+#[CoversClass(\Fellowship\Directory\DirectoryPresenter::class)]
+#[CoversClass(\Fellowship\Messaging\WpdbRecipientRepository::class)]
+#[CoversClass(\Fellowship\Messaging\WpdbMessageRepository::class)]
+#[CoversClass(\Fellowship\Devices\WpdbDeviceRepository::class)]
+#[CoversClass(\Fellowship\Admin\MessagesPage::class)]
 final class ReachedThroughTest extends TestCase
 {
     private RecordingWpdb $wpdb;
@@ -70,10 +70,10 @@ final class ReachedThroughTest extends TestCase
         $_GET = [];
         WpState::$userCan = true;
 
-        Functions\when('paginate_links')->justReturn('<a href="#">2</a>');
-        Functions\when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
-        Functions\when('add_query_arg')->justReturn('https://example.org/wp-admin/admin.php');
-        Functions\when('wp_generate_uuid4')->alias(static fn(): string => '11111111-2222-4333-8444-555555555555');
+        when('paginate_links')->justReturn('<a href="#">2</a>');
+        when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
+        when('add_query_arg')->justReturn('https://example.org/wp-admin/admin.php');
+        when('wp_generate_uuid4')->alias(static fn(): string => '11111111-2222-4333-8444-555555555555');
 
         $this->wpdb = new RecordingWpdb();
         $this->messages = new InMemoryMessageRepository();
@@ -115,7 +115,7 @@ final class ReachedThroughTest extends TestCase
 
     public function testASendWithNoSenderNameIsSignedWithTheSiteName(): void
     {
-        Functions\when('get_bloginfo')->justReturn('Bristol Intergroup');
+        when('get_bloginfo')->justReturn('Bristol Intergroup');
 
         $this->api()->send([
             'subject' => 'Intergroup moved',
@@ -129,7 +129,7 @@ final class ReachedThroughTest extends TestCase
     public function testASiteWithNoNameIsStillSignedWithSomething(): void
     {
         // A blank "from" on a handset reads as a message from nobody.
-        Functions\when('get_bloginfo')->justReturn('');
+        when('get_bloginfo')->justReturn('');
 
         $this->api()->send([
             'subject' => 'Intergroup moved',

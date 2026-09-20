@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
 use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Core\Settings;
@@ -18,9 +19,8 @@ use Fellowship\Core\Settings;
  * show?" a property of where the value lives rather than of who
  * remembered — and it is asserted here by reading the raw options back
  * and checking a secret is not in the public one.
- *
- * @covers \Fellowship\Core\Settings
  */
+#[CoversClass(\Fellowship\Core\Settings::class)]
 final class SettingsTest extends TestCase
 {
     private Settings $settings;

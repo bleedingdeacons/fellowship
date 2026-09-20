@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
 use BleedingDeacons\WpMocks\Doubles\FakeWpHttp;
 use BleedingDeacons\WpMocks\TestCase;
-use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Core\Settings;
 use Fellowship\Crypto\MessageSealer;
 use Fellowship\Devices\Device;
@@ -31,11 +31,10 @@ use Fellowship\Push\ServiceAccount;
  * one message — a dead registration token, a rate limit, a bad hour at
  * Google — and is a warning. Collapsing the two would either bury the
  * outage or cry wolf about a stale token.
- *
- * @covers \Fellowship\Push\FcmClient
- * @covers \Fellowship\Push\FcmTransport
- * @covers \Fellowship\Push\ServiceAccount
  */
+#[CoversClass(\Fellowship\Push\FcmClient::class)]
+#[CoversClass(\Fellowship\Push\FcmTransport::class)]
+#[CoversClass(\Fellowship\Push\ServiceAccount::class)]
 final class PushTest extends TestCase
 {
     protected function setUp(): void

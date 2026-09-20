@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\TestCase;
-use Brain\Monkey\Functions;
 use Fellowship\Core\Settings;
 use Fellowship\Crypto\MessageSealer;
 use Fellowship\Devices\MemberGate;
@@ -38,10 +39,9 @@ use WP_Error;
  * controller and the `fellowship/send_message` action all pass through
  * it, which is what keeps validation, the member gate and the audit entry
  * in one place rather than three.
- *
- * @covers \Fellowship\Messaging\MessageDispatcher
- * @covers \Fellowship\Messaging\MessageApi
  */
+#[CoversClass(\Fellowship\Messaging\MessageDispatcher::class)]
+#[CoversClass(\Fellowship\Messaging\MessageApi::class)]
 final class DispatcherTest extends TestCase
 {
     private InMemoryMessageRepository $messages;
@@ -55,10 +55,10 @@ final class DispatcherTest extends TestCase
     {
         parent::setUp();
 
-        Functions\when('wp_generate_uuid4')->alias(
+        when('wp_generate_uuid4')->alias(
             static fn(): string => '11111111-2222-4333-8444-555555555555'
         );
-        Functions\when('get_current_user_id')->justReturn(3);
+        when('get_current_user_id')->justReturn(3);
 
         $this->messages = new InMemoryMessageRepository();
         $this->recipients = new InMemoryRecipientRepository();

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use Fellowship\Crypto\DevicePublicKey;
 use PHPUnit\Framework\TestCase;
 
@@ -53,9 +54,7 @@ final class DevicePublicKeyTest extends TestCase
         self::assertSame('', DevicePublicKey::normalise($this->publicKey(1024)));
     }
 
-    /**
-     * @dataProvider rubbish
-     */
+    #[DataProvider('rubbish')]
     public function testRubbishIsRefused(string $submitted): void
     {
         self::assertSame('', DevicePublicKey::normalise($submitted));

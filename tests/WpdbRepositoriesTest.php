@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
 use BleedingDeacons\WpMocks\TestCase;
 use Fellowship\Messaging\WpdbMessageRepository;
 use Fellowship\Messaging\WpdbRecipientRepository;
@@ -25,10 +26,9 @@ use Fellowship\Tests\Support\RecordingWpdb;
  * nothing and answers exactly as one naming a message that does not
  * exist. Move that condition into a caller and any handset can mark any
  * message read.
- *
- * @covers \Fellowship\Messaging\WpdbMessageRepository
- * @covers \Fellowship\Messaging\WpdbRecipientRepository
  */
+#[CoversClass(\Fellowship\Messaging\WpdbMessageRepository::class)]
+#[CoversClass(\Fellowship\Messaging\WpdbRecipientRepository::class)]
 final class WpdbRepositoriesTest extends TestCase
 {
     private RecordingWpdb $wpdb;

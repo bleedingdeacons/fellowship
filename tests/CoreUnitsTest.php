@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use function Brain\Monkey\Functions\when;
+use function Brain\Monkey\Functions\expect;
 use BleedingDeacons\WpMocks\TestCase;
-use Brain\Monkey\Functions;
 use Fellowship\Admin\ComposePage;
 use Fellowship\Admin\DevicesPage;
 use Fellowship\Admin\MessagesPage;
@@ -45,21 +47,20 @@ use Unity\Testing\Doubles\MemberStub;
  * <b>The rate limiter counts the call it is asked about.</b> Asking is
  * not free — that is the point — so a caller that checked twice before
  * acting would burn two of its own allowance.
- *
- * @covers \Fellowship\Devices\Device
- * @covers \Fellowship\Core\RateLimiter
- * @covers \Fellowship\Admin\MessagesPage
- * @covers \Fellowship\Admin\ComposePage
- * @covers \Fellowship\Admin\DevicesPage
- * @covers \Fellowship\Admin\SettingsPage
  */
+#[CoversClass(\Fellowship\Devices\Device::class)]
+#[CoversClass(\Fellowship\Core\RateLimiter::class)]
+#[CoversClass(\Fellowship\Admin\MessagesPage::class)]
+#[CoversClass(\Fellowship\Admin\ComposePage::class)]
+#[CoversClass(\Fellowship\Admin\DevicesPage::class)]
+#[CoversClass(\Fellowship\Admin\SettingsPage::class)]
 final class CoreUnitsTest extends TestCase
 {
     protected function setUp(): void
     {
         parent::setUp();
 
-        Functions\when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+        when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
 
         // add_menu_page and add_submenu_page are deliberately not stubbed
         // here. Brain Monkey allows one definition per function, so a
@@ -221,15 +222,15 @@ final class CoreUnitsTest extends TestCase
     {
         // Otherwise WordPress derives a duplicate first entry from the
         // menu title.
-        Functions\expect('add_menu_page')->once()->andReturn('toplevel_page_fellowship');
-        Functions\expect('add_submenu_page')->once()->andReturn('fellowship_page_x');
+        expect('add_menu_page')->once()->andReturn('toplevel_page_fellowship');
+        expect('add_submenu_page')->once()->andReturn('fellowship_page_x');
 
         $this->messagesPage()->addMenu();
     }
 
     public function testTheOtherScreensAttachToThatMenu(): void
     {
-        Functions\expect('add_submenu_page')->times(3)->andReturn('fellowship_page_x');
+        expect('add_submenu_page')->times(3)->andReturn('fellowship_page_x');
 
         $this->composePage()->addMenu();
         $this->devicesPage()->addMenu();

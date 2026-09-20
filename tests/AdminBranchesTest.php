@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\Doubles\FakeWpHttp;
 use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
-use Brain\Monkey\Functions;
 use Fellowship\Admin\ComposePage;
 use Fellowship\Admin\DevicesPage;
 use Fellowship\Admin\SettingsPage;
@@ -49,12 +50,11 @@ use Unity\Testing\Doubles\MemberStub;
  * member with two handsets gets one recipient row, so "at least one of
  * their handsets was told" is the honest claim — see Recipient::$pushedAt
  * on why it is not called delivery.
- *
- * @covers \Fellowship\Admin\SettingsPage
- * @covers \Fellowship\Admin\DevicesPage
- * @covers \Fellowship\Admin\ComposePage
- * @covers \Fellowship\Messaging\MessageDispatcher
  */
+#[CoversClass(\Fellowship\Admin\SettingsPage::class)]
+#[CoversClass(\Fellowship\Admin\DevicesPage::class)]
+#[CoversClass(\Fellowship\Admin\ComposePage::class)]
+#[CoversClass(\Fellowship\Messaging\MessageDispatcher::class)]
 final class AdminBranchesTest extends TestCase
 {
     private const MEMBER = 'member@example.org';
@@ -74,13 +74,13 @@ final class AdminBranchesTest extends TestCase
         WpState::$userCan = true;
         FakeWpHttp::reset();
 
-        Functions\when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
-        Functions\when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
-        Functions\when('get_current_user_id')->justReturn(3);
-        Functions\when('submit_button')->justReturn(null);
-        Functions\when('paginate_links')->justReturn('');
-        Functions\when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
-        Functions\when('wp_generate_uuid4')->alias(static fn(): string => '1111-' . random_int(1, 999999999));
+        when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
+        when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+        when('get_current_user_id')->justReturn(3);
+        when('submit_button')->justReturn(null);
+        when('paginate_links')->justReturn('');
+        when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
+        when('wp_generate_uuid4')->alias(static fn(): string => '1111-' . random_int(1, 999999999));
 
         $this->devices = new InMemoryDeviceRepository();
         $this->messages = new InMemoryMessageRepository();

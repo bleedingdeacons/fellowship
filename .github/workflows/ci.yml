@@ -24,8 +24,16 @@ concurrency:
 
 jobs:
   ci:
-    name: PHP 8.1
+    name: PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
+
+    # 8.4 is the declared floor and 8.5 the current release, so both are
+    # gated. Steps that write something shared are pinned to the floor leg
+    # below, or the two legs race each other over the same paths.
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.4', '8.5']
 
     defaults:
       run:
@@ -64,10 +72,10 @@ jobs:
           ref: main
           path: sentinel
 
-      - name: Setup PHP 8.1
+      - name: Setup PHP ${{ matrix.php }}
         uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
-          php-version: '8.1'
+          php-version: ${{ matrix.php }}
           # zip: build.php assembles the release archive with ZipArchive.
           extensions: mbstring, intl, json, zip
           tools: composer:v2
@@ -85,9 +93,9 @@ jobs:
           # Keyed on composer.json: composer.lock is untracked in several of
           # these repos, so it is not a reliable cache key across the suite.
           path: ${{ steps.composer-cache.outputs.dir }}
-          key: ${{ runner.os }}-php8.1-composer-${{ hashFiles('fellowship/composer.json') }}
+          key: ${{ runner.os }}-php${{ matrix.php }}-composer-${{ hashFiles('fellowship/composer.json') }}
           restore-keys: |
-            ${{ runner.os }}-php8.1-composer-
+            ${{ runner.os }}-php${{ matrix.php }}-composer-
 
       # --- Gates -----------------------------------------------------------
       # These fail the build. Each is verified to pass across the suite today.
@@ -123,6 +131,10 @@ jobs:
         run: composer audit --locked --abandoned=report
 
       - name: Semgrep
+        # Once only: Semgrep scans source, which does not vary by PHP version.
+        # Running it on both legs has them scanning the same ref and uploading
+        # to Semgrep Cloud concurrently, and the blocking determination races.
+        if: matrix.php == '8.4'
         # A gate, on pull requests and on main alike.
         #
         # `semgrep ci` is diff-aware on a PR: it scans against the merge base
@@ -185,6 +197,9 @@ jobs:
           exit $status
 
       - name: Build production archive
+        # Once only: the result is identical on both legs, and running it on
+        # both has them writing the same paths at the same time.
+        if: matrix.php == '8.4'
         # The build is what /bump ships, so a broken build must fail the PR.
         run: composer build:production
 
@@ -196,6 +211,9 @@ jobs:
         run: composer phpstan
 
       - name: PHPStan badge is resolvable
+        # Once only: the result is identical on both legs, and running it on
+        # both has them writing the same paths at the same time.
+        if: matrix.php == '8.4'
         # The README badge is a shields.io dynamic badge: it reads
         # parameters.level straight out of phpstan.neon.dist, parsed as YAML.
         # NEON is not YAML — it only parses because this config sticks to
@@ -229,6 +247,9 @@ jobs:
         run: composer phpcs
 
       - name: PHPCS badge is resolvable
+        # Once only: the result is identical on both legs, and running it on
+        # both has them writing the same paths at the same time.
+        if: matrix.php == '8.4'
         # The README badge is a shields.io dynamic badge: it reads the first
         # top-level <rule ref> straight out of .phpcs.xml.dist via the XPath
         # /ruleset/rule[1]/@ref, so the badge always states the standard this
@@ -252,6 +273,9 @@ jobs:
       # Reported but not enforced.
 
       - name: Upload coverage to Coveralls (advisory)
+        # Once only: the result is identical on both legs, and running it on
+        # both has them writing the same paths at the same time.
+        if: matrix.php == '8.4'
         # Reports a coverage number; does not gate the build. The Clover report
         # is produced by the PHPUnit step above. This action runs from the repo
         # root (defaults.run.working-directory does not apply to `uses:` steps),
@@ -341,10 +365,10 @@ jobs:
           ref: main
           path: sentinel
 
-      - name: Setup PHP 8.1
+      - name: Setup PHP 8.4
         uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
-          php-version: '8.1'
+          php-version: '8.4'
           # zip: build.php assembles the release archive with ZipArchive.
           extensions: mbstring, intl, json, zip
           tools: composer:v2

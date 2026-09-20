@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\CoversTrait;
+use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
-use Brain\Monkey\Functions;
 use Fellowship\Core\Capabilities;
 use Fellowship\Core\Schema;
 use Fellowship\Devices\WpdbDeviceRepository;
@@ -53,14 +55,13 @@ use Fellowship\Tests\Support\RecordingWpdb;
  * one in prose parses as an annotation with no argument, and PHPUnit
  * then discards every real one in the block. Which is how this comment
  * came to be worth writing.)
- *
- * @covers \Fellowship\Core\Schema
- * @covers \Fellowship\Core\Capabilities
- * @covers \Fellowship\Logger\HasLogger
- * @covers \Fellowship\Devices\WpdbDeviceRepository
- * @covers \Fellowship\Messaging\WpdbMessageRepository
- * @covers \Fellowship\Messaging\WpdbRecipientRepository
  */
+#[CoversClass(\Fellowship\Core\Schema::class)]
+#[CoversClass(\Fellowship\Core\Capabilities::class)]
+#[CoversTrait(\Fellowship\Logger\HasLogger::class)]
+#[CoversClass(\Fellowship\Devices\WpdbDeviceRepository::class)]
+#[CoversClass(\Fellowship\Messaging\WpdbMessageRepository::class)]
+#[CoversClass(\Fellowship\Messaging\WpdbRecipientRepository::class)]
 final class SchemaAndLoggingTest extends TestCase
 {
     private RecordingWpdb $wpdb;
@@ -155,7 +156,7 @@ final class SchemaAndLoggingTest extends TestCase
         // an existing site and the buttons it guards would go dead.
         $role = new \WP_Role();
 
-        Functions\when('get_role')->justReturn($role);
+        when('get_role')->justReturn($role);
 
         Capabilities::ensureAssigned();
 
@@ -168,7 +169,7 @@ final class SchemaAndLoggingTest extends TestCase
     {
         // Possible on a partially set-up site, and a fatal here would run
         // on every page load.
-        Functions\when('get_role')->justReturn(null);
+        when('get_role')->justReturn(null);
 
         Capabilities::ensureAssigned();
 
@@ -210,7 +211,7 @@ final class SchemaAndLoggingTest extends TestCase
     public function testTheChannelIsNamedAfterTheClassUsingIt(): void
     {
         // So a line in the log says which part of the plugin wrote it.
-        $channel = \Fellowship\Core\Schema::log();
+        $channel = Schema::log();
 
         self::assertNotNull($channel);
         self::assertSame('fellowship', $channel->channel);

@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
+use PHPUnit\Framework\Attributes\CoversClass;
+use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\TestCase;
-use Brain\Monkey\Functions;
 use Fellowship\Auth\DeviceCodeStore;
 use Fellowship\Auth\DeviceRedirectValidator;
 use Fellowship\Auth\DeviceTokenMinter;
@@ -54,10 +55,9 @@ use WP_REST_Response;
  * answers a handset: it answers a *browser*, mid-redirect, and every
  * outcome is a redirect carrying a code or a reason. Getting one of those
  * wrong is a member staring at a tab that went nowhere.
- *
- * @covers \Fellowship\Rest\DeviceAuthController
- * @covers \Fellowship\Rest\MessageController
  */
+#[CoversClass(\Fellowship\Rest\DeviceAuthController::class)]
+#[CoversClass(\Fellowship\Rest\MessageController::class)]
 final class ControllerRoutesTest extends TestCase
 {
     private const MEMBER = 'member@example.org';
@@ -78,13 +78,13 @@ final class ControllerRoutesTest extends TestCase
     {
         parent::setUp();
 
-        Functions\when('is_ssl')->justReturn(true);
-        Functions\when('rest_url')->alias(
+        when('is_ssl')->justReturn(true);
+        when('rest_url')->alias(
             static fn(string $p = ''): string => 'https://aa-bristol.org/wp-json/' . ltrim($p, '/')
         );
 
         $this->routes = [];
-        Functions\when('register_rest_route')->alias(
+        when('register_rest_route')->alias(
             function (string $namespace, string $route, array $args = []): bool {
                 $this->routes[] = ['namespace' => $namespace, 'route' => $route];
 
