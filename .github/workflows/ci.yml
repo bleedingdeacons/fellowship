@@ -77,7 +77,7 @@ jobs:
         with:
           php-version: ${{ matrix.php }}
           # zip: build.php assembles the release archive with ZipArchive.
-          extensions: mbstring, intl, json, zip
+          extensions: mbstring, intl, json, zip, openssl, zlib
           tools: composer:v2
           # pcov drives PHPUnit's line coverage for the Coveralls upload
           # below. Much faster than xdebug for coverage-only runs.
@@ -370,7 +370,7 @@ jobs:
         with:
           php-version: '8.4'
           # zip: build.php assembles the release archive with ZipArchive.
-          extensions: mbstring, intl, json, zip
+          extensions: mbstring, intl, json, zip, openssl, zlib
           tools: composer:v2
           # No coverage driver: this job builds, it does not test.
           coverage: none
