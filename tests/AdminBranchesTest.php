@@ -4,10 +4,8 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
-use PHPUnit\Framework\Attributes\CoversClass;
 use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\Doubles\FakeWpHttp;
-use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Admin\ComposePage;
 use Fellowship\Admin\DevicesPage;
@@ -51,409 +49,366 @@ use Unity\Testing\Doubles\MemberStub;
  * their handsets was told" is the honest claim — see Recipient::$pushedAt
  * on why it is not called delivery.
  */
-#[CoversClass(\Fellowship\Admin\SettingsPage::class)]
-#[CoversClass(\Fellowship\Admin\DevicesPage::class)]
-#[CoversClass(\Fellowship\Admin\ComposePage::class)]
-#[CoversClass(\Fellowship\Messaging\MessageDispatcher::class)]
-final class AdminBranchesTest extends TestCase
+
+covers(\Fellowship\Admin\SettingsPage::class, \Fellowship\Admin\DevicesPage::class, \Fellowship\Admin\ComposePage::class, \Fellowship\Messaging\MessageDispatcher::class);
+
+const ADMIN_BRANCHES_MEMBER = 'member@example.org';
+
+beforeEach(function () {
+    $_POST = [];
+    $_GET = [];
+    WpState::$userCan = true;
+    FakeWpHttp::reset();
+
+    when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
+    when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+    when('get_current_user_id')->justReturn(3);
+    when('submit_button')->justReturn(null);
+    when('paginate_links')->justReturn('');
+    when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
+    when('wp_generate_uuid4')->alias(static fn(): string => '1111-' . random_int(1, 999999999));
+
+    $this->devices = new InMemoryDeviceRepository();
+    $this->messages = new InMemoryMessageRepository();
+    $this->recipients = new InMemoryRecipientRepository();
+    $this->audit = new SpyAuditLogger();
+
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: ADMIN_BRANCHES_MEMBER),
+    ]);
+});
+
+// ── The settings screen ───────────────────────────────────────────
+
+test('a stored service account is named by its project', function () {
+    // Which is how somebody checks they pasted the right one in,
+    // without the screen ever showing the credential back.
+    $settings = new Settings();
+    $settings->setFcmServiceAccount(adminBranchesAccountJson());
+
+    $markup = captureOutput(fn() => (new SettingsPage($settings))->render());
+
+    expect($markup)->toContain('intergroup-fellowship');
+});
+
+test('a service account that will not parse is said to be broken', function () {
+    // A row that is present but unreadable pushes nothing, and looks
+    // identical to a working one from the options table.
+    $settings = new Settings();
+    $settings->setFcmServiceAccount('{"project_id":"x"}');
+
+    $markup = captureOutput(fn() => (new SettingsPage($settings))->render());
+
+    expect($markup)->toContain('could not be read');
+});
+
+test('the screen says when a secret is stored without showing it', function () {
+    $settings = new Settings();
+    $settings->setClientSecret('google', 'a-client-secret');
+
+    $markup = captureOutput(fn() => (new SettingsPage($settings))->render());
+
+    expect($markup)->toContain('A secret is stored');
+    expect($markup)->not->toContain('a-client-secret');
+});
+
+test('a service account can be cleared outright', function () {
+    // Not the same as leaving the field blank, which keeps what is
+    // stored. There has to be a way to take one off a site.
+    $settings = new Settings();
+    $settings->setFcmServiceAccount(adminBranchesAccountJson());
+
+    $_POST['clear_fcm'] = '1';
+
+    expect((new SettingsPage($settings))->saveFromRequest())->toBe('saved');
+    expect($settings->getFcmServiceAccount())->toBe('');
+});
+
+test('a service account that will not parse is refused rather than stored', function () {
+    // The moment to find out is now, not at the first message.
+    $settings = new Settings();
+
+    $_POST['fcm_service_account'] = '{"project_id":"x"}';
+
+    expect((new SettingsPage($settings))->saveFromRequest())->toBe('bad_service_account');
+    expect($settings->getFcmServiceAccount())->toBe('');
+});
+
+test('a pasted service account survives the slashes WordPress adds', function () {
+    // Every other test on this handler sets $_POST unslashed, and that
+    // is not how a request arrives. WordPress runs wp_magic_quotes()
+    // over $_POST, so a pasted service account reaches the handler with
+    // every quote and every escape backslashed. Without wp_unslash()
+    // json_decode refuses it, and the screen tells somebody a perfectly
+    // valid file is not a service account -- meaning no correct one can
+    // be saved on any site at all. That shipped, and the tests stayed
+    // green throughout, because they all set $_POST by hand.
+    //
+    // So setting it the way the runtime really does is the entire point
+    // here. Do not 'tidy' the addslashes away.
+    $settings = new Settings();
+    $json = adminBranchesAccountJson();
+
+    $_POST['fcm_service_account'] = addslashes($json);
+
+    expect((new SettingsPage($settings))->saveFromRequest())->toBe('saved');
+    expect($settings->getFcmServiceAccount())->toBe($json);
+});
+
+test('a client secret survives the slashes WordPress adds', function () {
+    // The same omission sat on every field here and only the service
+    // account showed it, because ids and secrets are usually
+    // alphanumeric and addslashes leaves them alone. A secret holding a
+    // quote would have been stored corrupted and silently failed to
+    // authenticate, which is worse than being refused.
+    $settings = new Settings();
+    $secret = 'a"secret\with-both';
+
+    $_POST['google_client_secret'] = addslashes($secret);
+
+    expect((new SettingsPage($settings))->saveFromRequest())->toBe('saved');
+    expect($settings->getClientSecret('google'))->toBe($secret);
+});
+
+// ── The device list ───────────────────────────────────────────────
+
+test('a revoked handset is shown as revoked rather than hidden', function () {
+    // The row stays so somebody can see what happened and when.
+    adminBranchesEnrol();
+    $this->devices->revoke(1, 1788000100);
+
+    expect(captureOutput(fn() => adminBranchesDevicesPage()->render()))->toContain('Revoked');
+});
+
+test('a handset that cannot read its messages is flagged loudly', function () {
+    // Enrolled, looks healthy, and cannot read a word it is sent.
+    // The only place that is visible is this screen.
+    adminBranchesEnrol();
+    $this->devices->markKeyFault(1, 1788000100);
+
+    expect(captureOutput(fn() => adminBranchesDevicesPage()->render()))->toContain('Cannot read messages');
+});
+
+test('a device whose member has gone says so rather than showing a blank', function () {
+    // It means a handset that will fail its next request, and
+    // somebody may want to remove the row.
+    adminBranchesEnrol();
+    $this->members = new InMemoryMemberRepository([]);
+
+    expect(captureOutput(fn() => adminBranchesDevicesPage()->render()))->toContain('no member record');
+});
+
+test('a member with no anonymous name is named as such', function () {
+    adminBranchesEnrol();
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: '', personalEmail: ADMIN_BRANCHES_MEMBER),
+    ]);
+
+    expect(captureOutput(fn() => adminBranchesDevicesPage()->render()))->toContain('unnamed member');
+});
+
+test('a member is found by address when the device carries no id', function () {
+    // Device rows predating the id column carry only the address,
+    // and they still belong to somebody.
+    $this->devices->create('hash-1', ADMIN_BRANCHES_MEMBER, 0, 'Pixel 6a', 'android', 'spki', 'fcm', 'token-1', 1788000000);
+
+    expect(captureOutput(fn() => adminBranchesDevicesPage()->render()))->toContain('Dave P');
+});
+
+// ── The compose screen ────────────────────────────────────────────
+
+test('every committee is offered as an audience', function () {
+    $markup = captureOutput(fn() => adminBranchesComposePage([
+        new CommitteeStub(id: 2, slug: 'steering', name: 'Steering'),
+        new CommitteeStub(id: 3, slug: 'archives', name: 'Archives'),
+    ])->render());
+
+    expect($markup)->toContain('steering');
+    expect($markup)->toContain('Archives');
+});
+
+test('a failure with no stored reason still says something', function () {
+    // The transient is read once and deleted, so a refresh finds
+    // nothing — and a bare "error" with no words is worse than a
+    // generic sentence.
+    $_GET['fellowship_result'] = 'error';
+
+    expect(captureOutput(fn() => adminBranchesComposePage()->render()))->toContain('could not be sent');
+});
+
+// ── The fan-out ───────────────────────────────────────────────────
+
+test('a member with a handset is marked as pushed to', function () {
+    $settings = new Settings();
+    $settings->setFcmServiceAccount(adminBranchesAccountJson());
+
+    adminBranchesEnrol(adminBranchesPublicKey());
+
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(200, '{}');
+
+    $message = adminBranchesDispatch($settings);
+
+    $recipients = $this->recipients->forMessage($message);
+
+    expect($recipients)->toHaveCount(1);
+    expect($recipients[0]->pushedAt)->not->toBeNull();
+});
+
+test('a member with no handset is still a recipient', function () {
+    // They will read it when they enrol. A recipient row that is
+    // never written is a message they can never see.
+    $settings = new Settings();
+    $settings->setFcmServiceAccount(adminBranchesAccountJson());
+
+    $message = adminBranchesDispatch($settings);
+
+    $recipients = $this->recipients->forMessage($message);
+
+    expect($recipients)->toHaveCount(1);
+    expect($recipients[0]->pushedAt)->toBeNull();
+});
+
+test('a push that fails leaves the recipient unpushed', function () {
+    // Not an error: the handset collects it on its next poll, and
+    // claiming it was pushed would make the log say something untrue.
+    $settings = new Settings();
+    $settings->setFcmServiceAccount(adminBranchesAccountJson());
+
+    adminBranchesEnrol(adminBranchesPublicKey());
+
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(404, '{"error":{"status":"NOT_FOUND"}}');
+
+    $message = adminBranchesDispatch($settings);
+
+    expect($this->recipients->forMessage($message)[0]->pushedAt)->toBeNull();
+});
+
+// ── Fixtures ──────────────────────────────────────────────────────
+
+function adminBranchesDispatch(Settings $settings): int
 {
-    private const MEMBER = 'member@example.org';
-
-    private InMemoryDeviceRepository $devices;
-    private InMemoryMessageRepository $messages;
-    private InMemoryRecipientRepository $recipients;
-    private InMemoryMemberRepository $members;
-    private SpyAuditLogger $audit;
-
-    protected function setUp(): void
-    {
-        parent::setUp();
-
-        $_POST = [];
-        $_GET = [];
-        WpState::$userCan = true;
-        FakeWpHttp::reset();
-
-        when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
-        when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
-        when('get_current_user_id')->justReturn(3);
-        when('submit_button')->justReturn(null);
-        when('paginate_links')->justReturn('');
-        when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
-        when('wp_generate_uuid4')->alias(static fn(): string => '1111-' . random_int(1, 999999999));
-
-        $this->devices = new InMemoryDeviceRepository();
-        $this->messages = new InMemoryMessageRepository();
-        $this->recipients = new InMemoryRecipientRepository();
-        $this->audit = new SpyAuditLogger();
-
-        $this->members = new InMemoryMemberRepository([
-            new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: self::MEMBER),
-        ]);
-    }
-
-    // ── The settings screen ───────────────────────────────────────────
-
-    public function testAStoredServiceAccountIsNamedByItsProject(): void
-    {
-        // Which is how somebody checks they pasted the right one in,
-        // without the screen ever showing the credential back.
-        $settings = new Settings();
-        $settings->setFcmServiceAccount($this->accountJson());
-
-        $markup = $this->render(fn() => (new SettingsPage($settings))->render());
-
-        self::assertStringContainsString('intergroup-fellowship', $markup);
-    }
-
-    public function testAServiceAccountThatWillNotParseIsSaidToBeBroken(): void
-    {
-        // A row that is present but unreadable pushes nothing, and looks
-        // identical to a working one from the options table.
-        $settings = new Settings();
-        $settings->setFcmServiceAccount('{"project_id":"x"}');
-
-        $markup = $this->render(fn() => (new SettingsPage($settings))->render());
-
-        self::assertStringContainsString('could not be read', $markup);
-    }
-
-    public function testTheScreenSaysWhenASecretIsStoredWithoutShowingIt(): void
-    {
-        $settings = new Settings();
-        $settings->setClientSecret('google', 'a-client-secret');
-
-        $markup = $this->render(fn() => (new SettingsPage($settings))->render());
-
-        self::assertStringContainsString('A secret is stored', $markup);
-        self::assertStringNotContainsString('a-client-secret', $markup);
-    }
-
-    public function testAServiceAccountCanBeClearedOutright(): void
-    {
-        // Not the same as leaving the field blank, which keeps what is
-        // stored. There has to be a way to take one off a site.
-        $settings = new Settings();
-        $settings->setFcmServiceAccount($this->accountJson());
-
-        $_POST['clear_fcm'] = '1';
-
-        self::assertSame('saved', (new SettingsPage($settings))->saveFromRequest());
-        self::assertSame('', $settings->getFcmServiceAccount());
-    }
-
-    public function testAServiceAccountThatWillNotParseIsRefusedRatherThanStored(): void
-    {
-        // The moment to find out is now, not at the first message.
-        $settings = new Settings();
-
-        $_POST['fcm_service_account'] = '{"project_id":"x"}';
-
-        self::assertSame('bad_service_account', (new SettingsPage($settings))->saveFromRequest());
-        self::assertSame('', $settings->getFcmServiceAccount());
-    }
-
-    public function testAPastedServiceAccountSurvivesTheSlashesWordPressAdds(): void
-    {
-        // Every other test on this handler sets $_POST unslashed, and that
-        // is not how a request arrives. WordPress runs wp_magic_quotes()
-        // over $_POST, so a pasted service account reaches the handler with
-        // every quote and every escape backslashed. Without wp_unslash()
-        // json_decode refuses it, and the screen tells somebody a perfectly
-        // valid file is not a service account -- meaning no correct one can
-        // be saved on any site at all. That shipped, and the tests stayed
-        // green throughout, because they all set $_POST by hand.
-        //
-        // So setting it the way the runtime really does is the entire point
-        // here. Do not 'tidy' the addslashes away.
-        $settings = new Settings();
-        $json = $this->accountJson();
-
-        $_POST['fcm_service_account'] = addslashes($json);
-
-        self::assertSame('saved', (new SettingsPage($settings))->saveFromRequest());
-        self::assertSame($json, $settings->getFcmServiceAccount());
-    }
-
-    public function testAClientSecretSurvivesTheSlashesWordPressAdds(): void
-    {
-        // The same omission sat on every field here and only the service
-        // account showed it, because ids and secrets are usually
-        // alphanumeric and addslashes leaves them alone. A secret holding a
-        // quote would have been stored corrupted and silently failed to
-        // authenticate, which is worse than being refused.
-        $settings = new Settings();
-        $secret = 'a"secret\with-both';
-
-        $_POST['google_client_secret'] = addslashes($secret);
-
-        self::assertSame('saved', (new SettingsPage($settings))->saveFromRequest());
-        self::assertSame($secret, $settings->getClientSecret('google'));
-    }
-
-    // ── The device list ───────────────────────────────────────────────
-
-    public function testARevokedHandsetIsShownAsRevokedRatherThanHidden(): void
-    {
-        // The row stays so somebody can see what happened and when.
-        $this->enrol();
-        $this->devices->revoke(1, 1788000100);
-
-        self::assertStringContainsString('Revoked', $this->render(fn() => $this->devicesPage()->render()));
-    }
-
-    public function testAHandsetThatCannotReadItsMessagesIsFlaggedLoudly(): void
-    {
-        // Enrolled, looks healthy, and cannot read a word it is sent.
-        // The only place that is visible is this screen.
-        $this->enrol();
-        $this->devices->markKeyFault(1, 1788000100);
-
-        self::assertStringContainsString('Cannot read messages', $this->render(fn() => $this->devicesPage()->render()));
-    }
-
-    public function testADeviceWhoseMemberHasGoneSaysSoRatherThanShowingABlank(): void
-    {
-        // It means a handset that will fail its next request, and
-        // somebody may want to remove the row.
-        $this->enrol();
-        $this->members = new InMemoryMemberRepository([]);
-
-        self::assertStringContainsString('no member record', $this->render(fn() => $this->devicesPage()->render()));
-    }
-
-    public function testAMemberWithNoAnonymousNameIsNamedAsSuch(): void
-    {
-        $this->enrol();
-        $this->members = new InMemoryMemberRepository([
-            new MemberStub(id: 7, anonymousName: '', personalEmail: self::MEMBER),
-        ]);
-
-        self::assertStringContainsString('unnamed member', $this->render(fn() => $this->devicesPage()->render()));
-    }
-
-    public function testAMemberIsFoundByAddressWhenTheDeviceCarriesNoId(): void
-    {
-        // Device rows predating the id column carry only the address,
-        // and they still belong to somebody.
-        $this->devices->create('hash-1', self::MEMBER, 0, 'Pixel 6a', 'android', 'spki', 'fcm', 'token-1', 1788000000);
-
-        self::assertStringContainsString('Dave P', $this->render(fn() => $this->devicesPage()->render()));
-    }
-
-    // ── The compose screen ────────────────────────────────────────────
-
-    public function testEveryCommitteeIsOfferedAsAnAudience(): void
-    {
-        $markup = $this->render(fn() => $this->composePage([
-            new CommitteeStub(id: 2, slug: 'steering', name: 'Steering'),
-            new CommitteeStub(id: 3, slug: 'archives', name: 'Archives'),
-        ])->render());
-
-        self::assertStringContainsString('steering', $markup);
-        self::assertStringContainsString('Archives', $markup);
-    }
-
-    public function testAFailureWithNoStoredReasonStillSaysSomething(): void
-    {
-        // The transient is read once and deleted, so a refresh finds
-        // nothing — and a bare "error" with no words is worse than a
-        // generic sentence.
-        $_GET['fellowship_result'] = 'error';
-
-        self::assertStringContainsString('could not be sent', $this->render(fn() => $this->composePage()->render()));
-    }
-
-    // ── The fan-out ───────────────────────────────────────────────────
-
-    public function testAMemberWithAHandsetIsMarkedAsPushedTo(): void
-    {
-        $settings = new Settings();
-        $settings->setFcmServiceAccount($this->accountJson());
-
-        $this->enrol($this->publicKey());
-
-        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-        FakeWpHttp::pushResponse(200, '{}');
-
-        $message = $this->dispatch($settings);
-
-        $recipients = $this->recipients->forMessage($message);
-
-        self::assertCount(1, $recipients);
-        self::assertNotNull($recipients[0]->pushedAt);
-    }
-
-    public function testAMemberWithNoHandsetIsStillARecipient(): void
-    {
-        // They will read it when they enrol. A recipient row that is
-        // never written is a message they can never see.
-        $settings = new Settings();
-        $settings->setFcmServiceAccount($this->accountJson());
-
-        $message = $this->dispatch($settings);
-
-        $recipients = $this->recipients->forMessage($message);
-
-        self::assertCount(1, $recipients);
-        self::assertNull($recipients[0]->pushedAt);
-    }
-
-    public function testAPushThatFailsLeavesTheRecipientUnpushed(): void
-    {
-        // Not an error: the handset collects it on its next poll, and
-        // claiming it was pushed would make the log say something untrue.
-        $settings = new Settings();
-        $settings->setFcmServiceAccount($this->accountJson());
-
-        $this->enrol($this->publicKey());
-
-        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-        FakeWpHttp::pushResponse(404, '{"error":{"status":"NOT_FOUND"}}');
-
-        $message = $this->dispatch($settings);
-
-        self::assertNull($this->recipients->forMessage($message)[0]->pushedAt);
-    }
-
-    // ── Fixtures ──────────────────────────────────────────────────────
-
-    private function dispatch(Settings $settings): int
-    {
-        $request = MessageRequest::fromArray([
-            'subject' => 'Intergroup moved',
-            'body' => 'Now the 14th.',
-            'member_emails' => [self::MEMBER],
-        ]);
-
-        self::assertInstanceOf(MessageRequest::class, $request);
-
-        $dispatcher = new MessageDispatcher(
-            $this->messages,
-            $this->recipients,
-            $this->devices,
-            new FcmTransport(new FcmClient(), $settings, new MessageSealer()),
-        );
-
-        return $dispatcher->dispatch(
-            $request,
-            [['email' => self::MEMBER, 'member_id' => 7]],
-            '',
-            0,
-            'Intergroup',
-        )->id;
-    }
-
-    private function render(callable $screen): string
-    {
-        ob_start();
-
-        try {
-            $screen();
-        } finally {
-            $markup = (string) ob_get_clean();
-        }
-
-        return $markup;
-    }
-
-    private function devicesPage(): DevicesPage
-    {
-        $gate = new MemberGate($this->members);
-
-        return new DevicesPage(
-            $this->devices,
-            $this->members,
-            $this->audit,
-            new PasswordAuthenticator(
-                new InMemoryPasswordCredentialRepository(),
-                $gate,
-                new PasswordResetMailer(),
-                new PasswordPolicy(),
-            ),
+    $request = MessageRequest::fromArray([
+        'subject' => 'Intergroup moved',
+        'body' => 'Now the 14th.',
+        'member_emails' => [ADMIN_BRANCHES_MEMBER],
+    ]);
+
+    expect($request)->toBeInstanceOf(MessageRequest::class);
+
+    $dispatcher = new MessageDispatcher(
+        test()->messages,
+        test()->recipients,
+        test()->devices,
+        new FcmTransport(new FcmClient(), $settings, new MessageSealer()),
+    );
+
+    return $dispatcher->dispatch(
+        $request,
+        [['email' => ADMIN_BRANCHES_MEMBER, 'member_id' => 7]],
+        '',
+        0,
+        'Intergroup',
+    )->id;
+}
+
+function adminBranchesDevicesPage(): DevicesPage
+{
+    $gate = new MemberGate(test()->members);
+
+    return new DevicesPage(
+        test()->devices,
+        test()->members,
+        test()->audit,
+        new PasswordAuthenticator(
+            new InMemoryPasswordCredentialRepository(),
             $gate,
-        );
-    }
+            new PasswordResetMailer(),
+            new PasswordPolicy(),
+        ),
+        $gate,
+    );
+}
 
-    /** @param list<CommitteeStub> $committees */
-    private function composePage(array $committees = []): ComposePage
-    {
-        $gate = new MemberGate($this->members);
-        $settings = new Settings();
+/** @param list<CommitteeStub> $committees */
+function adminBranchesComposePage(array $committees = []): ComposePage
+{
+    $gate = new MemberGate(test()->members);
+    $settings = new Settings();
 
-        return new ComposePage(
-            new MessageApi(
-                new MessageDispatcher(
-                    $this->messages,
-                    $this->recipients,
-                    $this->devices,
-                    new FcmTransport(new FcmClient(), $settings, new MessageSealer()),
-                ),
-                new RecipientResolver($this->members, new InMemoryCommitteeRepository($committees), $gate),
-                $this->audit,
+    return new ComposePage(
+        new MessageApi(
+            new MessageDispatcher(
+                test()->messages,
+                test()->recipients,
+                test()->devices,
+                new FcmTransport(new FcmClient(), $settings, new MessageSealer()),
             ),
-            new InMemoryCommitteeRepository($committees),
-        );
-    }
+            new RecipientResolver(test()->members, new InMemoryCommitteeRepository($committees), $gate),
+            test()->audit,
+        ),
+        new InMemoryCommitteeRepository($committees),
+    );
+}
 
-    private function enrol(string $publicKey = 'spki'): void
-    {
-        $this->devices->create(
-            'hash-1',
-            self::MEMBER,
-            7,
-            'Pixel 6a',
-            'android',
-            $publicKey,
-            'fcm',
-            'token-1',
-            1788000000,
-        );
-    }
+function adminBranchesEnrol(string $publicKey = 'spki'): void
+{
+    test()->devices->create(
+        'hash-1',
+        ADMIN_BRANCHES_MEMBER,
+        7,
+        'Pixel 6a',
+        'android',
+        $publicKey,
+        'fcm',
+        'token-1',
+        1788000000,
+    );
+}
 
-    private function accountJson(): string
-    {
-        // Signed with a keypair generated for this run. A fake key would
-        // make every push stop before the first HTTP call, so the fan-out
-        // below would assert nothing at all.
-        return (string) wp_json_encode([
-            'type' => 'service_account',
-            'project_id' => 'intergroup-fellowship',
-            'client_email' => 'pusher@intergroup-fellowship.iam.gserviceaccount.com',
-            'private_key' => self::privateKey(),
-            'token_uri' => 'https://oauth2.googleapis.com/token',
+function adminBranchesAccountJson(): string
+{
+    // Signed with a keypair generated for this run. A fake key would
+    // make every push stop before the first HTTP call, so the fan-out
+    // below would assert nothing at all.
+    return (string) wp_json_encode([
+        'type' => 'service_account',
+        'project_id' => 'intergroup-fellowship',
+        'client_email' => 'pusher@intergroup-fellowship.iam.gserviceaccount.com',
+        'private_key' => adminBranchesPrivateKey(),
+        'token_uri' => 'https://oauth2.googleapis.com/token',
+    ]);
+}
+
+function adminBranchesPrivateKey(): string
+{
+    static $pem = null;
+
+    if ($pem === null) {
+        $resource = openssl_pkey_new([
+            'private_key_bits' => 2048,
+            'private_key_type' => OPENSSL_KEYTYPE_RSA,
         ]);
-    }
 
-    private static function privateKey(): string
-    {
-        static $pem = null;
-
-        if ($pem === null) {
-            $resource = openssl_pkey_new([
-                'private_key_bits' => 2048,
-                'private_key_type' => OPENSSL_KEYTYPE_RSA,
-            ]);
-
-            if ($resource === false) {
-                self::markTestSkipped('OpenSSL could not generate a keypair. Set OPENSSL_CONF.');
-            }
-
-            openssl_pkey_export($resource, $exported);
-            $pem = (string) $exported;
+        if ($resource === false) {
+            test()->markTestSkipped('OpenSSL could not generate a keypair. Set OPENSSL_CONF.');
         }
 
-        return $pem;
+        openssl_pkey_export($resource, $exported);
+        $pem = (string) $exported;
     }
 
-    private function publicKey(): string
-    {
-        $resource = openssl_pkey_get_private(self::privateKey());
-        self::assertNotFalse($resource);
+    return $pem;
+}
 
-        $details = openssl_pkey_get_details($resource);
-        self::assertIsArray($details);
+function adminBranchesPublicKey(): string
+{
+    $resource = openssl_pkey_get_private(adminBranchesPrivateKey());
+    expect($resource)->not->toBeFalse();
 
-        return preg_replace('/\s+|-----[^-]*-----/', '', (string) $details['key']) ?? '';
-    }
+    $details = openssl_pkey_get_details($resource);
+    expect($details)->toBeArray();
+
+    return preg_replace('/\s+|-----[^-]*-----/', '', (string) $details['key']) ?? '';
 }

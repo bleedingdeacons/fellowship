@@ -4,10 +4,8 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
-use PHPUnit\Framework\Attributes\CoversClass;
 use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\Exceptions\WpDieException;
-use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Admin\DevicesPage;
 use Fellowship\Auth\PasswordAuthenticator;
@@ -38,180 +36,158 @@ use Unity\Testing\Doubles\MemberStub;
  * nothing — and not saying would leave them watching for a mail that was
  * never going to arrive.
  */
-#[CoversClass(\Fellowship\Admin\DevicesPage::class)]
-final class AdminPasswordCodeTest extends TestCase
+
+covers(\Fellowship\Admin\DevicesPage::class);
+
+const ADMIN_PASSWORD_CODE_MEMBER = 'member@example.org';
+
+beforeEach(function () {
+    $_POST = [];
+
+    when('get_current_user_id')->justReturn(3);
+    when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
+
+    $this->credentials = new InMemoryPasswordCredentialRepository();
+    $this->mailer = new PasswordResetMailer();
+    $this->audit = new SpyAuditLogger();
+
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: ADMIN_PASSWORD_CODE_MEMBER),
+    ]);
+});
+
+test('a member is sent a code', function () {
+    WpState::$userCan = true;
+    $_POST['member_email'] = ADMIN_PASSWORD_CODE_MEMBER;
+
+    $result = adminPasswordCodePage()->sendResetCodeFromRequest();
+
+    expect($result)->toBe('code_sent');
+
+    // Queued past the response in production; flushed here because
+    // there is no shutdown to wait for.
+    $this->mailer->flush();
+
+    expect(WpState::$mail)->not->toBeEmpty();
+    expect(WpState::$mail[0]['to'])->toBe(ADMIN_PASSWORD_CODE_MEMBER);
+});
+
+test('the code goes to the member and not to the admin', function () {
+    // The property the whole design rests on. An admin who received
+    // the code could finish the flow themselves and enrol a handset
+    // as that member.
+    WpState::$userCan = true;
+    $_POST['member_email'] = ADMIN_PASSWORD_CODE_MEMBER;
+
+    adminPasswordCodePage()->sendResetCodeFromRequest();
+    $this->mailer->flush();
+
+    expect(WpState::$mail)->not->toBeEmpty('Nothing was sent, so the assertion below would prove nothing.');
+
+    foreach (WpState::$mail as $sent) {
+        expect($sent['to'])->toBe(ADMIN_PASSWORD_CODE_MEMBER);
+    }
+});
+
+test('the stored token is a hash and the mail carries the code', function () {
+    // A database dump must not yield a usable code.
+    WpState::$userCan = true;
+    $_POST['member_email'] = ADMIN_PASSWORD_CODE_MEMBER;
+
+    adminPasswordCodePage()->sendResetCodeFromRequest();
+    $this->mailer->flush();
+
+    $stored = $this->credentials->rows[ADMIN_PASSWORD_CODE_MEMBER]->resetTokenHash;
+    $body = (string) WpState::$mail[0]['message'];
+
+    expect(strlen($stored))->toBe(64, 'The stored token must be a SHA-256 hex digest.');
+    expect($body)->not->toContain($stored);
+});
+
+test('an address no member holds is said so plainly', function () {
+    // Deliberately unlike the REST endpoint, which must not reveal
+    // this. See the class docblock.
+    WpState::$userCan = true;
+    $_POST['member_email'] = 'nobody@example.org';
+
+    expect(adminPasswordCodePage()->sendResetCodeFromRequest())->toBe('code_not_a_member');
+    expect($this->credentials->rows)->toBe([]);
+});
+
+test('something that is not an address is refused', function () {
+    WpState::$userCan = true;
+    $_POST['member_email'] = 'not an address';
+
+    expect(adminPasswordCodePage()->sendResetCodeFromRequest())->toBe('code_bad_address');
+});
+
+test('an empty field is refused', function () {
+    WpState::$userCan = true;
+    $_POST['member_email'] = '';
+
+    expect(adminPasswordCodePage()->sendResetCodeFromRequest())->toBe('code_bad_address');
+});
+
+test('the address is matched without regard to case', function () {
+    // Whoever is typing it is reading it off a membership record, not
+    // copying it from the database.
+    WpState::$userCan = true;
+    $_POST['member_email'] = 'Member@Example.ORG';
+
+    expect(adminPasswordCodePage()->sendResetCodeFromRequest())->toBe('code_sent');
+});
+
+test('a second attempt inside the cooldown says so rather than lying', function () {
+    // The reason beginReset now answers a bool. Before it did, this
+    // path returned success and sent nothing — a button somebody
+    // presses four more times.
+    WpState::$userCan = true;
+    $_POST['member_email'] = ADMIN_PASSWORD_CODE_MEMBER;
+
+    expect(adminPasswordCodePage()->sendResetCodeFromRequest())->toBe('code_sent');
+    expect(adminPasswordCodePage()->sendResetCodeFromRequest())->toBe('code_too_soon');
+});
+
+test('sending a code is audited', function () {
+    // An admin acting on a member's ability to sign in is exactly
+    // what the audit log is for.
+    WpState::$userCan = true;
+    $_POST['member_email'] = ADMIN_PASSWORD_CODE_MEMBER;
+
+    adminPasswordCodePage()->sendResetCodeFromRequest();
+
+    expect($this->audit->entries)->not->toBeEmpty();
+});
+
+test('a refused attempt is not audited', function () {
+    // Otherwise the log fills with entries for things that did not
+    // happen, and the ones that did become harder to find.
+    WpState::$userCan = true;
+    $_POST['member_email'] = 'nobody@example.org';
+
+    adminPasswordCodePage()->sendResetCodeFromRequest();
+
+    expect($this->audit->entries)->toBe([]);
+});
+
+test('an admin without the capability is refused', function () {
+    // wp_die() throws under the test doubles, which is what makes the
+    // guard assertable at all — the handler otherwise ends in a
+    // redirect and an exit.
+    WpState::$userCan = false;
+
+    adminPasswordCodePage()->handleSendResetCode();
+})->throws(WpDieException::class);
+
+function adminPasswordCodePage(): DevicesPage
 {
-    private const MEMBER = 'member@example.org';
+    $gate = new MemberGate(test()->members);
 
-    private InMemoryPasswordCredentialRepository $credentials;
-    private PasswordResetMailer $mailer;
-    private SpyAuditLogger $audit;
-    private InMemoryMemberRepository $members;
-
-    protected function setUp(): void
-    {
-        parent::setUp();
-
-        $_POST = [];
-
-        when('get_current_user_id')->justReturn(3);
-        when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
-
-        $this->credentials = new InMemoryPasswordCredentialRepository();
-        $this->mailer = new PasswordResetMailer();
-        $this->audit = new SpyAuditLogger();
-
-        $this->members = new InMemoryMemberRepository([
-            new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: self::MEMBER),
-        ]);
-    }
-
-    public function testAMemberIsSentACode(): void
-    {
-        WpState::$userCan = true;
-        $_POST['member_email'] = self::MEMBER;
-
-        $result = $this->page()->sendResetCodeFromRequest();
-
-        self::assertSame('code_sent', $result);
-
-        // Queued past the response in production; flushed here because
-        // there is no shutdown to wait for.
-        $this->mailer->flush();
-
-        self::assertNotEmpty(WpState::$mail);
-        self::assertSame(self::MEMBER, WpState::$mail[0]['to']);
-    }
-
-    public function testTheCodeGoesToTheMemberAndNotToTheAdmin(): void
-    {
-        // The property the whole design rests on. An admin who received
-        // the code could finish the flow themselves and enrol a handset
-        // as that member.
-        WpState::$userCan = true;
-        $_POST['member_email'] = self::MEMBER;
-
-        $this->page()->sendResetCodeFromRequest();
-        $this->mailer->flush();
-
-        self::assertNotEmpty(WpState::$mail, 'Nothing was sent, so the assertion below would prove nothing.');
-
-        foreach (WpState::$mail as $sent) {
-            self::assertSame(self::MEMBER, $sent['to']);
-        }
-    }
-
-    public function testTheStoredTokenIsAHashAndTheMailCarriesTheCode(): void
-    {
-        // A database dump must not yield a usable code.
-        WpState::$userCan = true;
-        $_POST['member_email'] = self::MEMBER;
-
-        $this->page()->sendResetCodeFromRequest();
-        $this->mailer->flush();
-
-        $stored = $this->credentials->rows[self::MEMBER]->resetTokenHash;
-        $body = (string) WpState::$mail[0]['message'];
-
-        self::assertSame(64, strlen($stored), 'The stored token must be a SHA-256 hex digest.');
-        self::assertStringNotContainsString($stored, $body);
-    }
-
-    public function testAnAddressNoMemberHoldsIsSaidSoPlainly(): void
-    {
-        // Deliberately unlike the REST endpoint, which must not reveal
-        // this. See the class docblock.
-        WpState::$userCan = true;
-        $_POST['member_email'] = 'nobody@example.org';
-
-        self::assertSame('code_not_a_member', $this->page()->sendResetCodeFromRequest());
-        self::assertSame([], $this->credentials->rows);
-    }
-
-    public function testSomethingThatIsNotAnAddressIsRefused(): void
-    {
-        WpState::$userCan = true;
-        $_POST['member_email'] = 'not an address';
-
-        self::assertSame('code_bad_address', $this->page()->sendResetCodeFromRequest());
-    }
-
-    public function testAnEmptyFieldIsRefused(): void
-    {
-        WpState::$userCan = true;
-        $_POST['member_email'] = '';
-
-        self::assertSame('code_bad_address', $this->page()->sendResetCodeFromRequest());
-    }
-
-    public function testTheAddressIsMatchedWithoutRegardToCase(): void
-    {
-        // Whoever is typing it is reading it off a membership record, not
-        // copying it from the database.
-        WpState::$userCan = true;
-        $_POST['member_email'] = 'Member@Example.ORG';
-
-        self::assertSame('code_sent', $this->page()->sendResetCodeFromRequest());
-    }
-
-    public function testAsecondAttemptInsideTheCooldownSaysSoRatherThanLying(): void
-    {
-        // The reason beginReset now answers a bool. Before it did, this
-        // path returned success and sent nothing — a button somebody
-        // presses four more times.
-        WpState::$userCan = true;
-        $_POST['member_email'] = self::MEMBER;
-
-        self::assertSame('code_sent', $this->page()->sendResetCodeFromRequest());
-        self::assertSame('code_too_soon', $this->page()->sendResetCodeFromRequest());
-    }
-
-    public function testSendingACodeIsAudited(): void
-    {
-        // An admin acting on a member's ability to sign in is exactly
-        // what the audit log is for.
-        WpState::$userCan = true;
-        $_POST['member_email'] = self::MEMBER;
-
-        $this->page()->sendResetCodeFromRequest();
-
-        self::assertNotEmpty($this->audit->entries);
-    }
-
-    public function testARefusedAttemptIsNotAudited(): void
-    {
-        // Otherwise the log fills with entries for things that did not
-        // happen, and the ones that did become harder to find.
-        WpState::$userCan = true;
-        $_POST['member_email'] = 'nobody@example.org';
-
-        $this->page()->sendResetCodeFromRequest();
-
-        self::assertSame([], $this->audit->entries);
-    }
-
-    public function testAnAdminWithoutTheCapabilityIsRefused(): void
-    {
-        // wp_die() throws under the test doubles, which is what makes the
-        // guard assertable at all — the handler otherwise ends in a
-        // redirect and an exit.
-        WpState::$userCan = false;
-
-        $this->expectException(WpDieException::class);
-
-        $this->page()->handleSendResetCode();
-    }
-
-    private function page(): DevicesPage
-    {
-        $gate = new MemberGate($this->members);
-
-        return new DevicesPage(
-            new InMemoryDeviceRepository(),
-            $this->members,
-            $this->audit,
-            new PasswordAuthenticator($this->credentials, $gate, $this->mailer, new PasswordPolicy()),
-            $gate,
-        );
-    }
+    return new DevicesPage(
+        new InMemoryDeviceRepository(),
+        test()->members,
+        test()->audit,
+        new PasswordAuthenticator(test()->credentials, $gate, test()->mailer, new PasswordPolicy()),
+        $gate,
+    );
 }

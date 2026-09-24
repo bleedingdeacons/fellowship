@@ -33,12 +33,15 @@
     },
     "config": {
         "optimize-autoloader": true,
-        "sort-packages": true
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
     },
     "scripts": {
-        "test": "phpunit",
-        "test:unit": "phpunit --testsuite=Unit",
-        "test:coverage": "phpunit --coverage-html ./tests/coverage",
+        "test": "pest",
+        "test:unit": "pest --testsuite=Unit",
+        "test:coverage": "pest --coverage-html ./tests/coverage",
         "build": "php build.php build:production",
         "build:production": "php build.php build:production",
         "build:dev": "php build.php build:dev",
@@ -50,6 +53,7 @@
     "require-dev": {
         "bleedingdeacons/wp-mocks": "^3.0",
         "mockery/mockery": "^1.6",
+        "pestphp/pest": "^5.2",
         "phpstan/phpstan": "^2.0",
         "phpunit/phpunit": "^13.0",
         "psr/container": "^2.0",

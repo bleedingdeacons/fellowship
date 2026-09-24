@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
-use PHPUnit\Framework\Attributes\CoversClass;
 use function Brain\Monkey\Functions\when;
-use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Auth\DeviceCodeStore;
 use Fellowship\Auth\DeviceRedirectValidator;
@@ -43,289 +41,269 @@ use WP_REST_Response;
  * code stays usable and the member can try a different password without
  * asking for another email. A 400 would suggest the link was the problem.
  */
-#[CoversClass(\Fellowship\Rest\DeviceAuthController::class)]
-final class PasswordFlowRestTest extends TestCase
+
+covers(\Fellowship\Rest\DeviceAuthController::class);
+
+const PASSWORD_FLOW_REST_MEMBER = 'member@example.org';
+
+beforeEach(function () {
+    when('is_ssl')->justReturn(true);
+    when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+
+    $this->credentials = new InMemoryPasswordCredentialRepository();
+    $this->devices = new InMemoryDeviceRepository();
+    $this->mailer = new PasswordResetMailer();
+    $this->audit = new SpyAuditLogger();
+    $this->minter = new DeviceTokenMinter();
+
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: PASSWORD_FLOW_REST_MEMBER),
+    ]);
+});
+
+test('a code can be used to set a password', function () {
+    $code = requestCode();
+
+    $response = passwordFlowRestController()->completePassword(passwordFlowRestRequest([
+        'token' => $code,
+        'password' => 'correct horse battery staple',
+    ]));
+
+    expect($response)->toBeInstanceOf(WP_REST_Response::class);
+    expect(((array) $response->get_data())['ok'])->toBeTrue();
+});
+
+test('setting a password answers no session', function () {
+    // Setting one and using one are separate acts, which is what
+    // stops a code that reached the wrong handset from enrolling it.
+    $code = requestCode();
+
+    $response = passwordFlowRestController()->completePassword(passwordFlowRestRequest([
+        'token' => $code,
+        'password' => 'correct horse battery staple',
+    ]));
+
+    expect($response)->toBeInstanceOf(WP_REST_Response::class);
+    expect((array) $response->get_data())->not->toHaveKey('token');
+});
+
+test('setting a password is audited', function () {
+    $code = requestCode();
+
+    passwordFlowRestController()->completePassword(passwordFlowRestRequest([
+        'token' => $code,
+        'password' => 'correct horse battery staple',
+    ]));
+
+    expect($this->audit->entries)->not->toBeEmpty();
+});
+
+test('a weak password is refused and leaves the code usable', function () {
+    // 422, not 400: the code was good, so it stays usable and the
+    // member can try again without asking for another email.
+    $code = requestCode();
+
+    $rejected = passwordFlowRestController()->completePassword(passwordFlowRestRequest([
+        'token' => $code,
+        'password' => 'short',
+    ]));
+
+    expect($rejected)->toBeInstanceOf(WP_Error::class);
+    expect($rejected->get_error_code())->toBe('fellowship_weak_password');
+
+    $accepted = passwordFlowRestController()->completePassword(passwordFlowRestRequest([
+        'token' => $code,
+        'password' => 'correct horse battery staple',
+    ]));
+
+    expect($accepted)->toBeInstanceOf(WP_REST_Response::class);
+});
+
+test('the code is spent once it is used', function () {
+    $code = requestCode();
+
+    passwordFlowRestController()->completePassword(passwordFlowRestRequest([
+        'token' => $code,
+        'password' => 'correct horse battery staple',
+    ]));
+
+    $second = passwordFlowRestController()->completePassword(passwordFlowRestRequest([
+        'token' => $code,
+        'password' => 'a different passphrase entirely',
+    ]));
+
+    expect($second)->toBeInstanceOf(WP_Error::class);
+});
+
+test('the new password then signs in', function () {
+    // The whole point of the flow, asserted end to end.
+    $code = requestCode();
+
+    passwordFlowRestController()->completePassword(passwordFlowRestRequest([
+        'token' => $code,
+        'password' => 'correct horse battery staple',
+    ]));
+
+    $response = passwordFlowRestController()->password(passwordFlowRestRequest([
+        'email' => PASSWORD_FLOW_REST_MEMBER,
+        'password' => 'correct horse battery staple',
+        'public_key' => passwordFlowRestPublicKey(),
+        'platform' => 'android',
+    ]));
+
+    expect($response)->toBeInstanceOf(WP_REST_Response::class);
+    expect($response->get_status())->toBe(201);
+});
+
+// ── Rotating a key ────────────────────────────────────────────────
+
+test('a key that will not load is refused', function () {
+    // Storing it would leave a device that receives nothing and looks
+    // perfectly healthy.
+    //
+    // Carries a credential because rotation needs one since
+    // 2026-09-12 — this is about the key, so it has to get past the
+    // gate in front of it.
+    $token = passwordFlowRestEnrol();
+
+    $response = passwordFlowRestController()->rotateKey(passwordFlowRestRequest(
+        ['public_key' => 'not-a-key'] + passwordFlowRestCredential(),
+        $token,
+    ));
+
+    expect($response)->toBeInstanceOf(WP_Error::class);
+    expect($response->get_error_code())->toBe('fellowship_bad_public_key');
+});
+
+test('rotating a key for a handset that is gone is refused', function () {
+    $token = passwordFlowRestEnrol();
+    $this->devices->revoke(1, time());
+
+    $response = passwordFlowRestController()->rotateKey(passwordFlowRestRequest(
+        ['public_key' => passwordFlowRestPublicKey()] + passwordFlowRestCredential(),
+        $token,
+    ));
+
+    expect($response)->toBeInstanceOf(WP_Error::class);
+});
+
+// ── Fixtures ──────────────────────────────────────────────────────
+
+/**
+ * A working password credential for the member, as the parameters a
+ * request carries.
+ *
+ * @return array{email: string, password: string}
+ */
+function passwordFlowRestCredential(): array
 {
-    private const MEMBER = 'member@example.org';
+    $password = 'correct horse battery staple';
 
-    private InMemoryPasswordCredentialRepository $credentials;
-    private InMemoryDeviceRepository $devices;
-    private InMemoryMemberRepository $members;
-    private PasswordResetMailer $mailer;
-    private SpyAuditLogger $audit;
-    private DeviceTokenMinter $minter;
+    test()->credentials->upsertPasswordHash(
+        PASSWORD_FLOW_REST_MEMBER,
+        (string) password_hash($password, PASSWORD_DEFAULT),
+        time(),
+    );
 
-    protected function setUp(): void
-    {
-        parent::setUp();
+    return ['email' => PASSWORD_FLOW_REST_MEMBER, 'password' => $password];
+}
 
-        when('is_ssl')->justReturn(true);
-        when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+/** Ask for a code and read it back out of the email. */
+function requestCode(): string
+{
+    $response = passwordFlowRestController()->requestPassword(passwordFlowRestRequest(['email' => PASSWORD_FLOW_REST_MEMBER]));
 
-        $this->credentials = new InMemoryPasswordCredentialRepository();
-        $this->devices = new InMemoryDeviceRepository();
-        $this->mailer = new PasswordResetMailer();
-        $this->audit = new SpyAuditLogger();
-        $this->minter = new DeviceTokenMinter();
+    expect($response)->toBeInstanceOf(WP_REST_Response::class);
 
-        $this->members = new InMemoryMemberRepository([
-            new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: self::MEMBER),
+    test()->mailer->flush();
+
+    expect(WpState::$mail)->not->toBeEmpty('No code was emailed.');
+
+    $body = (string) (WpState::$mail[count(WpState::$mail) - 1]['message'] ?? '');
+
+    expect(preg_match('~^([A-Za-z0-9_-]{40,})$~m', $body, $matches))->toBe(1);
+
+    return $matches[1];
+}
+
+function passwordFlowRestController(): DeviceAuthController
+{
+    $gate = new MemberGate(test()->members);
+
+    $registry = new ProviderRegistry();
+    $registry->register(new StubProvider('google', serverSide: true));
+
+    return new DeviceAuthController(
+        test()->devices,
+        test()->minter,
+        new DeviceCodeStore(),
+        new DeviceRedirectValidator(),
+        $gate,
+        new CurrentDevice(test()->devices, test()->minter, $gate, test()->members),
+        $registry,
+        new StateStore(),
+        new RateLimiter(),
+        test()->audit,
+        new PasswordAuthenticator(test()->credentials, $gate, test()->mailer, new PasswordPolicy()),
+    );
+}
+
+function passwordFlowRestEnrol(): string
+{
+    $token = test()->minter->mint();
+
+    test()->devices->create(
+        test()->minter->hash($token),
+        PASSWORD_FLOW_REST_MEMBER,
+        7,
+        'Pixel 6a',
+        'android',
+        passwordFlowRestPublicKey(),
+        'fcm',
+        'token-1',
+        1788000000,
+    );
+
+    return $token;
+}
+
+/**
+ * @param array<string, mixed> $params
+ */
+function passwordFlowRestRequest(array $params, string $token = ''): WP_REST_Request
+{
+    $request = new WP_REST_Request();
+
+    foreach ($params as $key => $value) {
+        $request->set_param($key, $value);
+    }
+
+    if ($token !== '') {
+        $request->set_header('authorization', 'Bearer ' . $token);
+    }
+
+    return $request;
+}
+
+function passwordFlowRestPublicKey(): string
+{
+    static $key = null;
+
+    if ($key === null) {
+        $resource = openssl_pkey_new([
+            'private_key_bits' => 2048,
+            'private_key_type' => OPENSSL_KEYTYPE_RSA,
         ]);
-    }
 
-    public function testACodeCanBeUsedToSetAPassword(): void
-    {
-        $code = $this->requestCode();
-
-        $response = $this->controller()->completePassword($this->request([
-            'token' => $code,
-            'password' => 'correct horse battery staple',
-        ]));
-
-        self::assertInstanceOf(WP_REST_Response::class, $response);
-        self::assertTrue(((array) $response->get_data())['ok']);
-    }
-
-    public function testSettingAPasswordAnswersNoSession(): void
-    {
-        // Setting one and using one are separate acts, which is what
-        // stops a code that reached the wrong handset from enrolling it.
-        $code = $this->requestCode();
-
-        $response = $this->controller()->completePassword($this->request([
-            'token' => $code,
-            'password' => 'correct horse battery staple',
-        ]));
-
-        self::assertInstanceOf(WP_REST_Response::class, $response);
-        self::assertArrayNotHasKey('token', (array) $response->get_data());
-    }
-
-    public function testSettingAPasswordIsAudited(): void
-    {
-        $code = $this->requestCode();
-
-        $this->controller()->completePassword($this->request([
-            'token' => $code,
-            'password' => 'correct horse battery staple',
-        ]));
-
-        self::assertNotEmpty($this->audit->entries);
-    }
-
-    public function testAWeakPasswordIsRefusedAndLeavesTheCodeUsable(): void
-    {
-        // 422, not 400: the code was good, so it stays usable and the
-        // member can try again without asking for another email.
-        $code = $this->requestCode();
-
-        $rejected = $this->controller()->completePassword($this->request([
-            'token' => $code,
-            'password' => 'short',
-        ]));
-
-        self::assertInstanceOf(WP_Error::class, $rejected);
-        self::assertSame('fellowship_weak_password', $rejected->get_error_code());
-
-        $accepted = $this->controller()->completePassword($this->request([
-            'token' => $code,
-            'password' => 'correct horse battery staple',
-        ]));
-
-        self::assertInstanceOf(WP_REST_Response::class, $accepted);
-    }
-
-    public function testTheCodeIsSpentOnceItIsUsed(): void
-    {
-        $code = $this->requestCode();
-
-        $this->controller()->completePassword($this->request([
-            'token' => $code,
-            'password' => 'correct horse battery staple',
-        ]));
-
-        $second = $this->controller()->completePassword($this->request([
-            'token' => $code,
-            'password' => 'a different passphrase entirely',
-        ]));
-
-        self::assertInstanceOf(WP_Error::class, $second);
-    }
-
-    public function testTheNewPasswordThenSignsIn(): void
-    {
-        // The whole point of the flow, asserted end to end.
-        $code = $this->requestCode();
-
-        $this->controller()->completePassword($this->request([
-            'token' => $code,
-            'password' => 'correct horse battery staple',
-        ]));
-
-        $response = $this->controller()->password($this->request([
-            'email' => self::MEMBER,
-            'password' => 'correct horse battery staple',
-            'public_key' => $this->publicKey(),
-            'platform' => 'android',
-        ]));
-
-        self::assertInstanceOf(WP_REST_Response::class, $response);
-        self::assertSame(201, $response->get_status());
-    }
-
-    // ── Rotating a key ────────────────────────────────────────────────
-
-    public function testAKeyThatWillNotLoadIsRefused(): void
-    {
-        // Storing it would leave a device that receives nothing and looks
-        // perfectly healthy.
-        //
-        // Carries a credential because rotation needs one since
-        // 2026-09-12 — this is about the key, so it has to get past the
-        // gate in front of it.
-        $token = $this->enrol();
-
-        $response = $this->controller()->rotateKey($this->request(
-            ['public_key' => 'not-a-key'] + $this->credential(),
-            $token,
-        ));
-
-        self::assertInstanceOf(WP_Error::class, $response);
-        self::assertSame('fellowship_bad_public_key', $response->get_error_code());
-    }
-
-    public function testRotatingAKeyForAHandsetThatIsGoneIsRefused(): void
-    {
-        $token = $this->enrol();
-        $this->devices->revoke(1, time());
-
-        self::assertInstanceOf(
-            WP_Error::class,
-            $this->controller()->rotateKey($this->request(
-                ['public_key' => $this->publicKey()] + $this->credential(),
-                $token,
-            )),
-        );
-    }
-
-    // ── Fixtures ──────────────────────────────────────────────────────
-
-    /**
-     * A working password credential for the member, as the parameters a
-     * request carries.
-     *
-     * @return array{email: string, password: string}
-     */
-    private function credential(): array
-    {
-        $password = 'correct horse battery staple';
-
-        $this->credentials->upsertPasswordHash(
-            self::MEMBER,
-            (string) password_hash($password, PASSWORD_DEFAULT),
-            time(),
-        );
-
-        return ['email' => self::MEMBER, 'password' => $password];
-    }
-
-    /** Ask for a code and read it back out of the email. */
-    private function requestCode(): string
-    {
-        $response = $this->controller()->requestPassword($this->request(['email' => self::MEMBER]));
-
-        self::assertInstanceOf(WP_REST_Response::class, $response);
-
-        $this->mailer->flush();
-
-        self::assertNotEmpty(WpState::$mail, 'No code was emailed.');
-
-        $body = (string) (WpState::$mail[count(WpState::$mail) - 1]['message'] ?? '');
-
-        self::assertSame(1, preg_match('~^([A-Za-z0-9_-]{40,})$~m', $body, $matches));
-
-        return $matches[1];
-    }
-
-    private function controller(): DeviceAuthController
-    {
-        $gate = new MemberGate($this->members);
-
-        $registry = new ProviderRegistry();
-        $registry->register(new StubProvider('google', serverSide: true));
-
-        return new DeviceAuthController(
-            $this->devices,
-            $this->minter,
-            new DeviceCodeStore(),
-            new DeviceRedirectValidator(),
-            $gate,
-            new CurrentDevice($this->devices, $this->minter, $gate, $this->members),
-            $registry,
-            new StateStore(),
-            new RateLimiter(),
-            $this->audit,
-            new PasswordAuthenticator($this->credentials, $gate, $this->mailer, new PasswordPolicy()),
-        );
-    }
-
-    private function enrol(): string
-    {
-        $token = $this->minter->mint();
-
-        $this->devices->create(
-            $this->minter->hash($token),
-            self::MEMBER,
-            7,
-            'Pixel 6a',
-            'android',
-            $this->publicKey(),
-            'fcm',
-            'token-1',
-            1788000000,
-        );
-
-        return $token;
-    }
-
-    /**
-     * @param array<string, mixed> $params
-     */
-    private function request(array $params, string $token = ''): WP_REST_Request
-    {
-        $request = new WP_REST_Request();
-
-        foreach ($params as $key => $value) {
-            $request->set_param($key, $value);
+        if ($resource === false) {
+            test()->markTestSkipped('OpenSSL could not generate a keypair. Set OPENSSL_CONF.');
         }
 
-        if ($token !== '') {
-            $request->set_header('authorization', 'Bearer ' . $token);
-        }
+        $details = openssl_pkey_get_details($resource);
+        expect($details)->toBeArray();
 
-        return $request;
+        $key = preg_replace('/\s+|-----[^-]*-----/', '', (string) $details['key']) ?? '';
     }
 
-    private function publicKey(): string
-    {
-        static $key = null;
-
-        if ($key === null) {
-            $resource = openssl_pkey_new([
-                'private_key_bits' => 2048,
-                'private_key_type' => OPENSSL_KEYTYPE_RSA,
-            ]);
-
-            if ($resource === false) {
-                self::markTestSkipped('OpenSSL could not generate a keypair. Set OPENSSL_CONF.');
-            }
-
-            $details = openssl_pkey_get_details($resource);
-            self::assertIsArray($details);
-
-            $key = preg_replace('/\s+|-----[^-]*-----/', '', (string) $details['key']) ?? '';
-        }
-
-        return $key;
-    }
+    return $key;
 }

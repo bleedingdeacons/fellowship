@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
-use PHPUnit\Framework\Attributes\CoversClass;
 use function Brain\Monkey\Functions\when;
-use BleedingDeacons\WpMocks\TestCase;
 use Fellowship\Auth\DeviceCodeStore;
 use Fellowship\Auth\DeviceRedirectValidator;
 use Fellowship\Auth\DeviceTokenMinter;
@@ -45,266 +43,249 @@ use WP_REST_Response;
  * has to count the attempt rather than only the success — otherwise
  * failing is free and only the last guess is charged for.
  */
-#[CoversClass(\Fellowship\Rest\DeviceAuthController::class)]
-final class EnrolmentEdgesTest extends TestCase
-{
-    private const MEMBER = 'member@example.org';
 
-    private InMemoryDeviceRepository $devices;
-    private InMemoryMemberRepository $members;
-    private DeviceCodeStore $codes;
-    private StateStore $states;
-    private DeviceTokenMinter $minter;
+covers(\Fellowship\Rest\DeviceAuthController::class);
 
-    protected function setUp(): void
-    {
-        parent::setUp();
+const ENROLMENT_EDGES_MEMBER = 'member@example.org';
 
-        when('is_ssl')->justReturn(true);
-        when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+beforeEach(function () {
+    when('is_ssl')->justReturn(true);
+    when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
 
-        $_SERVER['REMOTE_ADDR'] = '203.0.113.4';
+    $_SERVER['REMOTE_ADDR'] = '203.0.113.4';
 
-        $this->devices = new InMemoryDeviceRepository();
-        $this->codes = new DeviceCodeStore();
-        $this->states = new StateStore();
-        $this->minter = new DeviceTokenMinter();
+    $this->devices = new InMemoryDeviceRepository();
+    $this->codes = new DeviceCodeStore();
+    $this->states = new StateStore();
+    $this->minter = new DeviceTokenMinter();
 
-        $this->members = new InMemoryMemberRepository([
-            new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: self::MEMBER),
-        ]);
-    }
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: ENROLMENT_EDGES_MEMBER),
+    ]);
+});
 
-    public function testAnExchangeWithNoCredentialAtAllIsRefused(): void
-    {
-        $response = $this->controller()->exchange($this->request([
-            'public_key' => 'spki',
-            'platform' => 'android',
-        ]));
+test('an exchange with no credential at all is refused', function () {
+    $response = enrolmentEdgesController()->exchange(enrolmentEdgesRequest([
+        'public_key' => 'spki',
+        'platform' => 'android',
+    ]));
 
-        self::assertInstanceOf(WP_Error::class, $response);
-        self::assertSame('fellowship_no_credential', $response->get_error_code());
-    }
+    expect($response)->toBeInstanceOf(WP_Error::class);
+    expect($response->get_error_code())->toBe('fellowship_no_credential');
+});
 
-    public function testACodeNobodyIssuedIsRefused(): void
-    {
-        $response = $this->controller()->exchange($this->request([
+test('a code nobody issued is refused', function () {
+    $response = enrolmentEdgesController()->exchange(enrolmentEdgesRequest([
+        'code' => 'never-issued',
+        'public_key' => 'spki',
+        'platform' => 'android',
+    ]));
+
+    expect($response)->toBeInstanceOf(WP_Error::class);
+    expect($response->get_error_code())->toBe('fellowship_bad_code');
+});
+
+test('an id token sent for a browser provider is refused as a wiring mistake', function () {
+    // The app sent an ID token for a flow that does not produce one.
+    // That is a mistake in the app rather than a failed sign-in, and
+    // saying so plainly is what makes it findable.
+    $issued = $this->states->issue('google', '');
+
+    $response = enrolmentEdgesController()->exchange(enrolmentEdgesRequest([
+        'state' => $issued['state'],
+        'id_token' => 'eyJ.header.sig',
+        'public_key' => 'spki',
+        'platform' => 'android',
+    ]));
+
+    expect($response)->toBeInstanceOf(WP_Error::class);
+    expect($response->get_error_code())->toBe('fellowship_wrong_flow');
+});
+
+test('an id token against a spent state is refused', function () {
+    $issued = $this->states->issue('apple', '');
+    $this->states->consume($issued['state']);
+
+    $response = enrolmentEdgesController(new StubProvider('apple', serverSide: false))->exchange(enrolmentEdgesRequest([
+        'state' => $issued['state'],
+        'id_token' => 'eyJ.header.sig',
+        'public_key' => 'spki',
+        'platform' => 'android',
+    ]));
+
+    expect($response)->toBeInstanceOf(WP_Error::class);
+    expect($response->get_error_code())->toBe('fellowship_bad_state');
+});
+
+test('a token the provider will not verify is refused', function () {
+    $failing = new StubProvider('apple', serverSide: false);
+    $failing->identity = null;
+
+    $issued = $this->states->issue('apple', '');
+
+    $response = enrolmentEdgesController($failing)->exchange(enrolmentEdgesRequest([
+        'state' => $issued['state'],
+        'id_token' => 'eyJ.header.sig',
+        'public_key' => 'spki',
+        'platform' => 'android',
+    ]));
+
+    expect($response)->toBeInstanceOf(WP_Error::class);
+    expect($response->get_error_code())->toBe('fellowship_bad_id_token');
+});
+
+test('a client side token enrols when it verifies', function () {
+    // The Apple shape, all the way through.
+    $issued = $this->states->issue('apple', '');
+
+    $response = enrolmentEdgesController(new StubProvider('apple', serverSide: false))->exchange(enrolmentEdgesRequest([
+        'state' => $issued['state'],
+        'id_token' => 'eyJ.header.sig',
+        'public_key' => enrolmentEdgesPublicKey(),
+        'platform' => 'ios',
+    ]));
+
+    expect($response)->toBeInstanceOf(WP_REST_Response::class);
+    expect($response->get_status())->toBe(201);
+});
+
+test('too many attempts from one address are refused', function () {
+    // What stops a script working through addresses to find one the
+    // gate accepts. It counts the attempt rather than the success, so
+    // failing is not free.
+    $controller = enrolmentEdgesController();
+
+    $limited = false;
+
+    for ($i = 0; $i < 40; $i++) {
+        $response = $controller->exchange(enrolmentEdgesRequest([
             'code' => 'never-issued',
             'public_key' => 'spki',
             'platform' => 'android',
         ]));
 
-        self::assertInstanceOf(WP_Error::class, $response);
-        self::assertSame('fellowship_bad_code', $response->get_error_code());
-    }
+        if ($response instanceof WP_Error && $response->get_error_code() === 'fellowship_rate_limited') {
+            $limited = true;
 
-    public function testAnIdTokenSentForABrowserProviderIsRefusedAsAWiringMistake(): void
-    {
-        // The app sent an ID token for a flow that does not produce one.
-        // That is a mistake in the app rather than a failed sign-in, and
-        // saying so plainly is what makes it findable.
-        $issued = $this->states->issue('google', '');
-
-        $response = $this->controller()->exchange($this->request([
-            'state' => $issued['state'],
-            'id_token' => 'eyJ.header.sig',
-            'public_key' => 'spki',
-            'platform' => 'android',
-        ]));
-
-        self::assertInstanceOf(WP_Error::class, $response);
-        self::assertSame('fellowship_wrong_flow', $response->get_error_code());
-    }
-
-    public function testAnIdTokenAgainstASpentStateIsRefused(): void
-    {
-        $issued = $this->states->issue('apple', '');
-        $this->states->consume($issued['state']);
-
-        $response = $this->controller(new StubProvider('apple', serverSide: false))->exchange($this->request([
-            'state' => $issued['state'],
-            'id_token' => 'eyJ.header.sig',
-            'public_key' => 'spki',
-            'platform' => 'android',
-        ]));
-
-        self::assertInstanceOf(WP_Error::class, $response);
-        self::assertSame('fellowship_bad_state', $response->get_error_code());
-    }
-
-    public function testATokenTheProviderWillNotVerifyIsRefused(): void
-    {
-        $failing = new StubProvider('apple', serverSide: false);
-        $failing->identity = null;
-
-        $issued = $this->states->issue('apple', '');
-
-        $response = $this->controller($failing)->exchange($this->request([
-            'state' => $issued['state'],
-            'id_token' => 'eyJ.header.sig',
-            'public_key' => 'spki',
-            'platform' => 'android',
-        ]));
-
-        self::assertInstanceOf(WP_Error::class, $response);
-        self::assertSame('fellowship_bad_id_token', $response->get_error_code());
-    }
-
-    public function testAClientSideTokenEnrolsWhenItVerifies(): void
-    {
-        // The Apple shape, all the way through.
-        $issued = $this->states->issue('apple', '');
-
-        $response = $this->controller(new StubProvider('apple', serverSide: false))->exchange($this->request([
-            'state' => $issued['state'],
-            'id_token' => 'eyJ.header.sig',
-            'public_key' => $this->publicKey(),
-            'platform' => 'ios',
-        ]));
-
-        self::assertInstanceOf(WP_REST_Response::class, $response);
-        self::assertSame(201, $response->get_status());
-    }
-
-    public function testTooManyAttemptsFromOneAddressAreRefused(): void
-    {
-        // What stops a script working through addresses to find one the
-        // gate accepts. It counts the attempt rather than the success, so
-        // failing is not free.
-        $controller = $this->controller();
-
-        for ($i = 0; $i < 40; $i++) {
-            $response = $controller->exchange($this->request([
-                'code' => 'never-issued',
-                'public_key' => 'spki',
-                'platform' => 'android',
-            ]));
-
-            if ($response instanceof WP_Error && $response->get_error_code() === 'fellowship_rate_limited') {
-                self::assertTrue(true);
-
-                return;
-            }
+            break;
         }
-
-        self::fail('The enrolment endpoint never rate-limited a repeated caller.');
     }
 
-    public function testAnEnrolledHandsetDescribesItselfBackToTheApp(): void
-    {
-        // The app renders this on its settings screen, so a member can
-        // tell which handset they are looking at.
-        $token = $this->enrol();
+    expect($limited)->toBeTrue('The enrolment endpoint never rate-limited a repeated caller.');
+});
 
-        $response = $this->controller()->session($this->request([], $token));
+test('an enrolled handset describes itself back to the app', function () {
+    // The app renders this on its settings screen, so a member can
+    // tell which handset they are looking at.
+    $token = enrolmentEdgesEnrol();
 
-        self::assertInstanceOf(WP_REST_Response::class, $response);
+    $response = enrolmentEdgesController()->session(enrolmentEdgesRequest([], $token));
 
-        $data = (array) $response->get_data();
+    expect($response)->toBeInstanceOf(WP_REST_Response::class);
 
-        self::assertSame('Pixel 6a', $data['device']['label']);
-        self::assertSame('android', $data['device']['platform']);
-        self::assertArrayNotHasKey('token', $data['device']);
-    }
+    $data = (array) $response->get_data();
 
-    public function testAPushRegistrationForAnUnknownTransportIsNormalised(): void
-    {
-        // Only fcm means push. Anything else has to become "no push"
-        // rather than a stored value the dispatcher would later try to
-        // deliver through.
-        $token = $this->enrol();
+    expect($data['device']['label'])->toBe('Pixel 6a');
+    expect($data['device']['platform'])->toBe('android');
+    expect($data['device'])->not->toHaveKey('token');
+});
 
-        $this->controller()->updatePush($this->request([
-            'push_provider' => 'carrier-pigeon',
-            'push_token' => 'x',
-        ], $token));
+test('a push registration for an unknown transport is normalised', function () {
+    // Only fcm means push. Anything else has to become "no push"
+    // rather than a stored value the dispatcher would later try to
+    // deliver through.
+    $token = enrolmentEdgesEnrol();
 
-        self::assertNotSame('carrier-pigeon', $this->devices->rows[1]->pushProvider);
-    }
+    enrolmentEdgesController()->updatePush(enrolmentEdgesRequest([
+        'push_provider' => 'carrier-pigeon',
+        'push_token' => 'x',
+    ], $token));
 
-    // ── Fixtures ──────────────────────────────────────────────────────
+    expect($this->devices->rows[1]->pushProvider)->not->toBe('carrier-pigeon');
+});
 
-    private function controller(?StubProvider $provider = null): DeviceAuthController
-    {
-        $registry = new ProviderRegistry();
-        $registry->register($provider ?? new StubProvider('google', serverSide: true));
+// ── Fixtures ──────────────────────────────────────────────────────
 
-        $gate = new MemberGate($this->members);
+function enrolmentEdgesController(?StubProvider $provider = null): DeviceAuthController
+{
+    $registry = new ProviderRegistry();
+    $registry->register($provider ?? new StubProvider('google', serverSide: true));
 
-        return new DeviceAuthController(
-            $this->devices,
-            $this->minter,
-            $this->codes,
-            new DeviceRedirectValidator(),
+    $gate = new MemberGate(test()->members);
+
+    return new DeviceAuthController(
+        test()->devices,
+        test()->minter,
+        test()->codes,
+        new DeviceRedirectValidator(),
+        $gate,
+        new CurrentDevice(test()->devices, test()->minter, $gate, test()->members),
+        $registry,
+        test()->states,
+        new RateLimiter(),
+        new SpyAuditLogger(),
+        new PasswordAuthenticator(
+            new InMemoryPasswordCredentialRepository(),
             $gate,
-            new CurrentDevice($this->devices, $this->minter, $gate, $this->members),
-            $registry,
-            $this->states,
-            new RateLimiter(),
-            new SpyAuditLogger(),
-            new PasswordAuthenticator(
-                new InMemoryPasswordCredentialRepository(),
-                $gate,
-                new PasswordResetMailer(),
-                new PasswordPolicy(),
-            ),
-        );
+            new PasswordResetMailer(),
+            new PasswordPolicy(),
+        ),
+    );
+}
+
+function enrolmentEdgesEnrol(): string
+{
+    $code = test()->codes->issue(new VerifiedIdentity(ENROLMENT_EDGES_MEMBER, 'google', 'sub-1'));
+
+    $response = enrolmentEdgesController()->exchange(enrolmentEdgesRequest([
+        'code' => $code,
+        'public_key' => enrolmentEdgesPublicKey(),
+        'platform' => 'android',
+        'label' => 'Pixel 6a',
+    ]));
+
+    expect($response)->toBeInstanceOf(WP_REST_Response::class);
+
+    return (string) ((array) $response->get_data())['token'];
+}
+
+/**
+ * @param array<string, mixed> $params
+ */
+function enrolmentEdgesRequest(array $params, string $token = ''): WP_REST_Request
+{
+    $request = new WP_REST_Request();
+
+    foreach ($params as $key => $value) {
+        $request->set_param($key, $value);
     }
 
-    private function enrol(): string
-    {
-        $code = $this->codes->issue(new VerifiedIdentity(self::MEMBER, 'google', 'sub-1'));
-
-        $response = $this->controller()->exchange($this->request([
-            'code' => $code,
-            'public_key' => $this->publicKey(),
-            'platform' => 'android',
-            'label' => 'Pixel 6a',
-        ]));
-
-        self::assertInstanceOf(WP_REST_Response::class, $response);
-
-        return (string) ((array) $response->get_data())['token'];
+    if ($token !== '') {
+        $request->set_header('authorization', 'Bearer ' . $token);
     }
 
-    /**
-     * @param array<string, mixed> $params
-     */
-    private function request(array $params, string $token = ''): WP_REST_Request
-    {
-        $request = new WP_REST_Request();
+    return $request;
+}
 
-        foreach ($params as $key => $value) {
-            $request->set_param($key, $value);
+function enrolmentEdgesPublicKey(): string
+{
+    static $key = null;
+
+    if ($key === null) {
+        $resource = openssl_pkey_new([
+            'private_key_bits' => 2048,
+            'private_key_type' => OPENSSL_KEYTYPE_RSA,
+        ]);
+
+        if ($resource === false) {
+            test()->markTestSkipped('OpenSSL could not generate a keypair. Set OPENSSL_CONF.');
         }
 
-        if ($token !== '') {
-            $request->set_header('authorization', 'Bearer ' . $token);
-        }
+        $details = openssl_pkey_get_details($resource);
+        expect($details)->toBeArray();
 
-        return $request;
+        $key = preg_replace('/\s+|-----[^-]*-----/', '', (string) $details['key']) ?? '';
     }
 
-    private function publicKey(): string
-    {
-        static $key = null;
-
-        if ($key === null) {
-            $resource = openssl_pkey_new([
-                'private_key_bits' => 2048,
-                'private_key_type' => OPENSSL_KEYTYPE_RSA,
-            ]);
-
-            if ($resource === false) {
-                self::markTestSkipped('OpenSSL could not generate a keypair. Set OPENSSL_CONF.');
-            }
-
-            $details = openssl_pkey_get_details($resource);
-            self::assertIsArray($details);
-
-            $key = preg_replace('/\s+|-----[^-]*-----/', '', (string) $details['key']) ?? '';
-        }
-
-        return $key;
-    }
+    return $key;
 }

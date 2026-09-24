@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
-use PHPUnit\Framework\Attributes\CoversClass;
 use BleedingDeacons\WpMocks\Doubles\FakeWpHttp;
-use BleedingDeacons\WpMocks\TestCase;
 use Fellowship\Core\Settings;
 use Fellowship\Crypto\MessageSealer;
 use Fellowship\Devices\Device;
@@ -32,423 +30,394 @@ use Fellowship\Push\ServiceAccount;
  * Google — and is a warning. Collapsing the two would either bury the
  * outage or cry wolf about a stale token.
  */
-#[CoversClass(\Fellowship\Push\FcmClient::class)]
-#[CoversClass(\Fellowship\Push\FcmTransport::class)]
-#[CoversClass(\Fellowship\Push\ServiceAccount::class)]
-final class PushTest extends TestCase
-{
-    protected function setUp(): void
-    {
-        parent::setUp();
 
-        FakeWpHttp::reset();
-    }
+covers(\Fellowship\Push\FcmClient::class, \Fellowship\Push\FcmTransport::class, \Fellowship\Push\ServiceAccount::class);
 
-    // ── The service account ───────────────────────────────────────────
+beforeEach(function () {
+    FakeWpHttp::reset();
+});
 
-    public function testAServiceAccountIsReadFromItsJson(): void
-    {
-        $account = ServiceAccount::fromJson($this->accountJson());
+// ── The service account ───────────────────────────────────────────
 
-        self::assertNotNull($account);
-        self::assertSame('intergroup-fellowship', $account->projectId);
-        self::assertStringContainsString('intergroup-fellowship', $account->sendEndpoint());
-    }
+test('a service account is read from its JSON', function () {
+    $account = ServiceAccount::fromJson(pushAccountJson());
 
-    public function testJsonThatIsNotAServiceAccountIsRefused(): void
-    {
-        // Parsed when it is saved rather than at the first message: a
-        // setting that looks stored and pushes nothing is the worst of
-        // both.
-        self::assertNull(ServiceAccount::fromJson(''));
-        self::assertNull(ServiceAccount::fromJson('not json'));
-        self::assertNull(ServiceAccount::fromJson('{"project_id":"x"}'));
-    }
+    expect($account)->not->toBeNull();
+    expect($account->projectId)->toBe('intergroup-fellowship');
+    expect($account->sendEndpoint())->toContain('intergroup-fellowship');
+});
 
-    public function testTheFingerprintChangesWithTheAccount(): void
-    {
-        // It keys the cached access token, so replacing the service
-        // account has to invalidate the cache rather than leave a token
-        // for the old project in play.
-        $first = ServiceAccount::fromJson($this->accountJson());
-        $second = ServiceAccount::fromJson($this->accountJson('other-project'));
+test('JSON that is not a service account is refused', function () {
+    // Parsed when it is saved rather than at the first message: a
+    // setting that looks stored and pushes nothing is the worst of
+    // both.
+    expect(ServiceAccount::fromJson(''))->toBeNull();
+    expect(ServiceAccount::fromJson('not json'))->toBeNull();
+    expect(ServiceAccount::fromJson('{"project_id":"x"}'))->toBeNull();
+});
 
-        self::assertNotNull($first);
-        self::assertNotNull($second);
-        self::assertNotSame($first->fingerprint(), $second->fingerprint());
-    }
+test('the fingerprint changes with the account', function () {
+    // It keys the cached access token, so replacing the service
+    // account has to invalidate the cache rather than leave a token
+    // for the old project in play.
+    $first = ServiceAccount::fromJson(pushAccountJson());
+    $second = ServiceAccount::fromJson(pushAccountJson('other-project'));
 
-    public function testTheFingerprintIsNotTheAccount(): void
-    {
-        $account = ServiceAccount::fromJson($this->accountJson());
+    expect($first)->not->toBeNull();
+    expect($second)->not->toBeNull();
+    expect($second->fingerprint())->not->toBe($first->fingerprint());
+});
 
-        self::assertNotNull($account);
-        self::assertStringNotContainsString('@', $account->fingerprint());
-        self::assertStringNotContainsString('intergroup-fellowship', $account->fingerprint());
-    }
+test('the fingerprint is not the account', function () {
+    $account = ServiceAccount::fromJson(pushAccountJson());
 
-    // ── The transport ─────────────────────────────────────────────────
+    expect($account)->not->toBeNull();
+    expect($account->fingerprint())->not->toContain('@');
+    expect($account->fingerprint())->not->toContain('intergroup-fellowship');
+});
 
-    public function testASiteWithNoServiceAccountIsNotConfiguredToPush(): void
-    {
-        // Checked once by the dispatcher rather than per device, so a
-        // site with no account logs one line instead of one per handset.
-        self::assertFalse($this->transport()->isConfigured());
-    }
+// ── The transport ─────────────────────────────────────────────────
 
-    public function testASiteWithAServiceAccountIsConfigured(): void
-    {
-        $settings = new Settings();
-        $settings->setFcmServiceAccount($this->accountJson());
+test('a site with no service account is not configured to push', function () {
+    // Checked once by the dispatcher rather than per device, so a
+    // site with no account logs one line instead of one per handset.
+    expect(pushTransport()->isConfigured())->toBeFalse();
+});
 
-        self::assertTrue($this->transport($settings)->isConfigured());
-    }
+test('a site with a service account is configured', function () {
+    $settings = new Settings();
+    $settings->setFcmServiceAccount(pushAccountJson());
 
-    public function testNothingIsSentWhenThereIsNoServiceAccount(): void
-    {
-        // False, not an exception: the message is stored and the poll
-        // will fetch it.
-        self::assertFalse($this->transport()->send($this->device(), $this->message()));
-        self::assertSame(0, FakeWpHttp::callCount());
-    }
+    expect(pushTransport($settings)->isConfigured())->toBeTrue();
+});
 
-    public function testAHandsetWithNoPushTokenIsNotSentTo(): void
-    {
-        $settings = new Settings();
-        $settings->setFcmServiceAccount($this->accountJson());
+test('nothing is sent when there is no service account', function () {
+    // False, not an exception: the message is stored and the poll
+    // will fetch it.
+    expect(pushTransport()->send(pushDevice(), pushMessage()))->toBeFalse();
+    expect(FakeWpHttp::callCount())->toBe(0);
+});
 
-        $device = $this->device(pushToken: '');
+test('a handset with no push token is not sent to', function () {
+    $settings = new Settings();
+    $settings->setFcmServiceAccount(pushAccountJson());
 
-        self::assertFalse($this->transport($settings)->send($device, $this->message()));
-    }
+    $device = pushDevice(pushToken: '');
 
-    public function testAHandsetWithNoPublicKeyIsNotSentTo(): void
-    {
-        // There would be nothing to seal the payload to, and an unsealed
-        // push is the one thing this design refuses: the body would
-        // travel through Google in the clear.
-        $settings = new Settings();
-        $settings->setFcmServiceAccount($this->accountJson());
+    expect(pushTransport($settings)->send($device, pushMessage()))->toBeFalse();
+});
 
-        $device = $this->device(publicKey: '');
+test('a handset with no public key is not sent to', function () {
+    // There would be nothing to seal the payload to, and an unsealed
+    // push is the one thing this design refuses: the body would
+    // travel through Google in the clear.
+    $settings = new Settings();
+    $settings->setFcmServiceAccount(pushAccountJson());
 
-        self::assertFalse($this->transport($settings)->send($device, $this->message()));
-    }
+    $device = pushDevice(publicKey: '');
 
-    // ── The client ────────────────────────────────────────────────────
+    expect(pushTransport($settings)->send($device, pushMessage()))->toBeFalse();
+});
 
-    public function testAnUnreachableTokenEndpointMeansNoSend(): void
-    {
-        $account = ServiceAccount::fromJson($this->accountJson());
-        self::assertNotNull($account);
+// ── The client ────────────────────────────────────────────────────
 
-        FakeWpHttp::push(new \WP_Error('http_request_failed', 'offline'));
+test('an unreachable token endpoint means no send', function () {
+    $account = ServiceAccount::fromJson(pushAccountJson());
+    expect($account)->not->toBeNull();
 
-        self::assertFalse((new FcmClient())->send($account, ['token' => 'fcm-1']));
-    }
+    FakeWpHttp::push(new \WP_Error('http_request_failed', 'offline'));
 
-    public function testATokenEndpointThatAnswersNoTokenMeansNoSend(): void
-    {
-        $account = ServiceAccount::fromJson($this->accountJson());
-        self::assertNotNull($account);
+    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBeFalse();
+});
 
-        FakeWpHttp::pushResponse(200, '{"not_an_access_token":true}');
+test('a token endpoint that answers no token means no send', function () {
+    $account = ServiceAccount::fromJson(pushAccountJson());
+    expect($account)->not->toBeNull();
 
-        self::assertFalse((new FcmClient())->send($account, ['token' => 'fcm-1']));
-    }
+    FakeWpHttp::pushResponse(200, '{"not_an_access_token":true}');
 
-    public function testARefusedSendIsReportedRatherThanThrown(): void
-    {
-        $account = ServiceAccount::fromJson($this->accountJson());
-        self::assertNotNull($account);
+    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBeFalse();
+});
 
-        // A token, then a 403 from the send endpoint: the configuration
-        // fault, which stops every push to everyone.
-        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-        FakeWpHttp::pushResponse(403, '{"error":{"status":"PERMISSION_DENIED"}}');
+test('a refused send is reported rather than thrown', function () {
+    $account = ServiceAccount::fromJson(pushAccountJson());
+    expect($account)->not->toBeNull();
 
-        self::assertFalse((new FcmClient())->send($account, ['token' => 'fcm-1']));
-    }
+    // A token, then a 403 from the send endpoint: the configuration
+    // fault, which stops every push to everyone.
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(403, '{"error":{"status":"PERMISSION_DENIED"}}');
 
-    public function testADeadRegistrationTokenIsAlsoJustFalse(): void
-    {
-        // Ordinary and survivable: one handset reinstalled the app.
-        $account = ServiceAccount::fromJson($this->accountJson());
-        self::assertNotNull($account);
+    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBeFalse();
+});
 
-        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-        FakeWpHttp::pushResponse(404, '{"error":{"status":"NOT_FOUND"}}');
+test('a dead registration token is also just false', function () {
+    // Ordinary and survivable: one handset reinstalled the app.
+    $account = ServiceAccount::fromJson(pushAccountJson());
+    expect($account)->not->toBeNull();
 
-        self::assertFalse((new FcmClient())->send($account, ['token' => 'fcm-1']));
-    }
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(404, '{"error":{"status":"NOT_FOUND"}}');
 
-    public function testAMessageFcmAcceptsIsASend(): void
-    {
-        // The whole path: sign an assertion, exchange it for an access
-        // token, post the message. Nothing below this line is reached at
-        // all unless the service-account key actually loads.
-        $account = ServiceAccount::fromJson($this->accountJson());
-        self::assertNotNull($account);
+    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBeFalse();
+});
 
-        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-        FakeWpHttp::pushResponse(200, '{"name":"projects/x/messages/1"}');
+test('a message FCM accepts is a send', function () {
+    // The whole path: sign an assertion, exchange it for an access
+    // token, post the message. Nothing below this line is reached at
+    // all unless the service-account key actually loads.
+    $account = ServiceAccount::fromJson(pushAccountJson());
+    expect($account)->not->toBeNull();
 
-        self::assertTrue((new FcmClient())->send($account, ['token' => 'fcm-1']));
-        self::assertSame(2, FakeWpHttp::callCount());
-    }
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(200, '{"name":"projects/x/messages/1"}');
 
-    public function testTheMessageGoesToTheProjectsOwnEndpointUnderTheToken(): void
-    {
-        $account = ServiceAccount::fromJson($this->accountJson());
-        self::assertNotNull($account);
+    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBeTrue();
+    expect(FakeWpHttp::callCount())->toBe(2);
+});
 
-        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-        FakeWpHttp::pushResponse(200, '{}');
+test('the message goes to the projects own endpoint under the token', function () {
+    $account = ServiceAccount::fromJson(pushAccountJson());
+    expect($account)->not->toBeNull();
 
-        (new FcmClient())->send($account, ['token' => 'fcm-1']);
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(200, '{}');
 
-        $args = FakeWpHttp::sentArgs(1);
+    (new FcmClient())->send($account, ['token' => 'fcm-1']);
 
-        self::assertStringContainsString('intergroup-fellowship', FakeWpHttp::sentUrl(1));
-        self::assertSame('Bearer ya29.token', $args['headers']['Authorization']);
-    }
+    $args = FakeWpHttp::sentArgs(1);
 
-    public function testTheAccessTokenIsReusedRatherThanMintedPerMessage(): void
-    {
-        // A fan-out to a committee is one token and many sends. Minting
-        // one per handset would be an RSA signature and a round trip to
-        // Google for every member.
-        $account = ServiceAccount::fromJson($this->accountJson());
-        self::assertNotNull($account);
+    expect(FakeWpHttp::sentUrl(1))->toContain('intergroup-fellowship');
+    expect($args['headers']['Authorization'])->toBe('Bearer ya29.token');
+});
 
-        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-        FakeWpHttp::pushResponse(200, '{}');
-        FakeWpHttp::pushResponse(200, '{}');
+test('the access token is reused rather than minted per message', function () {
+    // A fan-out to a committee is one token and many sends. Minting
+    // one per handset would be an RSA signature and a round trip to
+    // Google for every member.
+    $account = ServiceAccount::fromJson(pushAccountJson());
+    expect($account)->not->toBeNull();
 
-        $client = new FcmClient();
-        $client->send($account, ['token' => 'fcm-1']);
-        $client->send($account, ['token' => 'fcm-2']);
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(200, '{}');
+    FakeWpHttp::pushResponse(200, '{}');
 
-        self::assertSame(3, FakeWpHttp::callCount(), 'The token was minted twice.');
-    }
+    $client = new FcmClient();
+    $client->send($account, ['token' => 'fcm-1']);
+    $client->send($account, ['token' => 'fcm-2']);
 
-    public function testASendThatNeverReachesGoogleIsJustFalse(): void
-    {
-        $account = ServiceAccount::fromJson($this->accountJson());
-        self::assertNotNull($account);
+    expect(FakeWpHttp::callCount())->toBe(3, 'The token was minted twice.');
+});
 
-        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-        FakeWpHttp::push(new \WP_Error('http_request_failed', 'offline'));
+test('a send that never reaches Google is just false', function () {
+    $account = ServiceAccount::fromJson(pushAccountJson());
+    expect($account)->not->toBeNull();
 
-        self::assertFalse((new FcmClient())->send($account, ['token' => 'fcm-1']));
-    }
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::push(new \WP_Error('http_request_failed', 'offline'));
 
-    public function testAKeyThatWillNotLoadStopsBeforeAnyRequest(): void
-    {
-        // The failure the fixture used to have by accident, asserted on
-        // purpose — and asserted by call count, which is the only thing
-        // that tells it apart from a refusal further down.
-        $account = ServiceAccount::fromJson((string) wp_json_encode([
-            'type' => 'service_account',
-            'project_id' => 'intergroup-fellowship',
-            'client_email' => 'pusher@intergroup-fellowship.iam.gserviceaccount.com',
-            'private_key' => "-----BEGIN PRIVATE KEY-----
+    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBeFalse();
+});
+
+test('a key that will not load stops before any request', function () {
+    // The failure the fixture used to have by accident, asserted on
+    // purpose — and asserted by call count, which is the only thing
+    // that tells it apart from a refusal further down.
+    $account = ServiceAccount::fromJson((string) wp_json_encode([
+        'type' => 'service_account',
+        'project_id' => 'intergroup-fellowship',
+        'client_email' => 'pusher@intergroup-fellowship.iam.gserviceaccount.com',
+        'private_key' => "-----BEGIN PRIVATE KEY-----
 not-a-real-key
 -----END PRIVATE KEY-----
 ",
-            'token_uri' => 'https://oauth2.googleapis.com/token',
-        ]));
+        'token_uri' => 'https://oauth2.googleapis.com/token',
+    ]));
 
-        self::assertNotNull($account);
-        self::assertFalse((new FcmClient())->send($account, ['token' => 'fcm-1']));
-        self::assertSame(0, FakeWpHttp::callCount());
-    }
+    expect($account)->not->toBeNull();
+    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBeFalse();
+    expect(FakeWpHttp::callCount())->toBe(0);
+});
 
-    // ── Transport to client ───────────────────────────────────────────
+// ── Transport to client ───────────────────────────────────────────
 
-    public function testAConfiguredSiteSealsTheBodyAndPushesIt(): void
-    {
-        $settings = new Settings();
-        $settings->setFcmServiceAccount($this->accountJson());
+test('a configured site seals the body and pushes it', function () {
+    $settings = new Settings();
+    $settings->setFcmServiceAccount(pushAccountJson());
 
-        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-        FakeWpHttp::pushResponse(200, '{}');
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(200, '{}');
 
-        $device = $this->device(publicKey: $this->publicKey());
+    $device = pushDevice(publicKey: pushPublicKey());
 
-        self::assertTrue($this->transport($settings)->send($device, $this->message()));
-    }
+    expect(pushTransport($settings)->send($device, pushMessage()))->toBeTrue();
+});
 
-    public function testTheBodyOnTheWireIsSealedRatherThanReadable(): void
-    {
-        // What the design is for: the message travels through Google, so
-        // the one thing that must never be in the payload is the text.
-        $settings = new Settings();
-        $settings->setFcmServiceAccount($this->accountJson());
+test('the body on the wire is sealed rather than readable', function () {
+    // What the design is for: the message travels through Google, so
+    // the one thing that must never be in the payload is the text.
+    $settings = new Settings();
+    $settings->setFcmServiceAccount(pushAccountJson());
 
-        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-        FakeWpHttp::pushResponse(200, '{}');
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(200, '{}');
 
-        $this->transport($settings)->send($this->device(publicKey: $this->publicKey()), $this->message());
+    pushTransport($settings)->send(pushDevice(publicKey: pushPublicKey()), pushMessage());
 
-        $body = (string) (FakeWpHttp::sentArgs(1)['body'] ?? '');
+    $body = (string) (FakeWpHttp::sentArgs(1)['body'] ?? '');
 
-        self::assertStringNotContainsString('Now the 14th', $body);
-        self::assertStringNotContainsString('Intergroup moved', $body);
-    }
+    expect($body)->not->toContain('Now the 14th');
+    expect($body)->not->toContain('Intergroup moved');
+});
 
-    public function testTheSealedEnvelopeReachesIosInTheApnsPayload(): void
-    {
-        // iOS never sees the top-level data block as such — it reads an
-        // APNs payload. FCM does merge one into the other, and the app
-        // would find `k` and `p` either way, but that is a behaviour of
-        // FCM's rather than a guarantee of ours: a silent push whose
-        // fields did not arrive would do nothing at all rather than fail,
-        // which is the hardest kind of gap to notice.
-        $settings = new Settings();
-        $settings->setFcmServiceAccount($this->accountJson());
+test('the sealed envelope reaches iOS in the APNs payload', function () {
+    // iOS never sees the top-level data block as such — it reads an
+    // APNs payload. FCM does merge one into the other, and the app
+    // would find `k` and `p` either way, but that is a behaviour of
+    // FCM's rather than a guarantee of ours: a silent push whose
+    // fields did not arrive would do nothing at all rather than fail,
+    // which is the hardest kind of gap to notice.
+    $settings = new Settings();
+    $settings->setFcmServiceAccount(pushAccountJson());
 
-        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-        FakeWpHttp::pushResponse(200, '{}');
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(200, '{}');
 
-        $this->transport($settings)->send($this->device(publicKey: $this->publicKey()), $this->message());
+    pushTransport($settings)->send(pushDevice(publicKey: pushPublicKey()), pushMessage());
 
-        $sent = json_decode((string) (FakeWpHttp::sentArgs(1)['body'] ?? ''), true);
-        self::assertIsArray($sent);
+    $sent = json_decode((string) (FakeWpHttp::sentArgs(1)['body'] ?? ''), true);
+    expect($sent)->toBeArray();
 
-        $message = $sent['message'];
-        $payload = $message['apns']['payload'];
+    $message = $sent['message'];
+    $payload = $message['apns']['payload'];
 
-        // The same envelope in both places, and the aps dictionary intact
-        // beside it.
-        self::assertSame($message['data']['k'], $payload['k']);
-        self::assertSame($message['data']['p'], $payload['p']);
-        self::assertSame($message['data']['id'], $payload['id']);
-        self::assertSame(['content-available' => 1], $payload['aps']);
-    }
+    // The same envelope in both places, and the aps dictionary intact
+    // beside it.
+    expect($payload['k'])->toBe($message['data']['k']);
+    expect($payload['p'])->toBe($message['data']['p']);
+    expect($payload['id'])->toBe($message['data']['id']);
+    expect($payload['aps'])->toBe(['content-available' => 1]);
+});
 
-    public function testTheApnsPushIsSilentBecauseTheServerCannotWriteTheNotification(): void
-    {
-        // Fellowship cannot read the message, so it cannot say anything
-        // about it — the handset opens the envelope and raises its own
-        // notification. A silent push is the shape that permits that, and
-        // APNs refuses priority 10 for one.
-        $settings = new Settings();
-        $settings->setFcmServiceAccount($this->accountJson());
+test('the APNs push is silent because the server cannot write the notification', function () {
+    // Fellowship cannot read the message, so it cannot say anything
+    // about it — the handset opens the envelope and raises its own
+    // notification. A silent push is the shape that permits that, and
+    // APNs refuses priority 10 for one.
+    $settings = new Settings();
+    $settings->setFcmServiceAccount(pushAccountJson());
 
-        FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-        FakeWpHttp::pushResponse(200, '{}');
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(200, '{}');
 
-        $this->transport($settings)->send($this->device(publicKey: $this->publicKey()), $this->message());
+    pushTransport($settings)->send(pushDevice(publicKey: pushPublicKey()), pushMessage());
 
-        $sent = json_decode((string) (FakeWpHttp::sentArgs(1)['body'] ?? ''), true);
-        self::assertIsArray($sent);
+    $sent = json_decode((string) (FakeWpHttp::sentArgs(1)['body'] ?? ''), true);
+    expect($sent)->toBeArray();
 
-        $apns = $sent['message']['apns'];
+    $apns = $sent['message']['apns'];
 
-        self::assertSame('5', $apns['headers']['apns-priority']);
-        self::assertSame('background', $apns['headers']['apns-push-type']);
-        self::assertArrayNotHasKey('alert', $apns['payload']['aps'], 'the server has nothing to display');
-    }
+    expect($apns['headers']['apns-priority'])->toBe('5');
+    expect($apns['headers']['apns-push-type'])->toBe('background');
+    expect($apns['payload']['aps'])->not->toHaveKey('alert', message: 'the server has nothing to display');
+});
 
-    public function testAHandsetWhoseKeyWillNotLoadIsSkippedRatherThanSentToInTheClear(): void
-    {
-        // A key that is present but unusable is the case worth being
-        // sure about: an empty one is refused a step earlier.
-        $settings = new Settings();
-        $settings->setFcmServiceAccount($this->accountJson());
+test('a handset whose key will not load is skipped rather than sent to in the clear', function () {
+    // A key that is present but unusable is the case worth being
+    // sure about: an empty one is refused a step earlier.
+    $settings = new Settings();
+    $settings->setFcmServiceAccount(pushAccountJson());
 
-        self::assertFalse($this->transport($settings)->send($this->device(publicKey: 'not-a-key'), $this->message()));
-        self::assertSame(0, FakeWpHttp::callCount());
-    }
+    expect(pushTransport($settings)->send(pushDevice(publicKey: 'not-a-key'), pushMessage()))->toBeFalse();
+    expect(FakeWpHttp::callCount())->toBe(0);
+});
 
-    // ── Fixtures ──────────────────────────────────────────────────────
+// ── Fixtures ──────────────────────────────────────────────────────
 
-    private function transport(?Settings $settings = null): FcmTransport
-    {
-        return new FcmTransport(new FcmClient(), $settings ?? new Settings(), new MessageSealer());
-    }
+function pushTransport(?Settings $settings = null): FcmTransport
+{
+    return new FcmTransport(new FcmClient(), $settings ?? new Settings(), new MessageSealer());
+}
 
-    private function device(string $pushToken = 'fcm-1', string $publicKey = 'spki'): Device
-    {
-        return new Device(
-            4,
-            'member@example.org',
-            7,
-            'Pixel 6a',
-            'android',
-            $publicKey,
-            'fcm',
-            $pushToken,
-            1788000000,
-        );
-    }
+function pushDevice(string $pushToken = 'fcm-1', string $publicKey = 'spki'): Device
+{
+    return new Device(
+        4,
+        'member@example.org',
+        7,
+        'Pixel 6a',
+        'android',
+        $publicKey,
+        'fcm',
+        $pushToken,
+        1788000000,
+    );
+}
 
-    private function message(): Message
-    {
-        return new Message(
-            9,
-            'uuid-1',
-            'dave@example.org',
-            7,
-            'Dave B',
-            'Intergroup moved',
-            'Now the 14th.',
-            'committee',
-            'steering',
-            1788000000,
-        );
-    }
+function pushMessage(): Message
+{
+    return new Message(
+        9,
+        'uuid-1',
+        'dave@example.org',
+        7,
+        'Dave B',
+        'Intergroup moved',
+        'Now the 14th.',
+        'committee',
+        'steering',
+        1788000000,
+    );
+}
 
-    private function publicKey(): string
-    {
-        $resource = openssl_pkey_get_private(self::privateKey());
-        self::assertNotFalse($resource);
+function pushPublicKey(): string
+{
+    $resource = openssl_pkey_get_private(pushPrivateKey());
+    expect($resource)->not->toBeFalse();
 
-        $details = openssl_pkey_get_details($resource);
-        self::assertIsArray($details);
+    $details = openssl_pkey_get_details($resource);
+    expect($details)->toBeArray();
 
-        return preg_replace('/\s+|-----[^-]*-----/', '', (string) $details['key']) ?? '';
-    }
+    return preg_replace('/\s+|-----[^-]*-----/', '', (string) $details['key']) ?? '';
+}
 
-    private function accountJson(string $projectId = 'intergroup-fellowship'): string
-    {
-        // Structurally real, and signed with a keypair generated for this
-        // run. A committed fixture must never carry a usable credential,
-        // but a *fake* key is worse than useless here: the assertion is
-        // signed before any HTTP call is made, so an unreadable key makes
-        // every send return false at the first step and the token
-        // exchange, the send and every status branch below it are never
-        // reached at all. Tests written against that pass for a reason
-        // that has nothing to do with what they claim to assert.
-        return (string) wp_json_encode([
-            'type' => 'service_account',
-            'project_id' => $projectId,
-            'client_email' => 'pusher@' . $projectId . '.iam.gserviceaccount.com',
-            'private_key' => self::privateKey(),
-            'token_uri' => 'https://oauth2.googleapis.com/token',
+function pushAccountJson(string $projectId = 'intergroup-fellowship'): string
+{
+    // Structurally real, and signed with a keypair generated for this
+    // run. A committed fixture must never carry a usable credential,
+    // but a *fake* key is worse than useless here: the assertion is
+    // signed before any HTTP call is made, so an unreadable key makes
+    // every send return false at the first step and the token
+    // exchange, the send and every status branch below it are never
+    // reached at all. Tests written against that pass for a reason
+    // that has nothing to do with what they claim to assert.
+    return (string) wp_json_encode([
+        'type' => 'service_account',
+        'project_id' => $projectId,
+        'client_email' => 'pusher@' . $projectId . '.iam.gserviceaccount.com',
+        'private_key' => pushPrivateKey(),
+        'token_uri' => 'https://oauth2.googleapis.com/token',
+    ]);
+}
+
+/** A throwaway RSA key, generated once for the whole run. */
+function pushPrivateKey(): string
+{
+    static $pem = null;
+
+    if ($pem === null) {
+        $resource = openssl_pkey_new([
+            'private_key_bits' => 2048,
+            'private_key_type' => OPENSSL_KEYTYPE_RSA,
         ]);
-    }
 
-    /** A throwaway RSA key, generated once for the whole run. */
-    private static function privateKey(): string
-    {
-        static $pem = null;
-
-        if ($pem === null) {
-            $resource = openssl_pkey_new([
-                'private_key_bits' => 2048,
-                'private_key_type' => OPENSSL_KEYTYPE_RSA,
-            ]);
-
-            if ($resource === false) {
-                self::markTestSkipped('OpenSSL could not generate a keypair. Set OPENSSL_CONF.');
-            }
-
-            openssl_pkey_export($resource, $exported);
-            $pem = (string) $exported;
+        if ($resource === false) {
+            test()->markTestSkipped('OpenSSL could not generate a keypair. Set OPENSSL_CONF.');
         }
 
-        return $pem;
+        openssl_pkey_export($resource, $exported);
+        $pem = (string) $exported;
     }
+
+    return $pem;
 }

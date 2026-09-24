@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
-use PHPUnit\Framework\Attributes\CoversClass;
-use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Core\Settings;
 
@@ -20,118 +18,100 @@ use Fellowship\Core\Settings;
  * remembered — and it is asserted here by reading the raw options back
  * and checking a secret is not in the public one.
  */
-#[CoversClass(\Fellowship\Core\Settings::class)]
-final class SettingsTest extends TestCase
-{
-    private Settings $settings;
 
-    protected function setUp(): void
-    {
-        parent::setUp();
+covers(\Fellowship\Core\Settings::class);
 
-        $this->settings = new Settings();
-    }
+beforeEach(function () {
+    $this->settings = new Settings();
+});
 
-    public function testAClientIdRoundTrips(): void
-    {
-        $this->settings->setClientId('google', 'google-client-id');
+test('a client id round trips', function () {
+    $this->settings->setClientId('google', 'google-client-id');
 
-        self::assertSame('google-client-id', $this->settings->getClientId('google'));
-    }
+    expect($this->settings->getClientId('google'))->toBe('google-client-id');
+});
 
-    public function testAnUnsetClientIdIsEmptyRatherThanNull(): void
-    {
-        // Every caller concatenates or compares it; a null would be a
-        // deprecation at best and a wrong comparison at worst.
-        self::assertSame('', $this->settings->getClientId('google'));
-    }
+test('an unset client id is empty rather than null', function () {
+    // Every caller concatenates or compares it; a null would be a
+    // deprecation at best and a wrong comparison at worst.
+    expect($this->settings->getClientId('google'))->toBe('');
+});
 
-    public function testProvidersDoNotShareAClientId(): void
-    {
-        $this->settings->setClientId('google', 'google-client-id');
-        $this->settings->setClientId('microsoft', 'ms-client-id');
+test('providers do not share a client id', function () {
+    $this->settings->setClientId('google', 'google-client-id');
+    $this->settings->setClientId('microsoft', 'ms-client-id');
 
-        self::assertSame('google-client-id', $this->settings->getClientId('google'));
-        self::assertSame('ms-client-id', $this->settings->getClientId('microsoft'));
-    }
+    expect($this->settings->getClientId('google'))->toBe('google-client-id');
+    expect($this->settings->getClientId('microsoft'))->toBe('ms-client-id');
+});
 
-    public function testAClientSecretRoundTrips(): void
-    {
-        $this->settings->setClientSecret('google', 'a-client-secret');
+test('a client secret round trips', function () {
+    $this->settings->setClientSecret('google', 'a-client-secret');
 
-        self::assertSame('a-client-secret', $this->settings->getClientSecret('google'));
-    }
+    expect($this->settings->getClientSecret('google'))->toBe('a-client-secret');
+});
 
-    public function testASecretIsNeverStoredInThePublicRow(): void
-    {
-        // The row that anything reading options might reasonably print.
-        $this->settings->setClientSecret('google', 'a-client-secret');
+test('a secret is never stored in the public row', function () {
+    // The row that anything reading options might reasonably print.
+    $this->settings->setClientSecret('google', 'a-client-secret');
 
-        $public = (string) json_encode(WpState::$options[Settings::OPTION_PUBLIC] ?? []);
+    $public = (string) json_encode(WpState::$options[Settings::OPTION_PUBLIC] ?? []);
 
-        self::assertStringNotContainsString('a-client-secret', $public);
-    }
+    expect($public)->not->toContain('a-client-secret');
+});
 
-    public function testASecretIsNotStoredInTheClear(): void
-    {
-        $this->settings->setClientSecret('google', 'a-client-secret');
+test('a secret is not stored in the clear', function () {
+    $this->settings->setClientSecret('google', 'a-client-secret');
 
-        $secrets = (string) json_encode(WpState::$options[Settings::OPTION_SECRETS] ?? []);
+    $secrets = (string) json_encode(WpState::$options[Settings::OPTION_SECRETS] ?? []);
 
-        self::assertStringNotContainsString('a-client-secret', $secrets);
-    }
+    expect($secrets)->not->toContain('a-client-secret');
+});
 
-    public function testClearingASecretLeavesNothingBehind(): void
-    {
-        $this->settings->setClientSecret('google', 'a-client-secret');
-        $this->settings->setClientSecret('google', '');
+test('clearing a secret leaves nothing behind', function () {
+    $this->settings->setClientSecret('google', 'a-client-secret');
+    $this->settings->setClientSecret('google', '');
 
-        self::assertSame('', $this->settings->getClientSecret('google'));
-    }
+    expect($this->settings->getClientSecret('google'))->toBe('');
+});
 
-    public function testTheServiceAccountIsHeldWithTheSecrets(): void
-    {
-        // It can push to every handset on the project. It is the most
-        // dangerous single value this plugin stores.
-        $this->settings->setFcmServiceAccount('{"project_id":"x"}');
+test('the service account is held with the secrets', function () {
+    // It can push to every handset on the project. It is the most
+    // dangerous single value this plugin stores.
+    $this->settings->setFcmServiceAccount('{"project_id":"x"}');
 
-        $public = (string) json_encode(WpState::$options[Settings::OPTION_PUBLIC] ?? []);
+    $public = (string) json_encode(WpState::$options[Settings::OPTION_PUBLIC] ?? []);
 
-        self::assertSame('{"project_id":"x"}', $this->settings->getFcmServiceAccount());
-        self::assertStringNotContainsString('project_id', $public);
-    }
+    expect($this->settings->getFcmServiceAccount())->toBe('{"project_id":"x"}');
+    expect($public)->not->toContain('project_id');
+});
 
-    public function testRetentionDefaultsToTheDocumentedWindow(): void
-    {
-        self::assertSame(Settings::DEFAULT_RETENTION_DAYS, $this->settings->getRetentionDays());
-    }
+test('retention defaults to the documented window', function () {
+    expect($this->settings->getRetentionDays())->toBe(Settings::DEFAULT_RETENTION_DAYS);
+});
 
-    public function testRetentionCanBeSetToKeepIndefinitely(): void
-    {
-        // Zero is a deliberate choice on the settings screen, not an
-        // unset value, and the sweep reads it as "do nothing".
-        $this->settings->setRetentionDays(0);
+test('retention can be set to keep indefinitely', function () {
+    // Zero is a deliberate choice on the settings screen, not an
+    // unset value, and the sweep reads it as "do nothing".
+    $this->settings->setRetentionDays(0);
 
-        self::assertSame(0, $this->settings->getRetentionDays());
-    }
+    expect($this->settings->getRetentionDays())->toBe(0);
+});
 
-    public function testANegativeRetentionIsNotStoredAsNegative(): void
-    {
-        // A negative window would make the sweep's cut-off a time in the
-        // future, which deletes everything.
-        $this->settings->setRetentionDays(-30);
+test('a negative retention is not stored as negative', function () {
+    // A negative window would make the sweep's cut-off a time in the
+    // future, which deletes everything.
+    $this->settings->setRetentionDays(-30);
 
-        self::assertGreaterThanOrEqual(0, $this->settings->getRetentionDays());
-    }
+    expect($this->settings->getRetentionDays())->toBeGreaterThanOrEqual(0);
+});
 
-    public function testCommitteeSendingFromTheAppIsOffUntilItIsTurnedOn(): void
-    {
-        // A handset writing to a whole committee is a decision the
-        // intergroup makes, not a default it inherits.
-        self::assertFalse($this->settings->allowsCommitteeSendFromApp());
+test('committee sending from the app is off until it is turned on', function () {
+    // A handset writing to a whole committee is a decision the
+    // intergroup makes, not a default it inherits.
+    expect($this->settings->allowsCommitteeSendFromApp())->toBeFalse();
 
-        $this->settings->setCommitteeSendFromApp(true);
+    $this->settings->setCommitteeSendFromApp(true);
 
-        self::assertTrue($this->settings->allowsCommitteeSendFromApp());
-    }
-}
+    expect($this->settings->allowsCommitteeSendFromApp())->toBeTrue();
+});

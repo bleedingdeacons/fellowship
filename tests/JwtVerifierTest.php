@@ -7,7 +7,6 @@ namespace Fellowship\Tests;
 use BleedingDeacons\WpMocks\Doubles\FakeWpHttp;
 use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Auth\JwtVerifier;
-use PHPUnit\Framework\TestCase;
 
 /**
  * The code that decides whether a stranger's claim about their own email
@@ -29,298 +28,278 @@ use PHPUnit\Framework\TestCase;
  * Keypairs are generated per test rather than committed — a fixture here
  * would mean a private key in a public repository.
  */
-final class JwtVerifierTest extends TestCase
+
+const JWT_VERIFIER_ISSUER = 'https://appleid.apple.com';
+
+const JWT_VERIFIER_JWKS_URL = 'https://appleid.apple.com/auth/keys';
+
+const JWT_VERIFIER_AUDIENCE = 'org.aa-bristol.link';
+
+const JWT_VERIFIER_KID = 'test-key-1';
+
+beforeEach(function () {
+    FakeWpHttp::reset();
+    WpState::reset();
+
+    $key = openssl_pkey_new([
+        'private_key_bits' => 2048,
+        'private_key_type' => OPENSSL_KEYTYPE_RSA,
+    ]);
+
+    if ($key === false) {
+        // The OPENSSL_CONF trap: without a usable openssl.cnf every
+        // assertion below would be about the environment rather than
+        // the verifier. Said plainly, because a silent skip here would
+        // report a green suite that tested nothing.
+        $this->markTestSkipped('OpenSSL could not generate a keypair. Set OPENSSL_CONF.');
+    }
+
+    $this->key = $key;
+});
+
+test('a well formed token verifies', function () {
+    serveJwks();
+
+    $claims = jwtVerifierVerify(jwtVerifierToken());
+
+    expect($claims)->toBeArray();
+    expect($claims['email'])->toBe('member@example.org');
+    expect($claims['sub'])->toBe('000123.abc.456');
+});
+
+test('an unsigned token is rejected', function () {
+    // The textbook forgery: claim no algorithm and hope the verifier
+    // takes the payload's word for itself.
+    serveJwks();
+
+    $header = jwtVerifierEncode(['alg' => 'none', 'kid' => JWT_VERIFIER_KID, 'typ' => 'JWT']);
+    $payload = jwtVerifierEncode(jwtVerifierClaims());
+
+    expect(jwtVerifierVerify($header . '.' . $payload . '.'))->toBeNull();
+});
+
+test('an hmac signed token is rejected', function () {
+    // The subtler forgery: HS256 signed with the public key, which is
+    // published and therefore known to everybody. A verifier that
+    // dispatched on the header's alg would accept it.
+    serveJwks();
+
+    $header = jwtVerifierEncode(['alg' => 'HS256', 'kid' => JWT_VERIFIER_KID, 'typ' => 'JWT']);
+    $payload = jwtVerifierEncode(jwtVerifierClaims());
+    $signature = jwtVerifierBase64Url(
+        hash_hmac('sha256', $header . '.' . $payload, publicKeyPem(), true)
+    );
+
+    expect(jwtVerifierVerify($header . '.' . $payload . '.' . $signature))->toBeNull();
+});
+
+test('a token signed by the wrong key is rejected', function () {
+    serveJwks();
+
+    $other = openssl_pkey_new([
+        'private_key_bits' => 2048,
+        'private_key_type' => OPENSSL_KEYTYPE_RSA,
+    ]);
+    expect($other)->not->toBeFalse();
+
+    expect(jwtVerifierVerify(jwtVerifierToken(signWith: $other)))->toBeNull();
+});
+
+test('a token for another audience is rejected', function () {
+    // What stops a token minted for somebody else's app being replayed
+    // at this one.
+    serveJwks();
+
+    expect(jwtVerifierVerify(jwtVerifierToken(['aud' => 'com.example.someone-else'])))->toBeNull();
+});
+
+test('a token from another issuer is rejected', function () {
+    serveJwks();
+
+    expect(jwtVerifierVerify(jwtVerifierToken(['iss' => 'https://accounts.google.com'])))->toBeNull();
+});
+
+test('a replayed nonce is rejected', function () {
+    // What stops a token minted for this app being used twice.
+    serveJwks();
+
+    expect(jwtVerifierVerify(jwtVerifierToken(['nonce' => 'a-different-nonce'])))->toBeNull();
+});
+
+test('an expired token is rejected', function () {
+    serveJwks();
+
+    // Well past the 60-second skew allowance.
+    expect(jwtVerifierVerify(jwtVerifierToken(['exp' => time() - 3600])))->toBeNull();
+});
+
+test('a token issued in the future is rejected', function () {
+    serveJwks();
+
+    expect(jwtVerifierVerify(jwtVerifierToken(['iat' => time() + 3600])))->toBeNull();
+});
+
+test('a token with no expiry is rejected', function () {
+    // Would otherwise verify forever.
+    serveJwks();
+
+    expect(jwtVerifierVerify(jwtVerifierToken(remove: ['exp'])))->toBeNull();
+});
+
+test('a token with no issued at is rejected', function () {
+    serveJwks();
+
+    expect(jwtVerifierVerify(jwtVerifierToken(remove: ['iat'])))->toBeNull();
+});
+
+test('an unknown key id is retried once then rejected', function () {
+    // A provider that has just rotated leaves the cached JWKS without
+    // the new kid. The verifier busts the cache and refetches once
+    // rather than failing every sign-in for the cache's whole hour --
+    // so two fetches, then a refusal.
+    serveJwks();
+    serveJwks();
+
+    $header = jwtVerifierEncode(['alg' => 'RS256', 'kid' => 'a-kid-nobody-published', 'typ' => 'JWT']);
+    $payload = jwtVerifierEncode(jwtVerifierClaims());
+    $signature = jwtVerifierSign($header . '.' . $payload, $this->key);
+
+    expect(jwtVerifierVerify($header . '.' . $payload . '.' . $signature))->toBeNull();
+    expect(FakeWpHttp::callCount())->toBe(2);
+});
+
+test('a freshly rotated key is found on the second fetch', function () {
+    // The other half of the same behaviour, and the reason it exists:
+    // the retry has to actually succeed when the key really is new.
+    // Cached JWKS first, holding a kid this token was not signed with;
+    // the refetch then carries the right one.
+    WpState::$transients['fellowship_jwks_' . md5(JWT_VERIFIER_JWKS_URL)] = [
+        'keys' => [jwtVerifierJwk('a-stale-kid')],
+    ];
+
+    serveJwks();
+
+    $claims = jwtVerifierVerify(jwtVerifierToken());
+
+    expect($claims)->toBeArray();
+    expect(FakeWpHttp::callCount())->toBe(1);
+});
+
+test('a malformed token is rejected', function () {
+    expect(jwtVerifierVerify('not-a-jwt'))->toBeNull();
+    expect(jwtVerifierVerify('only.two'))->toBeNull();
+    expect(FakeWpHttp::callCount())->toBe(0, 'A malformed token must not cost a JWKS fetch.');
+});
+
+test('a JWKS that cannot be fetched is rejected', function () {
+    FakeWpHttp::pushResponse(500, 'upstream is having a day');
+
+    expect(jwtVerifierVerify(jwtVerifierToken()))->toBeNull();
+});
+
+/**
+ * @param array<string, mixed> $overrides
+ * @param list<string>         $remove
+ * @param resource|\OpenSSLAsymmetricKey|null $signWith
+ */
+function jwtVerifierToken(array $overrides = [], array $remove = [], $signWith = null): string
 {
-    private const ISSUER = 'https://appleid.apple.com';
-    private const JWKS_URL = 'https://appleid.apple.com/auth/keys';
-    private const AUDIENCE = 'org.aa-bristol.link';
-    private const KID = 'test-key-1';
+    $claims = array_merge(jwtVerifierClaims(), $overrides);
 
-    /** @var resource|\OpenSSLAsymmetricKey */
-    private $key;
-
-    protected function setUp(): void
-    {
-        parent::setUp();
-
-        FakeWpHttp::reset();
-        WpState::reset();
-
-        $key = openssl_pkey_new([
-            'private_key_bits' => 2048,
-            'private_key_type' => OPENSSL_KEYTYPE_RSA,
-        ]);
-
-        if ($key === false) {
-            // The OPENSSL_CONF trap: without a usable openssl.cnf every
-            // assertion below would be about the environment rather than
-            // the verifier. Said plainly, because a silent skip here would
-            // report a green suite that tested nothing.
-            self::markTestSkipped('OpenSSL could not generate a keypair. Set OPENSSL_CONF.');
-        }
-
-        $this->key = $key;
+    foreach ($remove as $claim) {
+        unset($claims[$claim]);
     }
 
-    public function testAWellFormedTokenVerifies(): void
-    {
-        $this->serveJwks();
+    $header = jwtVerifierEncode(['alg' => 'RS256', 'kid' => JWT_VERIFIER_KID, 'typ' => 'JWT']);
+    $payload = jwtVerifierEncode($claims);
 
-        $claims = $this->verify($this->token());
+    return $header . '.' . $payload . '.' . jwtVerifierSign($header . '.' . $payload, $signWith ?? test()->key);
+}
 
-        self::assertIsArray($claims);
-        self::assertSame('member@example.org', $claims['email']);
-        self::assertSame('000123.abc.456', $claims['sub']);
-    }
+/**
+ * @return array<string, mixed>
+ */
+function jwtVerifierClaims(): array
+{
+    return [
+        'iss'            => JWT_VERIFIER_ISSUER,
+        'aud'            => JWT_VERIFIER_AUDIENCE,
+        'sub'            => '000123.abc.456',
+        'email'          => 'member@example.org',
+        'email_verified' => 'true',
+        'nonce'          => 'the-issued-nonce',
+        'iat'            => time(),
+        'exp'            => time() + 600,
+    ];
+}
 
-    public function testAnUnsignedTokenIsRejected(): void
-    {
-        // The textbook forgery: claim no algorithm and hope the verifier
-        // takes the payload's word for itself.
-        $this->serveJwks();
+/**
+ * @return array<string, mixed>|null
+ */
+function jwtVerifierVerify(string $jwt): ?array
+{
+    return (new JwtVerifier())->verify(
+        $jwt,
+        JWT_VERIFIER_JWKS_URL,
+        JWT_VERIFIER_ISSUER,
+        JWT_VERIFIER_AUDIENCE,
+        'the-issued-nonce',
+    );
+}
 
-        $header = $this->encode(['alg' => 'none', 'kid' => self::KID, 'typ' => 'JWT']);
-        $payload = $this->encode($this->claims());
+function serveJwks(): void
+{
+    FakeWpHttp::pushResponse(200, (string) json_encode(['keys' => [jwtVerifierJwk(JWT_VERIFIER_KID)]]));
+}
 
-        self::assertNull($this->verify($header . '.' . $payload . '.'));
-    }
+/**
+ * The public half, as a JWK.
+ *
+ * @return array<string, string>
+ */
+function jwtVerifierJwk(string $kid): array
+{
+    $details = openssl_pkey_get_details(test()->key);
+    expect($details)->toBeArray();
 
-    public function testAnHmacSignedTokenIsRejected(): void
-    {
-        // The subtler forgery: HS256 signed with the public key, which is
-        // published and therefore known to everybody. A verifier that
-        // dispatched on the header's alg would accept it.
-        $this->serveJwks();
+    return [
+        'kty' => 'RSA',
+        'kid' => $kid,
+        'use' => 'sig',
+        'alg' => 'RS256',
+        'n'   => jwtVerifierBase64Url($details['rsa']['n']),
+        'e'   => jwtVerifierBase64Url($details['rsa']['e']),
+    ];
+}
 
-        $header = $this->encode(['alg' => 'HS256', 'kid' => self::KID, 'typ' => 'JWT']);
-        $payload = $this->encode($this->claims());
-        $signature = $this->base64Url(
-            hash_hmac('sha256', $header . '.' . $payload, $this->publicKeyPem(), true)
-        );
+function publicKeyPem(): string
+{
+    $details = openssl_pkey_get_details(test()->key);
+    expect($details)->toBeArray();
 
-        self::assertNull($this->verify($header . '.' . $payload . '.' . $signature));
-    }
+    return (string) $details['key'];
+}
 
-    public function testATokenSignedByTheWrongKeyIsRejected(): void
-    {
-        $this->serveJwks();
+/**
+ * @param resource|\OpenSSLAsymmetricKey $key
+ */
+function jwtVerifierSign(string $input, $key): string
+{
+    $signature = '';
+    openssl_sign($input, $signature, $key, OPENSSL_ALGO_SHA256);
 
-        $other = openssl_pkey_new([
-            'private_key_bits' => 2048,
-            'private_key_type' => OPENSSL_KEYTYPE_RSA,
-        ]);
-        self::assertNotFalse($other);
+    return jwtVerifierBase64Url($signature);
+}
 
-        self::assertNull($this->verify($this->token(signWith: $other)));
-    }
+/**
+ * @param array<string, mixed> $data
+ */
+function jwtVerifierEncode(array $data): string
+{
+    return jwtVerifierBase64Url((string) json_encode($data));
+}
 
-    public function testATokenForAnotherAudienceIsRejected(): void
-    {
-        // What stops a token minted for somebody else's app being replayed
-        // at this one.
-        $this->serveJwks();
-
-        self::assertNull($this->verify($this->token(['aud' => 'com.example.someone-else'])));
-    }
-
-    public function testATokenFromAnotherIssuerIsRejected(): void
-    {
-        $this->serveJwks();
-
-        self::assertNull($this->verify($this->token(['iss' => 'https://accounts.google.com'])));
-    }
-
-    public function testAReplayedNonceIsRejected(): void
-    {
-        // What stops a token minted for this app being used twice.
-        $this->serveJwks();
-
-        self::assertNull($this->verify($this->token(['nonce' => 'a-different-nonce'])));
-    }
-
-    public function testAnExpiredTokenIsRejected(): void
-    {
-        $this->serveJwks();
-
-        // Well past the 60-second skew allowance.
-        self::assertNull($this->verify($this->token(['exp' => time() - 3600])));
-    }
-
-    public function testATokenIssuedInTheFutureIsRejected(): void
-    {
-        $this->serveJwks();
-
-        self::assertNull($this->verify($this->token(['iat' => time() + 3600])));
-    }
-
-    public function testATokenWithNoExpiryIsRejected(): void
-    {
-        // Would otherwise verify forever.
-        $this->serveJwks();
-
-        self::assertNull($this->verify($this->token(remove: ['exp'])));
-    }
-
-    public function testATokenWithNoIssuedAtIsRejected(): void
-    {
-        $this->serveJwks();
-
-        self::assertNull($this->verify($this->token(remove: ['iat'])));
-    }
-
-    public function testAnUnknownKeyIdIsRetriedOnceThenRejected(): void
-    {
-        // A provider that has just rotated leaves the cached JWKS without
-        // the new kid. The verifier busts the cache and refetches once
-        // rather than failing every sign-in for the cache's whole hour --
-        // so two fetches, then a refusal.
-        $this->serveJwks();
-        $this->serveJwks();
-
-        $header = $this->encode(['alg' => 'RS256', 'kid' => 'a-kid-nobody-published', 'typ' => 'JWT']);
-        $payload = $this->encode($this->claims());
-        $signature = $this->sign($header . '.' . $payload, $this->key);
-
-        self::assertNull($this->verify($header . '.' . $payload . '.' . $signature));
-        self::assertSame(2, FakeWpHttp::callCount());
-    }
-
-    public function testAFreshlyRotatedKeyIsFoundOnTheSecondFetch(): void
-    {
-        // The other half of the same behaviour, and the reason it exists:
-        // the retry has to actually succeed when the key really is new.
-        // Cached JWKS first, holding a kid this token was not signed with;
-        // the refetch then carries the right one.
-        WpState::$transients['fellowship_jwks_' . md5(self::JWKS_URL)] = [
-            'keys' => [$this->jwk('a-stale-kid')],
-        ];
-
-        $this->serveJwks();
-
-        $claims = $this->verify($this->token());
-
-        self::assertIsArray($claims);
-        self::assertSame(1, FakeWpHttp::callCount());
-    }
-
-    public function testAMalformedTokenIsRejected(): void
-    {
-        self::assertNull($this->verify('not-a-jwt'));
-        self::assertNull($this->verify('only.two'));
-        self::assertSame(0, FakeWpHttp::callCount(), 'A malformed token must not cost a JWKS fetch.');
-    }
-
-    public function testAJwksThatCannotBeFetchedIsRejected(): void
-    {
-        FakeWpHttp::pushResponse(500, 'upstream is having a day');
-
-        self::assertNull($this->verify($this->token()));
-    }
-
-    /**
-     * @param array<string, mixed> $overrides
-     * @param list<string>         $remove
-     * @param resource|\OpenSSLAsymmetricKey|null $signWith
-     */
-    private function token(array $overrides = [], array $remove = [], $signWith = null): string
-    {
-        $claims = array_merge($this->claims(), $overrides);
-
-        foreach ($remove as $claim) {
-            unset($claims[$claim]);
-        }
-
-        $header = $this->encode(['alg' => 'RS256', 'kid' => self::KID, 'typ' => 'JWT']);
-        $payload = $this->encode($claims);
-
-        return $header . '.' . $payload . '.' . $this->sign($header . '.' . $payload, $signWith ?? $this->key);
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function claims(): array
-    {
-        return [
-            'iss'            => self::ISSUER,
-            'aud'            => self::AUDIENCE,
-            'sub'            => '000123.abc.456',
-            'email'          => 'member@example.org',
-            'email_verified' => 'true',
-            'nonce'          => 'the-issued-nonce',
-            'iat'            => time(),
-            'exp'            => time() + 600,
-        ];
-    }
-
-    /**
-     * @return array<string, mixed>|null
-     */
-    private function verify(string $jwt): ?array
-    {
-        return (new JwtVerifier())->verify(
-            $jwt,
-            self::JWKS_URL,
-            self::ISSUER,
-            self::AUDIENCE,
-            'the-issued-nonce',
-        );
-    }
-
-    private function serveJwks(): void
-    {
-        FakeWpHttp::pushResponse(200, (string) json_encode(['keys' => [$this->jwk(self::KID)]]));
-    }
-
-    /**
-     * The public half, as a JWK.
-     *
-     * @return array<string, string>
-     */
-    private function jwk(string $kid): array
-    {
-        $details = openssl_pkey_get_details($this->key);
-        self::assertIsArray($details);
-
-        return [
-            'kty' => 'RSA',
-            'kid' => $kid,
-            'use' => 'sig',
-            'alg' => 'RS256',
-            'n'   => $this->base64Url($details['rsa']['n']),
-            'e'   => $this->base64Url($details['rsa']['e']),
-        ];
-    }
-
-    private function publicKeyPem(): string
-    {
-        $details = openssl_pkey_get_details($this->key);
-        self::assertIsArray($details);
-
-        return (string) $details['key'];
-    }
-
-    /**
-     * @param resource|\OpenSSLAsymmetricKey $key
-     */
-    private function sign(string $input, $key): string
-    {
-        $signature = '';
-        openssl_sign($input, $signature, $key, OPENSSL_ALGO_SHA256);
-
-        return $this->base64Url($signature);
-    }
-
-    /**
-     * @param array<string, mixed> $data
-     */
-    private function encode(array $data): string
-    {
-        return $this->base64Url((string) json_encode($data));
-    }
-
-    private function base64Url(string $bytes): string
-    {
-        return rtrim(strtr(base64_encode($bytes), '+/', '-_'), '=');
-    }
+function jwtVerifierBase64Url(string $bytes): string
+{
+    return rtrim(strtr(base64_encode($bytes), '+/', '-_'), '=');
 }
