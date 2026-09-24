@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
-use PHPUnit\Framework\Attributes\CoversClass;
 use function Brain\Monkey\Functions\when;
-use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Admin\MessagesPage;
 use Fellowship\Auth\DeviceTokenMinter;
@@ -35,211 +33,181 @@ use WP_REST_Request;
  * stops qualifying is refused on their next call rather than at their
  * next enrolment.
  */
-#[CoversClass(\Fellowship\Admin\MessagesPage::class)]
-#[CoversClass(\Fellowship\Devices\CurrentDevice::class)]
-final class MessageLogTest extends TestCase
+
+covers(\Fellowship\Admin\MessagesPage::class, \Fellowship\Devices\CurrentDevice::class);
+
+const MESSAGE_LOG_MEMBER = 'member@example.org';
+
+beforeEach(function () {
+    $_GET = [];
+    WpState::$userCan = true;
+
+    when('paginate_links')->justReturn('');
+    when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
+
+    $this->messages = new InMemoryMessageRepository();
+    $this->recipients = new InMemoryRecipientRepository();
+    $this->devices = new InMemoryDeviceRepository();
+    $this->minter = new DeviceTokenMinter();
+
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: MESSAGE_LOG_MEMBER),
+    ]);
+});
+
+test('the log shows who sent what and to whom', function () {
+    messageLogGive('committee', 'steering', 'Dave P');
+
+    $markup = messageLogRender();
+
+    expect($markup)->toContain('Intergroup moved');
+    expect($markup)->toContain('Dave P');
+    expect($markup)->toContain('steering');
+});
+
+test('a message from the app is marked as such', function () {
+    // Which is how somebody reading the log tells a member's message
+    // from one the intergroup sent.
+    messageLogGive('members', '', 'Dave P', fromApp: true);
+
+    expect(messageLogRender())->toContain('from Link');
+});
+
+test('a message with no sender reads as the intergroup', function () {
+    // A send through the API has no member behind it. Showing a blank
+    // sender would look like data loss.
+    messageLogGive('all', '', '');
+
+    expect(messageLogRender())->toContain('Intergroup');
+});
+
+test('the log shows how many read it', function () {
+    // The half of the screen that makes "this went nowhere" visible.
+    $id = messageLogGive('members', '', 'Dave P');
+
+    $this->recipients->addMany($id, [
+        ['email' => MESSAGE_LOG_MEMBER, 'member_id' => 7],
+        ['email' => 'sue@example.org', 'member_id' => 8],
+    ], 1788000000);
+    $this->recipients->markRead($id, MESSAGE_LOG_MEMBER, 1788000100);
+
+    expect(messageLogRender())->toContain('1 / 2');
+});
+
+test('each audience is named in words', function () {
+    messageLogGive('all', '', 'Dave P');
+
+    expect(messageLogRender())->toContain('Everyone');
+});
+
+// ── Who is calling ────────────────────────────────────────────────
+
+test('an enrolled handset is recognised', function () {
+    $token = messageLogEnrol();
+
+    $device = messageLogCurrentDevice()->fromRequest(messageLogRequest($token));
+
+    expect($device)->not->toBeNull();
+    expect($device->memberEmail)->toBe(MESSAGE_LOG_MEMBER);
+});
+
+test('a request with no header is nobody', function () {
+    expect(messageLogCurrentDevice()->fromRequest(messageLogRequest()))->toBeNull();
+});
+
+test('something that is not a token is nobody', function () {
+    // Refused on shape before it ever reaches the database, so a
+    // malformed header costs no query.
+    expect(messageLogCurrentDevice()->fromRequest(messageLogRequest('not-a-token')))->toBeNull();
+});
+
+test('a revoked handset is nobody', function () {
+    $token = messageLogEnrol();
+    $this->devices->revoke(1, time());
+
+    expect(messageLogCurrentDevice()->fromRequest(messageLogRequest($token)))->toBeNull();
+});
+
+test('a member who no longer qualifies is refused on their next call', function () {
+    // The gate is re-run on every request rather than trusted from
+    // enrolment, so somebody removed from Unity stops being able to
+    // call immediately rather than at their next sign-in.
+    $token = messageLogEnrol();
+
+    $this->members = new InMemoryMemberRepository([]);
+
+    expect(messageLogCurrentDevice()->fromRequest(messageLogRequest($token)))->toBeNull();
+});
+
+test('the member behind a device is resolved through the same gate', function () {
+    // So the answer cannot disagree with whether the request was
+    // allowed at all.
+    $token = messageLogEnrol();
+    $current = messageLogCurrentDevice();
+
+    $device = $current->fromRequest(messageLogRequest($token));
+
+    expect($device)->not->toBeNull();
+    expect($current->memberFor($device))->not->toBeNull();
+});
+
+// ── Fixtures ──────────────────────────────────────────────────────
+
+function messageLogRender(): string
 {
-    private const MEMBER = 'member@example.org';
+    return captureOutput(fn() => (new MessagesPage(test()->messages, test()->recipients))->render());
+}
 
-    private InMemoryMessageRepository $messages;
-    private InMemoryRecipientRepository $recipients;
-    private InMemoryDeviceRepository $devices;
-    private InMemoryMemberRepository $members;
-    private DeviceTokenMinter $minter;
+function messageLogGive(string $audience, string $ref, string $sender, bool $fromApp = false): int
+{
+    return test()->messages->create(
+        'uuid-' . count(test()->messages->rows),
+        $sender === '' ? '' : 'dave@example.org',
+        $sender === '' ? 0 : 7,
+        $sender,
+        'Intergroup moved',
+        'Now the 14th, same room as usual.',
+        $audience,
+        $ref,
+        1788000000,
+        0,
+        $fromApp ? 4 : 0,
+    )->id;
+}
 
-    protected function setUp(): void
-    {
-        parent::setUp();
+function messageLogCurrentDevice(): CurrentDevice
+{
+    $gate = new MemberGate(test()->members);
 
-        $_GET = [];
-        WpState::$userCan = true;
+    return new CurrentDevice(test()->devices, test()->minter, $gate, test()->members);
+}
 
-        when('paginate_links')->justReturn('');
-        when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
+function messageLogEnrol(): string
+{
+    $token = test()->minter->mint();
 
-        $this->messages = new InMemoryMessageRepository();
-        $this->recipients = new InMemoryRecipientRepository();
-        $this->devices = new InMemoryDeviceRepository();
-        $this->minter = new DeviceTokenMinter();
+    test()->devices->create(
+        test()->minter->hash($token),
+        MESSAGE_LOG_MEMBER,
+        7,
+        'Pixel 6a',
+        'android',
+        'spki',
+        'fcm',
+        'token-1',
+        1788000000,
+    );
 
-        $this->members = new InMemoryMemberRepository([
-            new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: self::MEMBER),
-        ]);
+    return $token;
+}
+
+function messageLogRequest(string $token = ''): WP_REST_Request
+{
+    $request = new WP_REST_Request();
+
+    if ($token !== '') {
+        $request->set_header('authorization', 'Bearer ' . $token);
     }
 
-    public function testTheLogShowsWhoSentWhatAndToWhom(): void
-    {
-        $this->give('committee', 'steering', 'Dave P');
-
-        $markup = $this->render();
-
-        self::assertStringContainsString('Intergroup moved', $markup);
-        self::assertStringContainsString('Dave P', $markup);
-        self::assertStringContainsString('steering', $markup);
-    }
-
-    public function testAMessageFromTheAppIsMarkedAsSuch(): void
-    {
-        // Which is how somebody reading the log tells a member's message
-        // from one the intergroup sent.
-        $this->give('members', '', 'Dave P', fromApp: true);
-
-        self::assertStringContainsString('from Link', $this->render());
-    }
-
-    public function testAMessageWithNoSenderReadsAsTheIntergroup(): void
-    {
-        // A send through the API has no member behind it. Showing a blank
-        // sender would look like data loss.
-        $this->give('all', '', '');
-
-        self::assertStringContainsString('Intergroup', $this->render());
-    }
-
-    public function testTheLogShowsHowManyReadIt(): void
-    {
-        // The half of the screen that makes "this went nowhere" visible.
-        $id = $this->give('members', '', 'Dave P');
-
-        $this->recipients->addMany($id, [
-            ['email' => self::MEMBER, 'member_id' => 7],
-            ['email' => 'sue@example.org', 'member_id' => 8],
-        ], 1788000000);
-        $this->recipients->markRead($id, self::MEMBER, 1788000100);
-
-        self::assertStringContainsString('1 / 2', $this->render());
-    }
-
-    public function testEachAudienceIsNamedInWords(): void
-    {
-        $this->give('all', '', 'Dave P');
-
-        self::assertStringContainsString('Everyone', $this->render());
-    }
-
-    // ── Who is calling ────────────────────────────────────────────────
-
-    public function testAnEnrolledHandsetIsRecognised(): void
-    {
-        $token = $this->enrol();
-
-        $device = $this->currentDevice()->fromRequest($this->request($token));
-
-        self::assertNotNull($device);
-        self::assertSame(self::MEMBER, $device->memberEmail);
-    }
-
-    public function testARequestWithNoHeaderIsNobody(): void
-    {
-        self::assertNull($this->currentDevice()->fromRequest($this->request()));
-    }
-
-    public function testSomethingThatIsNotATokenIsNobody(): void
-    {
-        // Refused on shape before it ever reaches the database, so a
-        // malformed header costs no query.
-        self::assertNull($this->currentDevice()->fromRequest($this->request('not-a-token')));
-    }
-
-    public function testARevokedHandsetIsNobody(): void
-    {
-        $token = $this->enrol();
-        $this->devices->revoke(1, time());
-
-        self::assertNull($this->currentDevice()->fromRequest($this->request($token)));
-    }
-
-    public function testAMemberWhoNoLongerQualifiesIsRefusedOnTheirNextCall(): void
-    {
-        // The gate is re-run on every request rather than trusted from
-        // enrolment, so somebody removed from Unity stops being able to
-        // call immediately rather than at their next sign-in.
-        $token = $this->enrol();
-
-        $this->members = new InMemoryMemberRepository([]);
-
-        self::assertNull($this->currentDevice()->fromRequest($this->request($token)));
-    }
-
-    public function testTheMemberBehindADeviceIsResolvedThroughTheSameGate(): void
-    {
-        // So the answer cannot disagree with whether the request was
-        // allowed at all.
-        $token = $this->enrol();
-        $current = $this->currentDevice();
-
-        $device = $current->fromRequest($this->request($token));
-
-        self::assertNotNull($device);
-        self::assertNotNull($current->memberFor($device));
-    }
-
-    // ── Fixtures ──────────────────────────────────────────────────────
-
-    private function render(): string
-    {
-        ob_start();
-
-        try {
-            (new MessagesPage($this->messages, $this->recipients))->render();
-        } finally {
-            $markup = (string) ob_get_clean();
-        }
-
-        return $markup;
-    }
-
-    private function give(string $audience, string $ref, string $sender, bool $fromApp = false): int
-    {
-        return $this->messages->create(
-            'uuid-' . count($this->messages->rows),
-            $sender === '' ? '' : 'dave@example.org',
-            $sender === '' ? 0 : 7,
-            $sender,
-            'Intergroup moved',
-            'Now the 14th, same room as usual.',
-            $audience,
-            $ref,
-            1788000000,
-            0,
-            $fromApp ? 4 : 0,
-        )->id;
-    }
-
-    private function currentDevice(): CurrentDevice
-    {
-        $gate = new MemberGate($this->members);
-
-        return new CurrentDevice($this->devices, $this->minter, $gate, $this->members);
-    }
-
-    private function enrol(): string
-    {
-        $token = $this->minter->mint();
-
-        $this->devices->create(
-            $this->minter->hash($token),
-            self::MEMBER,
-            7,
-            'Pixel 6a',
-            'android',
-            'spki',
-            'fcm',
-            'token-1',
-            1788000000,
-        );
-
-        return $token;
-    }
-
-    private function request(string $token = ''): WP_REST_Request
-    {
-        $request = new WP_REST_Request();
-
-        if ($token !== '') {
-            $request->set_header('authorization', 'Bearer ' . $token);
-        }
-
-        return $request;
-    }
+    return $request;
 }

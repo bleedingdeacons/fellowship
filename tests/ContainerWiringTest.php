@@ -4,11 +4,8 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
-use PHPUnit\Framework\Attributes\CoversClass;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;
-use PHPUnit\Framework\Attributes\DataProvider;
 use function Brain\Monkey\Functions\when;
-use BleedingDeacons\WpMocks\TestCase;
 use Fellowship\Admin\ComposePage;
 use Fellowship\Admin\DevicesPage;
 use Fellowship\Admin\MessagesPage;
@@ -57,104 +54,82 @@ use Unity\Testing\Doubles\InMemoryMemberRepository;
  * with "unknown sign-in provider" while the app cheerfully offers the
  * button.
  */
-#[CoversClass(\Fellowship\Core\FellowshipServiceProvider::class)]
-final class ContainerWiringTest extends TestCase
-{
-    private FakeContainer $container;
 
-    protected function setUp(): void
-    {
-        parent::setUp();
+covers(\Fellowship\Core\FellowshipServiceProvider::class);
 
-        $GLOBALS['wpdb'] = new RecordingWpdb();
+beforeEach(function () {
+    $GLOBALS['wpdb'] = new RecordingWpdb();
 
-        when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+    when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
 
-        // What Unity and Scrutiny are expected to have put there already.
-        $this->container = new FakeContainer([
-            'Unity\\Members\\Interfaces\\MemberRepository' => new InMemoryMemberRepository(),
-            'Unity\\Committees\\Interfaces\\CommitteeRepository' => new InMemoryCommitteeRepository(),
-            'Scrutiny\\Audit\\Interfaces\\AuditLogger' => new SpyAuditLogger(),
-            // The password store is Unity's too, from the same upgrade
-            // that gave it a table of its own. Fellowship no longer binds
-            // one, so if this line goes the failure is the honest one:
-            // PasswordAuthenticator cannot be built.
-            PasswordCredentialRepository::class => new InMemoryPasswordCredentialRepository(),
-        ]);
+    // What Unity and Scrutiny are expected to have put there already.
+    $this->container = new FakeContainer([
+        'Unity\\Members\\Interfaces\\MemberRepository' => new InMemoryMemberRepository(),
+        'Unity\\Committees\\Interfaces\\CommitteeRepository' => new InMemoryCommitteeRepository(),
+        'Scrutiny\\Audit\\Interfaces\\AuditLogger' => new SpyAuditLogger(),
+        // The password store is Unity's too, from the same upgrade
+        // that gave it a table of its own. Fellowship no longer binds
+        // one, so if this line goes the failure is the honest one:
+        // PasswordAuthenticator cannot be built.
+        PasswordCredentialRepository::class => new InMemoryPasswordCredentialRepository(),
+    ]);
 
-        (new FellowshipServiceProvider())->register($this->container);
+    (new FellowshipServiceProvider())->register($this->container);
+});
+
+/**
+ * @param class-string $service
+ */
+test('every service can be built', function (string $service) {
+    // Built, not merely registered. A factory that throws when called
+    // is the failure this exists to catch, and asserting on
+    // registration alone would sail straight past it.
+    expect($this->container->has($service))->toBeTrue($service . ' was never registered.');
+    expect($this->container->get($service))->toBeInstanceOf($service);
+})->with([
+    [DeviceAuthController::class],
+    [MessageController::class],
+    [DirectoryController::class],
+    [MessageApi::class],
+    [SettingsPage::class],
+    [MessagesPage::class],
+    [ComposePage::class],
+    [DevicesPage::class],
+    [DeviceRepository::class],
+    [MessageRepository::class],
+    [RecipientRepository::class],
+    [PasswordCredentialRepository::class],
+    [PasswordAuthenticator::class],
+    [ProviderRegistry::class],
+    [FcmTransport::class],
+]);
+
+test('every sign in provider is registered', function () {
+    // The list that is easy to extend in half: a provider class with
+    // no registration is a server that refuses it while the app
+    // offers the button.
+    $registry = $this->container->get(ProviderRegistry::class);
+
+    $expected = [
+        GoogleProvider::PROVIDER_NAME,
+        MicrosoftProvider::PROVIDER_NAME,
+        FacebookProvider::PROVIDER_NAME,
+        AppleProvider::PROVIDER_NAME,
+    ];
+
+    foreach ($expected as $name) {
+        expect($registry->get($name))->not->toBeNull($name . ' is not registered.');
     }
+});
 
-    /**
-     * @return list<array{class-string}>
-     */
-    public static function services(): array
-    {
-        return [
-            [DeviceAuthController::class],
-            [MessageController::class],
-            [DirectoryController::class],
-            [MessageApi::class],
-            [SettingsPage::class],
-            [MessagesPage::class],
-            [ComposePage::class],
-            [DevicesPage::class],
-            [DeviceRepository::class],
-            [MessageRepository::class],
-            [RecipientRepository::class],
-            [PasswordCredentialRepository::class],
-            [PasswordAuthenticator::class],
-            [ProviderRegistry::class],
-            [FcmTransport::class],
-        ];
-    }
+test('an unknown provider is not invented', function () {
+    expect($this->container->get(ProviderRegistry::class)->get('myspace'))->toBeNull();
+});
 
-    /**
-     * @param class-string $service
-     */
-    #[DataProvider('services')]
-    public function testEveryServiceCanBeBuilt(string $service): void
-    {
-        // Built, not merely registered. A factory that throws when called
-        // is the failure this exists to catch, and asserting on
-        // registration alone would sail straight past it.
-        self::assertTrue($this->container->has($service), $service . ' was never registered.');
-        self::assertInstanceOf($service, $this->container->get($service));
-    }
-
-    public function testEverySignInProviderIsRegistered(): void
-    {
-        // The list that is easy to extend in half: a provider class with
-        // no registration is a server that refuses it while the app
-        // offers the button.
-        $registry = $this->container->get(ProviderRegistry::class);
-
-        $expected = [
-            GoogleProvider::PROVIDER_NAME,
-            MicrosoftProvider::PROVIDER_NAME,
-            FacebookProvider::PROVIDER_NAME,
-            AppleProvider::PROVIDER_NAME,
-        ];
-
-        foreach ($expected as $name) {
-            self::assertNotNull($registry->get($name), $name . ' is not registered.');
-        }
-    }
-
-    public function testAnUnknownProviderIsNotInvented(): void
-    {
-        self::assertNull($this->container->get(ProviderRegistry::class)->get('myspace'));
-    }
-
-    public function testTheSameInstanceComesBackEachTime(): void
-    {
-        // The repositories hold no state, but the container's contract is
-        // one instance per id, and a factory that ignored it would give
-        // the admin screens a different device repository from the REST
-        // controllers.
-        self::assertSame(
-            $this->container->get(DeviceRepository::class),
-            $this->container->get(DeviceRepository::class),
-        );
-    }
-}
+test('the same instance comes back each time', function () {
+    // The repositories hold no state, but the container's contract is
+    // one instance per id, and a factory that ignored it would give
+    // the admin screens a different device repository from the REST
+    // controllers.
+    expect($this->container->get(DeviceRepository::class))->toBe($this->container->get(DeviceRepository::class));
+});

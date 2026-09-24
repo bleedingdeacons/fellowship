@@ -4,10 +4,8 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
-use PHPUnit\Framework\Attributes\CoversClass;
 use function Brain\Monkey\Functions\when;
 use function Brain\Monkey\Actions\expectAdded;
-use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Admin\ComposePage;
 use Fellowship\Admin\DevicesPage;
@@ -50,229 +48,193 @@ use Unity\Testing\Doubles\MemberStub;
  * order and a submenu registered before its parent exists falls back to a
  * URL that goes nowhere.
  */
-#[CoversClass(\Fellowship\Admin\ComposePage::class)]
-#[CoversClass(\Fellowship\Admin\DevicesPage::class)]
-#[CoversClass(\Fellowship\Admin\SettingsPage::class)]
-#[CoversClass(\Fellowship\Admin\MessagesPage::class)]
-#[CoversClass(\Fellowship\Messaging\MessageApi::class)]
-final class AdminNoticesTest extends TestCase
+
+covers(\Fellowship\Admin\ComposePage::class, \Fellowship\Admin\DevicesPage::class, \Fellowship\Admin\SettingsPage::class, \Fellowship\Admin\MessagesPage::class, \Fellowship\Messaging\MessageApi::class);
+
+beforeEach(function () {
+    $_GET = [];
+    $_POST = [];
+    WpState::$userCan = true;
+
+    when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
+    when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+    when('get_current_user_id')->justReturn(3);
+    when('submit_button')->justReturn(null);
+    when('paginate_links')->justReturn('');
+    when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
+    when('add_menu_page')->justReturn('toplevel_page_fellowship');
+    when('add_submenu_page')->justReturn('fellowship_page_x');
+    when('wp_generate_uuid4')->alias(static fn(): string => '11111111-2222-4333-8444-555555555555');
+
+    $this->messages = new InMemoryMessageRepository();
+    $this->recipients = new InMemoryRecipientRepository();
+    $this->devices = new InMemoryDeviceRepository();
+    $this->audit = new SpyAuditLogger();
+
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: 'dave@example.org'),
+    ]);
+});
+
+// ── Notices ───────────────────────────────────────────────────────
+
+test('each device result says something', function () {
+    foreach (['revoked', 'removed', 'code_sent'] as $result) {
+        $_GET['fellowship_result'] = $result;
+
+        expect(noticeFrom(fn() => adminNoticesDevicesPage()->render()))->not->toBe('', $result . ' produced no visible notice.');
+    }
+});
+
+test('each device refusal says something different', function () {
+    // Three ways the password code does not go out, each needing a
+    // different thing from whoever reads it.
+    $seen = [];
+
+    foreach (['code_bad_address', 'code_not_a_member', 'code_too_soon'] as $result) {
+        $_GET['fellowship_result'] = $result;
+
+        $seen[] = noticeFrom(fn() => adminNoticesDevicesPage()->render());
+    }
+
+    expect(array_unique($seen))->toHaveCount(3, 'Two refusals read the same.');
+});
+
+test('the compose screen reports a send', function () {
+    $_GET['fellowship_result'] = 'sent';
+
+    expect(noticeFrom(fn() => adminNoticesComposePage()->render()))->toContain('sent');
+});
+
+test('the compose screen shows the stored reason', function () {
+    // The reason waits in a one-shot transient rather than the query
+    // string. If it were not read back the member would see a bare
+    // "error" and no way to act on it.
+    $_GET['fellowship_result'] = 'error';
+    set_transient('fellowship_compose_error_3', 'Choose who this message is for.', 60);
+
+    $markup = noticeFrom(fn() => adminNoticesComposePage()->render());
+
+    expect($markup)->toContain('Choose who');
+});
+
+test('the settings screen reports a save', function () {
+    $_GET['fellowship_result'] = 'saved';
+
+    expect(noticeFrom(fn() => (new SettingsPage(new Settings()))->render()))->not->toBe('');
+});
+
+test('the settings screen reports a service account it would not take', function () {
+    $_GET['fellowship_result'] = 'bad_service_account';
+
+    expect(noticeFrom(fn() => (new SettingsPage(new Settings()))->render()))->not->toBe('');
+});
+
+test('a result nobody issued says nothing', function () {
+    // A hand-edited URL should not be able to put arbitrary chrome on
+    // the screen.
+    $_GET['fellowship_result'] = 'made-up';
+
+    expect(noticeFrom(fn() => adminNoticesDevicesPage()->render()))->toBe('');
+});
+
+// ── The menu ──────────────────────────────────────────────────────
+
+test('the messages screen owns the top level menu', function () {
+    // The others attach to its slug, and all four use the same hook,
+    // so a submenu registered before its parent exists falls back to
+    // a URL that goes nowhere.
+    expectAdded('admin_menu')->once();
+
+    (new MessagesPage($this->messages, $this->recipients))->register();
+});
+
+test('every screen registers its menu', function () {
+    expectAdded('admin_menu')->times(4);
+
+    (new MessagesPage($this->messages, $this->recipients))->register();
+    adminNoticesComposePage()->register();
+    adminNoticesDevicesPage()->register();
+    (new SettingsPage(new Settings()))->register();
+});
+
+test('the screens with actions register their handlers', function () {
+    // Compose registers one admin_post action; devices registers
+    // three. A handler that is never hooked is a button that posts
+    // to a URL WordPress answers with -1.
+    expectAdded('admin_post_' . ComposePage::SEND_ACTION)->once();
+
+    adminNoticesComposePage()->register();
+});
+
+test('the device screen registers all three of its actions', function () {
+    foreach ([DevicesPage::REVOKE_ACTION, DevicesPage::REMOVE_ACTION, DevicesPage::RESET_ACTION] as $action) {
+        expectAdded('admin_post_' . $action)->once();
+    }
+
+    adminNoticesDevicesPage()->register();
+});
+
+// ── The action form of the send API ───────────────────────────────
+
+test('the send API is reachable as an action', function () {
+    // Another plugin sends by firing a hook rather than by resolving
+    // anything out of Unity's container.
+    expectAdded('fellowship/send_message')->once();
+
+    adminNoticesApi()->register();
+});
+
+// ── Fixtures ──────────────────────────────────────────────────────
+
+/** Render a screen and return only its notice markup. */
+function noticeFrom(callable $screen): string
 {
-    private InMemoryMessageRepository $messages;
-    private InMemoryRecipientRepository $recipients;
-    private InMemoryDeviceRepository $devices;
-    private InMemoryMemberRepository $members;
-    private SpyAuditLogger $audit;
+    $markup = captureOutput($screen);
 
-    protected function setUp(): void
-    {
-        parent::setUp();
-
-        $_GET = [];
-        $_POST = [];
-        WpState::$userCan = true;
-
-        when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
-        when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
-        when('get_current_user_id')->justReturn(3);
-        when('submit_button')->justReturn(null);
-        when('paginate_links')->justReturn('');
-        when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
-        when('add_menu_page')->justReturn('toplevel_page_fellowship');
-        when('add_submenu_page')->justReturn('fellowship_page_x');
-        when('wp_generate_uuid4')->alias(static fn(): string => '11111111-2222-4333-8444-555555555555');
-
-        $this->messages = new InMemoryMessageRepository();
-        $this->recipients = new InMemoryRecipientRepository();
-        $this->devices = new InMemoryDeviceRepository();
-        $this->audit = new SpyAuditLogger();
-
-        $this->members = new InMemoryMemberRepository([
-            new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: 'dave@example.org'),
-        ]);
+    if (preg_match('~<div class="notice[^"]*">(.*?)</div>~s', $markup, $matches) !== 1) {
+        return '';
     }
 
-    // ── Notices ───────────────────────────────────────────────────────
+    return trim(strip_tags($matches[1]));
+}
 
-    public function testEachDeviceResultSaysSomething(): void
-    {
-        foreach (['revoked', 'removed', 'code_sent'] as $result) {
-            $_GET['fellowship_result'] = $result;
+function adminNoticesDevicesPage(): DevicesPage
+{
+    $gate = new MemberGate(test()->members);
 
-            self::assertNotSame(
-                '',
-                $this->noticeFrom(fn() => $this->devicesPage()->render()),
-                $result . ' produced no visible notice.',
-            );
-        }
-    }
-
-    public function testEachDeviceRefusalSaysSomethingDifferent(): void
-    {
-        // Three ways the password code does not go out, each needing a
-        // different thing from whoever reads it.
-        $seen = [];
-
-        foreach (['code_bad_address', 'code_not_a_member', 'code_too_soon'] as $result) {
-            $_GET['fellowship_result'] = $result;
-
-            $seen[] = $this->noticeFrom(fn() => $this->devicesPage()->render());
-        }
-
-        self::assertCount(3, array_unique($seen), 'Two refusals read the same.');
-    }
-
-    public function testTheComposeScreenReportsASend(): void
-    {
-        $_GET['fellowship_result'] = 'sent';
-
-        self::assertStringContainsString('sent', $this->noticeFrom(fn() => $this->composePage()->render()));
-    }
-
-    public function testTheComposeScreenShowsTheStoredReason(): void
-    {
-        // The reason waits in a one-shot transient rather than the query
-        // string. If it were not read back the member would see a bare
-        // "error" and no way to act on it.
-        $_GET['fellowship_result'] = 'error';
-        set_transient('fellowship_compose_error_3', 'Choose who this message is for.', 60);
-
-        $markup = $this->noticeFrom(fn() => $this->composePage()->render());
-
-        self::assertStringContainsString('Choose who', $markup);
-    }
-
-    public function testTheSettingsScreenReportsASave(): void
-    {
-        $_GET['fellowship_result'] = 'saved';
-
-        self::assertNotSame('', $this->noticeFrom(fn() => (new SettingsPage(new Settings()))->render()));
-    }
-
-    public function testTheSettingsScreenReportsAServiceAccountItWouldNotTake(): void
-    {
-        $_GET['fellowship_result'] = 'bad_service_account';
-
-        self::assertNotSame('', $this->noticeFrom(fn() => (new SettingsPage(new Settings()))->render()));
-    }
-
-    public function testAResultNobodyIssuedSaysNothing(): void
-    {
-        // A hand-edited URL should not be able to put arbitrary chrome on
-        // the screen.
-        $_GET['fellowship_result'] = 'made-up';
-
-        self::assertSame('', $this->noticeFrom(fn() => $this->devicesPage()->render()));
-    }
-
-    // ── The menu ──────────────────────────────────────────────────────
-
-    public function testTheMessagesScreenOwnsTheTopLevelMenu(): void
-    {
-        // The others attach to its slug, and all four use the same hook,
-        // so a submenu registered before its parent exists falls back to
-        // a URL that goes nowhere.
-        expectAdded('admin_menu')->once();
-
-        (new MessagesPage($this->messages, $this->recipients))->register();
-    }
-
-    public function testEveryScreenRegistersItsMenu(): void
-    {
-        expectAdded('admin_menu')->times(4);
-
-        (new MessagesPage($this->messages, $this->recipients))->register();
-        $this->composePage()->register();
-        $this->devicesPage()->register();
-        (new SettingsPage(new Settings()))->register();
-    }
-
-    public function testTheScreensWithActionsRegisterTheirHandlers(): void
-    {
-        // Compose registers one admin_post action; devices registers
-        // three. A handler that is never hooked is a button that posts
-        // to a URL WordPress answers with -1.
-        expectAdded('admin_post_' . ComposePage::SEND_ACTION)->once();
-
-        $this->composePage()->register();
-    }
-
-    public function testTheDeviceScreenRegistersAllThreeOfItsActions(): void
-    {
-        foreach ([DevicesPage::REVOKE_ACTION, DevicesPage::REMOVE_ACTION, DevicesPage::RESET_ACTION] as $action) {
-            expectAdded('admin_post_' . $action)->once();
-        }
-
-        $this->devicesPage()->register();
-    }
-
-    // ── The action form of the send API ───────────────────────────────
-
-    public function testTheSendApiIsReachableAsAnAction(): void
-    {
-        // Another plugin sends by firing a hook rather than by resolving
-        // anything out of Unity's container.
-        expectAdded('fellowship/send_message')->once();
-
-        $this->api()->register();
-    }
-
-    // ── Fixtures ──────────────────────────────────────────────────────
-
-    /** Render a screen and return only its notice markup. */
-    private function noticeFrom(callable $screen): string
-    {
-        ob_start();
-
-        try {
-            $screen();
-        } finally {
-            $markup = (string) ob_get_clean();
-        }
-
-        if (preg_match('~<div class="notice[^"]*">(.*?)</div>~s', $markup, $matches) !== 1) {
-            return '';
-        }
-
-        return trim(strip_tags($matches[1]));
-    }
-
-    private function devicesPage(): DevicesPage
-    {
-        $gate = new MemberGate($this->members);
-
-        return new DevicesPage(
-            $this->devices,
-            $this->members,
-            $this->audit,
-            new PasswordAuthenticator(
-                new InMemoryPasswordCredentialRepository(),
-                $gate,
-                new PasswordResetMailer(),
-                new PasswordPolicy(),
-            ),
+    return new DevicesPage(
+        test()->devices,
+        test()->members,
+        test()->audit,
+        new PasswordAuthenticator(
+            new InMemoryPasswordCredentialRepository(),
             $gate,
-        );
-    }
+            new PasswordResetMailer(),
+            new PasswordPolicy(),
+        ),
+        $gate,
+    );
+}
 
-    private function composePage(): ComposePage
-    {
-        return new ComposePage($this->api(), new InMemoryCommitteeRepository());
-    }
+function adminNoticesComposePage(): ComposePage
+{
+    return new ComposePage(adminNoticesApi(), new InMemoryCommitteeRepository());
+}
 
-    private function api(): MessageApi
-    {
-        $gate = new MemberGate($this->members);
-        $settings = new Settings();
+function adminNoticesApi(): MessageApi
+{
+    $gate = new MemberGate(test()->members);
+    $settings = new Settings();
 
-        return new MessageApi(
-            new MessageDispatcher(
-                $this->messages,
-                $this->recipients,
-                $this->devices,
-                new FcmTransport(new FcmClient(), $settings, new MessageSealer()),
-            ),
-            new RecipientResolver($this->members, new InMemoryCommitteeRepository(), $gate),
-            $this->audit,
-        );
-    }
+    return new MessageApi(
+        new MessageDispatcher(
+            test()->messages,
+            test()->recipients,
+            test()->devices,
+            new FcmTransport(new FcmClient(), $settings, new MessageSealer()),
+        ),
+        new RecipientResolver(test()->members, new InMemoryCommitteeRepository(), $gate),
+        test()->audit,
+    );
 }

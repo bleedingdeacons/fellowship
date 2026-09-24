@@ -4,10 +4,8 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
-use PHPUnit\Framework\Attributes\CoversClass;
 use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\Exceptions\WpDieException;
-use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Admin\DevicesPage;
 use Fellowship\Admin\SettingsPage;
@@ -40,272 +38,242 @@ use Unity\Testing\Doubles\MemberStub;
  * that looks saved and pushes nothing is the worst of both, and the
  * moment to find out is while somebody is looking at the screen.
  */
-#[CoversClass(\Fellowship\Admin\DevicesPage::class)]
-#[CoversClass(\Fellowship\Admin\SettingsPage::class)]
-#[CoversClass(\Fellowship\Core\Schema::class)]
-final class AdminHandlersTest extends TestCase
+
+covers(\Fellowship\Admin\DevicesPage::class, \Fellowship\Admin\SettingsPage::class, \Fellowship\Core\Schema::class);
+
+const ADMIN_HANDLERS_MEMBER = 'member@example.org';
+
+beforeEach(function () {
+    $_POST = [];
+    WpState::$userCan = true;
+
+    when('get_current_user_id')->justReturn(3);
+    when('check_admin_referer')->justReturn(true);
+    when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+
+    $this->devices = new InMemoryDeviceRepository();
+    $this->audit = new SpyAuditLogger();
+
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: ADMIN_HANDLERS_MEMBER),
+    ]);
+});
+
+// ── Cutting a handset off ─────────────────────────────────────────
+
+test('revoking cuts the handset off', function () {
+    adminHandlersEnrol();
+    $_POST['device'] = '1';
+
+    expect(adminHandlersDevicesPage()->revokeFromRequest())->toBe('revoked');
+    expect($this->devices->rows[1]->isRevoked())->toBeTrue();
+});
+
+test('a revoked handset can no longer be found by its token', function () {
+    // Which is the whole mechanism: it is refused because it is not
+    // there, not because something downstream checks a flag.
+    adminHandlersEnrol();
+    $_POST['device'] = '1';
+
+    adminHandlersDevicesPage()->revokeFromRequest();
+
+    expect($this->devices->findByTokenHash('hash-1'))->toBeNull();
+});
+
+test('revoking is audited', function () {
+    adminHandlersEnrol();
+    $_POST['device'] = '1';
+
+    adminHandlersDevicesPage()->revokeFromRequest();
+
+    expect($this->audit->entries)->not->toBeEmpty();
+});
+
+test('revoking something already revoked writes no second entry', function () {
+    // Otherwise the log gains an entry for a revocation that did not
+    // happen, which makes the ones that did harder to find.
+    adminHandlersEnrol();
+    $_POST['device'] = '1';
+
+    adminHandlersDevicesPage()->revokeFromRequest();
+    $first = count($this->audit->entries);
+
+    adminHandlersDevicesPage()->revokeFromRequest();
+
+    expect($this->audit->entries)->toHaveCount($first);
+});
+
+test('removing revokes first and then deletes', function () {
+    // The order matters: if the delete fails the handset is still cut
+    // off, which is the half that counts. The other way round leaves
+    // a working credential behind.
+    adminHandlersEnrol();
+    $_POST['device'] = '1';
+
+    expect(adminHandlersDevicesPage()->removeFromRequest())->toBe('removed');
+    expect($this->devices->rows)->toBe([]);
+});
+
+test('a device id that is not an id is refused', function () {
+    // Validated rather than cast: "12abc" must not quietly become 12,
+    // because the value goes into the nonce action name.
+    adminHandlersEnrol();
+    $_POST['device'] = '1abc';
+
+    adminHandlersDevicesPage()->revokeFromRequest();
+})->throws(WpDieException::class);
+
+test('naming no device is refused', function () {
+    adminHandlersDevicesPage()->revokeFromRequest();
+})->throws(WpDieException::class);
+
+// ── Saving settings ───────────────────────────────────────────────
+
+test('the provider credentials are saved', function () {
+    $settings = new Settings();
+    $_POST['google_client_id'] = 'google-client-id';
+    $_POST['microsoft_client_id'] = 'ms-client-id';
+    $_POST['google_client_secret'] = 'a-secret';
+
+    expect((new SettingsPage($settings))->saveFromRequest())->toBe('saved');
+    expect($settings->getClientId('google'))->toBe('google-client-id');
+    expect($settings->getClientId('microsoft'))->toBe('ms-client-id');
+    expect($settings->getClientSecret('google'))->toBe('a-secret');
+});
+
+test('an empty secret field leaves the stored one alone', function () {
+    // The field is never populated with the stored value, so an empty
+    // submission is the normal case for anyone editing something else
+    // on the screen. Treating it as "clear" would wipe a secret every
+    // time somebody changed the retention window.
+    $settings = new Settings();
+    $settings->setClientSecret('google', 'a-secret');
+
+    $_POST['google_client_secret'] = '';
+
+    (new SettingsPage($settings))->saveFromRequest();
+
+    expect($settings->getClientSecret('google'))->toBe('a-secret');
+});
+
+test('the checkbox is how a secret is cleared', function () {
+    $settings = new Settings();
+    $settings->setClientSecret('google', 'a-secret');
+
+    $_POST['clear_google_client_secret'] = '1';
+
+    (new SettingsPage($settings))->saveFromRequest();
+
+    expect($settings->getClientSecret('google'))->toBe('');
+});
+
+test('a service account that will not parse is refused before it is stored', function () {
+    // A setting that looks saved and pushes nothing is the worst of
+    // both, and the moment to find out is while somebody is looking
+    // at the screen.
+    $settings = new Settings();
+    $_POST['fcm_service_account'] = 'not json';
+
+    expect((new SettingsPage($settings))->saveFromRequest())->toBe('bad_service_account');
+    expect($settings->getFcmServiceAccount())->toBe('');
+});
+
+test('a valid service account is stored', function () {
+    $settings = new Settings();
+    $_POST['fcm_service_account'] = (string) wp_json_encode([
+        'project_id' => 'intergroup-fellowship',
+        'client_email' => 'pusher@example.iam.gserviceaccount.com',
+        'private_key' => '-----BEGIN PRIVATE KEY-----x-----END PRIVATE KEY-----',
+    ]);
+
+    expect((new SettingsPage($settings))->saveFromRequest())->toBe('saved');
+    expect($settings->getFcmServiceAccount())->toContain('intergroup-fellowship');
+});
+
+test('the retention window is saved', function () {
+    $settings = new Settings();
+    $_POST['retention_days'] = '90';
+
+    (new SettingsPage($settings))->saveFromRequest();
+
+    expect($settings->getRetentionDays())->toBe(90);
+});
+
+test('committee sending is off when the box is unticked', function () {
+    // An unticked checkbox posts nothing at all, so "absent" has to
+    // mean off rather than "leave as it was".
+    $settings = new Settings();
+    $settings->setCommitteeSendFromApp(true);
+
+    (new SettingsPage($settings))->saveFromRequest();
+
+    expect($settings->allowsCommitteeSendFromApp())->toBeFalse();
+});
+
+// ── The schema ────────────────────────────────────────────────────
+
+test('every table is installed', function () {
+    $wpdb = new RecordingWpdb();
+
+    Schema::install($wpdb);
+
+    $sql = implode(' ', $GLOBALS['__fellowship_dbdelta'] ?? []);
+
+    foreach (['devices', 'messages', 'recipients'] as $table) {
+        expect($sql)->toContain('fellowship_' . $table);
+    }
+
+    // Credentials are Unity's table now, and Unity installs it on its
+    // own version change. Asserted rather than merely dropped from the
+    // list above: installing it from here as well would give two
+    // plugins a claim on one schema, and the one that lost a race
+    // would be the one whose dbDelta ran against a table it did not
+    // define.
+    expect($sql)->not->toContain('credentials');
+});
+
+test('installing is skipped when the schema is current', function () {
+    // Runs from Plugin::init on every request, so the common path has
+    // to be one option read and nothing else.
+    WpState::$options[Schema::OPTION] = Schema::VERSION;
+    $GLOBALS['__fellowship_dbdelta'] = [];
+
+    Schema::ensureInstalled();
+
+    expect($GLOBALS['__fellowship_dbdelta'])->toBe([]);
+});
+
+// ── Fixtures ──────────────────────────────────────────────────────
+
+function adminHandlersDevicesPage(): DevicesPage
 {
-    private const MEMBER = 'member@example.org';
+    $gate = new MemberGate(test()->members);
 
-    private InMemoryDeviceRepository $devices;
-    private InMemoryMemberRepository $members;
-    private SpyAuditLogger $audit;
-
-    protected function setUp(): void
-    {
-        parent::setUp();
-
-        $_POST = [];
-        WpState::$userCan = true;
-
-        when('get_current_user_id')->justReturn(3);
-        when('check_admin_referer')->justReturn(true);
-        when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
-
-        $this->devices = new InMemoryDeviceRepository();
-        $this->audit = new SpyAuditLogger();
-
-        $this->members = new InMemoryMemberRepository([
-            new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: self::MEMBER),
-        ]);
-    }
-
-    // ── Cutting a handset off ─────────────────────────────────────────
-
-    public function testRevokingCutsTheHandsetOff(): void
-    {
-        $this->enrol();
-        $_POST['device'] = '1';
-
-        self::assertSame('revoked', $this->devicesPage()->revokeFromRequest());
-        self::assertTrue($this->devices->rows[1]->isRevoked());
-    }
-
-    public function testARevokedHandsetCanNoLongerBeFoundByItsToken(): void
-    {
-        // Which is the whole mechanism: it is refused because it is not
-        // there, not because something downstream checks a flag.
-        $this->enrol();
-        $_POST['device'] = '1';
-
-        $this->devicesPage()->revokeFromRequest();
-
-        self::assertNull($this->devices->findByTokenHash('hash-1'));
-    }
-
-    public function testRevokingIsAudited(): void
-    {
-        $this->enrol();
-        $_POST['device'] = '1';
-
-        $this->devicesPage()->revokeFromRequest();
-
-        self::assertNotEmpty($this->audit->entries);
-    }
-
-    public function testRevokingSomethingAlreadyRevokedWritesNoSecondEntry(): void
-    {
-        // Otherwise the log gains an entry for a revocation that did not
-        // happen, which makes the ones that did harder to find.
-        $this->enrol();
-        $_POST['device'] = '1';
-
-        $this->devicesPage()->revokeFromRequest();
-        $first = count($this->audit->entries);
-
-        $this->devicesPage()->revokeFromRequest();
-
-        self::assertCount($first, $this->audit->entries);
-    }
-
-    public function testRemovingRevokesFirstAndThenDeletes(): void
-    {
-        // The order matters: if the delete fails the handset is still cut
-        // off, which is the half that counts. The other way round leaves
-        // a working credential behind.
-        $this->enrol();
-        $_POST['device'] = '1';
-
-        self::assertSame('removed', $this->devicesPage()->removeFromRequest());
-        self::assertSame([], $this->devices->rows);
-    }
-
-    public function testADeviceIdThatIsNotAnIdIsRefused(): void
-    {
-        // Validated rather than cast: "12abc" must not quietly become 12,
-        // because the value goes into the nonce action name.
-        $this->enrol();
-        $_POST['device'] = '1abc';
-
-        $this->expectException(WpDieException::class);
-
-        $this->devicesPage()->revokeFromRequest();
-    }
-
-    public function testNamingNoDeviceIsRefused(): void
-    {
-        $this->expectException(WpDieException::class);
-
-        $this->devicesPage()->revokeFromRequest();
-    }
-
-    // ── Saving settings ───────────────────────────────────────────────
-
-    public function testTheProviderCredentialsAreSaved(): void
-    {
-        $settings = new Settings();
-        $_POST['google_client_id'] = 'google-client-id';
-        $_POST['microsoft_client_id'] = 'ms-client-id';
-        $_POST['google_client_secret'] = 'a-secret';
-
-        self::assertSame('saved', (new SettingsPage($settings))->saveFromRequest());
-        self::assertSame('google-client-id', $settings->getClientId('google'));
-        self::assertSame('ms-client-id', $settings->getClientId('microsoft'));
-        self::assertSame('a-secret', $settings->getClientSecret('google'));
-    }
-
-    public function testAnEmptySecretFieldLeavesTheStoredOneAlone(): void
-    {
-        // The field is never populated with the stored value, so an empty
-        // submission is the normal case for anyone editing something else
-        // on the screen. Treating it as "clear" would wipe a secret every
-        // time somebody changed the retention window.
-        $settings = new Settings();
-        $settings->setClientSecret('google', 'a-secret');
-
-        $_POST['google_client_secret'] = '';
-
-        (new SettingsPage($settings))->saveFromRequest();
-
-        self::assertSame('a-secret', $settings->getClientSecret('google'));
-    }
-
-    public function testTheCheckboxIsHowASecretIsCleared(): void
-    {
-        $settings = new Settings();
-        $settings->setClientSecret('google', 'a-secret');
-
-        $_POST['clear_google_client_secret'] = '1';
-
-        (new SettingsPage($settings))->saveFromRequest();
-
-        self::assertSame('', $settings->getClientSecret('google'));
-    }
-
-    public function testAServiceAccountThatWillNotParseIsRefusedBeforeItIsStored(): void
-    {
-        // A setting that looks saved and pushes nothing is the worst of
-        // both, and the moment to find out is while somebody is looking
-        // at the screen.
-        $settings = new Settings();
-        $_POST['fcm_service_account'] = 'not json';
-
-        self::assertSame('bad_service_account', (new SettingsPage($settings))->saveFromRequest());
-        self::assertSame('', $settings->getFcmServiceAccount());
-    }
-
-    public function testAValidServiceAccountIsStored(): void
-    {
-        $settings = new Settings();
-        $_POST['fcm_service_account'] = (string) wp_json_encode([
-            'project_id' => 'intergroup-fellowship',
-            'client_email' => 'pusher@example.iam.gserviceaccount.com',
-            'private_key' => '-----BEGIN PRIVATE KEY-----x-----END PRIVATE KEY-----',
-        ]);
-
-        self::assertSame('saved', (new SettingsPage($settings))->saveFromRequest());
-        self::assertStringContainsString('intergroup-fellowship', $settings->getFcmServiceAccount());
-    }
-
-    public function testTheRetentionWindowIsSaved(): void
-    {
-        $settings = new Settings();
-        $_POST['retention_days'] = '90';
-
-        (new SettingsPage($settings))->saveFromRequest();
-
-        self::assertSame(90, $settings->getRetentionDays());
-    }
-
-    public function testCommitteeSendingIsOffWhenTheBoxIsUnticked(): void
-    {
-        // An unticked checkbox posts nothing at all, so "absent" has to
-        // mean off rather than "leave as it was".
-        $settings = new Settings();
-        $settings->setCommitteeSendFromApp(true);
-
-        (new SettingsPage($settings))->saveFromRequest();
-
-        self::assertFalse($settings->allowsCommitteeSendFromApp());
-    }
-
-    // ── The schema ────────────────────────────────────────────────────
-
-    public function testEveryTableIsInstalled(): void
-    {
-        $wpdb = new RecordingWpdb();
-
-        Schema::install($wpdb);
-
-        $sql = implode(' ', $GLOBALS['__fellowship_dbdelta'] ?? []);
-
-        foreach (['devices', 'messages', 'recipients'] as $table) {
-            self::assertStringContainsString('fellowship_' . $table, $sql, $table . ' was not installed.');
-        }
-
-        // Credentials are Unity's table now, and Unity installs it on its
-        // own version change. Asserted rather than merely dropped from the
-        // list above: installing it from here as well would give two
-        // plugins a claim on one schema, and the one that lost a race
-        // would be the one whose dbDelta ran against a table it did not
-        // define.
-        self::assertStringNotContainsString('credentials', $sql);
-    }
-
-    public function testInstallingIsSkippedWhenTheSchemaIsCurrent(): void
-    {
-        // Runs from Plugin::init on every request, so the common path has
-        // to be one option read and nothing else.
-        WpState::$options[Schema::OPTION] = Schema::VERSION;
-        $GLOBALS['__fellowship_dbdelta'] = [];
-
-        Schema::ensureInstalled();
-
-        self::assertSame([], $GLOBALS['__fellowship_dbdelta']);
-    }
-
-    // ── Fixtures ──────────────────────────────────────────────────────
-
-    private function devicesPage(): DevicesPage
-    {
-        $gate = new MemberGate($this->members);
-
-        return new DevicesPage(
-            $this->devices,
-            $this->members,
-            $this->audit,
-            new PasswordAuthenticator(
-                new InMemoryPasswordCredentialRepository(),
-                $gate,
-                new PasswordResetMailer(),
-                new PasswordPolicy(),
-            ),
+    return new DevicesPage(
+        test()->devices,
+        test()->members,
+        test()->audit,
+        new PasswordAuthenticator(
+            new InMemoryPasswordCredentialRepository(),
             $gate,
-        );
-    }
+            new PasswordResetMailer(),
+            new PasswordPolicy(),
+        ),
+        $gate,
+    );
+}
 
-    private function enrol(): void
-    {
-        $this->devices->create(
-            'hash-1',
-            self::MEMBER,
-            7,
-            'Pixel 6a',
-            'android',
-            'spki',
-            'fcm',
-            'token-1',
-            1788000000,
-        );
-    }
+function adminHandlersEnrol(): void
+{
+    test()->devices->create(
+        'hash-1',
+        ADMIN_HANDLERS_MEMBER,
+        7,
+        'Pixel 6a',
+        'android',
+        'spki',
+        'fcm',
+        'token-1',
+        1788000000,
+    );
 }

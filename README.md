@@ -311,6 +311,12 @@ PHPStan runs at **level 8 with no baseline** and scans `../unity/src`,
 The test suite needs Unity and Scrutiny as sibling checkouts too
 (`UNITY_PATH` and `SCRUTINY_PATH` override).
 
+Tests are written in [Pest](https://pestphp.com) (running on PHPUnit).
+Run them with `composer test`, not `vendor/bin/phpunit` — PHPUnit cannot
+load Pest's closure-based files. `tests/Pest.php` names the files that
+run on wp-mocks' TestCase (and so have Brain Monkey); a new
+WordPress-coupled test file has to be added there.
+
 On Windows, set `OPENSSL_CONF` before running the tests. The crypto
 tests generate RSA keypairs, and `openssl_pkey_new()` reads that config —
 without it, key generation fails and those tests skip rather than run,

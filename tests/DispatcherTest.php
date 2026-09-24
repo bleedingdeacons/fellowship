@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
-use PHPUnit\Framework\Attributes\CoversClass;
 use function Brain\Monkey\Functions\when;
-use BleedingDeacons\WpMocks\TestCase;
 use Fellowship\Core\Settings;
 use Fellowship\Crypto\MessageSealer;
 use Fellowship\Devices\MemberGate;
@@ -40,209 +38,188 @@ use WP_Error;
  * it, which is what keeps validation, the member gate and the audit entry
  * in one place rather than three.
  */
-#[CoversClass(\Fellowship\Messaging\MessageDispatcher::class)]
-#[CoversClass(\Fellowship\Messaging\MessageApi::class)]
-final class DispatcherTest extends TestCase
+
+covers(\Fellowship\Messaging\MessageDispatcher::class, \Fellowship\Messaging\MessageApi::class);
+
+beforeEach(function () {
+    when('wp_generate_uuid4')->alias(
+        static fn(): string => '11111111-2222-4333-8444-555555555555'
+    );
+    when('get_current_user_id')->justReturn(3);
+
+    $this->messages = new InMemoryMessageRepository();
+    $this->recipients = new InMemoryRecipientRepository();
+    $this->devices = new InMemoryDeviceRepository();
+    $this->audit = new SpyAuditLogger();
+    $this->settings = new Settings();
+
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: 'dave@example.org'),
+        new MemberStub(id: 8, anonymousName: 'Sue M', personalEmail: 'sue@example.org'),
+    ]);
+});
+
+// ── The dispatcher ────────────────────────────────────────────────
+
+test('a message is stored with its recipients', function () {
+    $message = dispatcherDispatcher()->dispatch(
+        dispatcherRequest(),
+        [['email' => 'sue@example.org', 'member_id' => 8]],
+        'dave@example.org',
+        7,
+        'Dave P',
+    );
+
+    expect($this->messages->rows)->toHaveCount(1);
+    expect($this->recipients->forMessage($message->id))->toHaveCount(1);
+});
+
+test('a message is stored even when nothing can be pushed', function () {
+    // No service account, so push is off entirely. The message must
+    // still be stored, because the poll is what actually delivers it.
+    $message = dispatcherDispatcher()->dispatch(
+        dispatcherRequest(),
+        [['email' => 'sue@example.org', 'member_id' => 8]],
+        'dave@example.org',
+        7,
+        'Dave P',
+    );
+
+    expect($this->messages->findById($message->id))->not->toBeNull();
+});
+
+test('a message with no recipients is still stored', function () {
+    // A committee nobody is on. The message is a record of what was
+    // said, and the admin log should show it went nowhere rather than
+    // showing nothing at all.
+    $message = dispatcherDispatcher()->dispatch(
+        dispatcherRequest(),
+        [],
+        'dave@example.org',
+        7,
+        'Dave P',
+    );
+
+    expect($this->messages->findById($message->id))->not->toBeNull();
+    expect($this->recipients->forMessage($message->id))->toBe([]);
+});
+
+test('the sending device is recorded when it came from the app', function () {
+    // Which is how the admin log distinguishes a message sent from a
+    // handset from one composed in WordPress.
+    $message = dispatcherDispatcher()->dispatch(
+        dispatcherRequest(),
+        [['email' => 'sue@example.org', 'member_id' => 8]],
+        'dave@example.org',
+        7,
+        'Dave P',
+        senderDeviceId: 4,
+    );
+
+    expect($message->senderDeviceId)->toBe(4);
+});
+
+// ── The one door in ───────────────────────────────────────────────
+
+test('the API sends and audits', function () {
+    $result = dispatcherApi()->send([
+        'subject' => 'Intergroup moved',
+        'body' => 'Now the 14th.',
+        'member_emails' => ['sue@example.org'],
+    ]);
+
+    expect($result)->not->toBeInstanceOf(WP_Error::class);
+    expect($this->messages->rows)->toHaveCount(1);
+    expect($this->audit->entries)->not->toBeEmpty();
+});
+
+test('the API refuses a message with no subject', function () {
+    $result = dispatcherApi()->send([
+        'subject' => '',
+        'body' => 'Now the 14th.',
+        'member_emails' => ['sue@example.org'],
+    ]);
+
+    expect($result)->toBeInstanceOf(WP_Error::class);
+    expect($this->messages->rows)->toBe([]);
+});
+
+test('the API refuses a message with no body', function () {
+    $result = dispatcherApi()->send([
+        'subject' => 'Intergroup moved',
+        'body' => '',
+        'member_emails' => ['sue@example.org'],
+    ]);
+
+    expect($result)->toBeInstanceOf(WP_Error::class);
+});
+
+test('a message that reaches nobody is still recorded', function () {
+    // Not a refusal, and worth stating plainly because the opposite
+    // is the intuitive guess: the message is a record of what the
+    // intergroup said, so it is stored with no recipients rather than
+    // rejected. The admin log shows the recipient count, which is
+    // where "this went nowhere" is meant to become visible.
+    //
+    // The two callers that must not allow it guard separately: the
+    // REST controller refuses a handset addressing the whole
+    // fellowship, and the compose screen refuses an empty audience.
+    $result = dispatcherApi()->send([
+        'subject' => 'Intergroup moved',
+        'body' => 'Now the 14th.',
+        'member_emails' => ['stranger@example.org'],
+    ]);
+
+    expect($result)->not->toBeInstanceOf(WP_Error::class);
+    expect($this->messages->rows)->toHaveCount(1);
+    expect($this->recipients->rows)->toBe([]);
+});
+
+test('a refused send writes no audit entry', function () {
+    // Otherwise the log fills with entries for things that did not
+    // happen, and the ones that did become harder to find.
+    dispatcherApi()->send([
+        'subject' => '',
+        'body' => '',
+    ]);
+
+    expect($this->audit->entries)->toBe([]);
+});
+
+// ── Fixtures ──────────────────────────────────────────────────────
+
+function dispatcherDispatcher(): MessageDispatcher
 {
-    private InMemoryMessageRepository $messages;
-    private InMemoryRecipientRepository $recipients;
-    private InMemoryDeviceRepository $devices;
-    private InMemoryMemberRepository $members;
-    private SpyAuditLogger $audit;
-    private Settings $settings;
+    return new MessageDispatcher(
+        test()->messages,
+        test()->recipients,
+        test()->devices,
+        new FcmTransport(new FcmClient(), test()->settings, new MessageSealer()),
+    );
+}
 
-    protected function setUp(): void
-    {
-        parent::setUp();
+function dispatcherApi(): MessageApi
+{
+    return new MessageApi(
+        dispatcherDispatcher(),
+        new RecipientResolver(
+            test()->members,
+            new InMemoryCommitteeRepository(),
+            new MemberGate(test()->members),
+        ),
+        test()->audit,
+    );
+}
 
-        when('wp_generate_uuid4')->alias(
-            static fn(): string => '11111111-2222-4333-8444-555555555555'
-        );
-        when('get_current_user_id')->justReturn(3);
+function dispatcherRequest(): MessageRequest
+{
+    $built = MessageRequest::fromArray([
+        'subject' => 'Intergroup moved',
+        'body' => 'Now the 14th.',
+        'member_emails' => ['sue@example.org'],
+    ]);
 
-        $this->messages = new InMemoryMessageRepository();
-        $this->recipients = new InMemoryRecipientRepository();
-        $this->devices = new InMemoryDeviceRepository();
-        $this->audit = new SpyAuditLogger();
-        $this->settings = new Settings();
+    expect($built)->not->toBeInstanceOf(WP_Error::class);
 
-        $this->members = new InMemoryMemberRepository([
-            new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: 'dave@example.org'),
-            new MemberStub(id: 8, anonymousName: 'Sue M', personalEmail: 'sue@example.org'),
-        ]);
-    }
-
-    // ── The dispatcher ────────────────────────────────────────────────
-
-    public function testAMessageIsStoredWithItsRecipients(): void
-    {
-        $message = $this->dispatcher()->dispatch(
-            $this->request(),
-            [['email' => 'sue@example.org', 'member_id' => 8]],
-            'dave@example.org',
-            7,
-            'Dave P',
-        );
-
-        self::assertCount(1, $this->messages->rows);
-        self::assertCount(1, $this->recipients->forMessage($message->id));
-    }
-
-    public function testAMessageIsStoredEvenWhenNothingCanBePushed(): void
-    {
-        // No service account, so push is off entirely. The message must
-        // still be stored, because the poll is what actually delivers it.
-        $message = $this->dispatcher()->dispatch(
-            $this->request(),
-            [['email' => 'sue@example.org', 'member_id' => 8]],
-            'dave@example.org',
-            7,
-            'Dave P',
-        );
-
-        self::assertNotNull($this->messages->findById($message->id));
-    }
-
-    public function testAMessageWithNoRecipientsIsStillStored(): void
-    {
-        // A committee nobody is on. The message is a record of what was
-        // said, and the admin log should show it went nowhere rather than
-        // showing nothing at all.
-        $message = $this->dispatcher()->dispatch(
-            $this->request(),
-            [],
-            'dave@example.org',
-            7,
-            'Dave P',
-        );
-
-        self::assertNotNull($this->messages->findById($message->id));
-        self::assertSame([], $this->recipients->forMessage($message->id));
-    }
-
-    public function testTheSendingDeviceIsRecordedWhenItCameFromTheApp(): void
-    {
-        // Which is how the admin log distinguishes a message sent from a
-        // handset from one composed in WordPress.
-        $message = $this->dispatcher()->dispatch(
-            $this->request(),
-            [['email' => 'sue@example.org', 'member_id' => 8]],
-            'dave@example.org',
-            7,
-            'Dave P',
-            senderDeviceId: 4,
-        );
-
-        self::assertSame(4, $message->senderDeviceId);
-    }
-
-    // ── The one door in ───────────────────────────────────────────────
-
-    public function testTheApiSendsAndAudits(): void
-    {
-        $result = $this->api()->send([
-            'subject' => 'Intergroup moved',
-            'body' => 'Now the 14th.',
-            'member_emails' => ['sue@example.org'],
-        ]);
-
-        self::assertNotInstanceOf(WP_Error::class, $result);
-        self::assertCount(1, $this->messages->rows);
-        self::assertNotEmpty($this->audit->entries);
-    }
-
-    public function testTheApiRefusesAMessageWithNoSubject(): void
-    {
-        $result = $this->api()->send([
-            'subject' => '',
-            'body' => 'Now the 14th.',
-            'member_emails' => ['sue@example.org'],
-        ]);
-
-        self::assertInstanceOf(WP_Error::class, $result);
-        self::assertSame([], $this->messages->rows);
-    }
-
-    public function testTheApiRefusesAMessageWithNoBody(): void
-    {
-        $result = $this->api()->send([
-            'subject' => 'Intergroup moved',
-            'body' => '',
-            'member_emails' => ['sue@example.org'],
-        ]);
-
-        self::assertInstanceOf(WP_Error::class, $result);
-    }
-
-    public function testAMessageThatReachesNobodyIsStillRecorded(): void
-    {
-        // Not a refusal, and worth stating plainly because the opposite
-        // is the intuitive guess: the message is a record of what the
-        // intergroup said, so it is stored with no recipients rather than
-        // rejected. The admin log shows the recipient count, which is
-        // where "this went nowhere" is meant to become visible.
-        //
-        // The two callers that must not allow it guard separately: the
-        // REST controller refuses a handset addressing the whole
-        // fellowship, and the compose screen refuses an empty audience.
-        $result = $this->api()->send([
-            'subject' => 'Intergroup moved',
-            'body' => 'Now the 14th.',
-            'member_emails' => ['stranger@example.org'],
-        ]);
-
-        self::assertNotInstanceOf(WP_Error::class, $result);
-        self::assertCount(1, $this->messages->rows);
-        self::assertSame([], $this->recipients->rows);
-    }
-
-    public function testARefusedSendWritesNoAuditEntry(): void
-    {
-        // Otherwise the log fills with entries for things that did not
-        // happen, and the ones that did become harder to find.
-        $this->api()->send([
-            'subject' => '',
-            'body' => '',
-        ]);
-
-        self::assertSame([], $this->audit->entries);
-    }
-
-    // ── Fixtures ──────────────────────────────────────────────────────
-
-    private function dispatcher(): MessageDispatcher
-    {
-        return new MessageDispatcher(
-            $this->messages,
-            $this->recipients,
-            $this->devices,
-            new FcmTransport(new FcmClient(), $this->settings, new MessageSealer()),
-        );
-    }
-
-    private function api(): MessageApi
-    {
-        return new MessageApi(
-            $this->dispatcher(),
-            new RecipientResolver(
-                $this->members,
-                new InMemoryCommitteeRepository(),
-                new MemberGate($this->members),
-            ),
-            $this->audit,
-        );
-    }
-
-    private function request(): MessageRequest
-    {
-        $built = MessageRequest::fromArray([
-            'subject' => 'Intergroup moved',
-            'body' => 'Now the 14th.',
-            'member_emails' => ['sue@example.org'],
-        ]);
-
-        self::assertNotInstanceOf(WP_Error::class, $built);
-
-        return $built;
-    }
+    return $built;
 }

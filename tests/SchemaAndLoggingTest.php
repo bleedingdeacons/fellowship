@@ -4,10 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
-use PHPUnit\Framework\Attributes\CoversClass;
-use PHPUnit\Framework\Attributes\CoversTrait;
 use function Brain\Monkey\Functions\when;
-use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Core\Capabilities;
 use Fellowship\Core\Schema;
@@ -56,169 +53,142 @@ use Fellowship\Tests\Support\RecordingWpdb;
  * then discards every real one in the block. Which is how this comment
  * came to be worth writing.)
  */
-#[CoversClass(\Fellowship\Core\Schema::class)]
-#[CoversClass(\Fellowship\Core\Capabilities::class)]
-#[CoversTrait(\Fellowship\Logger\HasLogger::class)]
-#[CoversClass(\Fellowship\Devices\WpdbDeviceRepository::class)]
-#[CoversClass(\Fellowship\Messaging\WpdbMessageRepository::class)]
-#[CoversClass(\Fellowship\Messaging\WpdbRecipientRepository::class)]
-final class SchemaAndLoggingTest extends TestCase
+
+covers(\Fellowship\Core\Schema::class, \Fellowship\Core\Capabilities::class, \Fellowship\Logger\HasLogger::class, \Fellowship\Devices\WpdbDeviceRepository::class, \Fellowship\Messaging\WpdbMessageRepository::class, \Fellowship\Messaging\WpdbRecipientRepository::class);
+
+beforeEach(function () {
+    $this->wpdb = new RecordingWpdb();
+    $GLOBALS['wpdb'] = $this->wpdb;
+    $GLOBALS['__fellowship_dbdelta'] = [];
+});
+
+// ── The tables ────────────────────────────────────────────────────
+
+test('a device token hash is unique', function () {
+    // What makes a bearer token identify one device rather than
+    // whichever row happened to come back first.
+    WpdbDeviceRepository::install($this->wpdb);
+
+    expect(schemaAndLoggingSql())->toMatch('~UNIQUE KEY \w*\s*\(token_hash\)~i');
+});
+
+test('a recipient is unique per message and member', function () {
+    // The arbiter the INSERT IGNORE relies on. Without it two sends
+    // racing on the same committee both write, and a member receives
+    // the same message twice.
+    WpdbRecipientRepository::install($this->wpdb);
+
+    $sql = schemaAndLoggingSql();
+
+    expect($sql)->toContain('message_id');
+    expect($sql)->toContain('member_email');
+    expect($sql)->toMatch('~UNIQUE KEY~i');
+});
+
+test('an address is indexed at a prefix rather than its full length', function () {
+    // A utf8mb4 index entry is four bytes per character, and a
+    // composite key over a full 254 would clear InnoDB's 3072-byte
+    // limit only by luck.
+    WpdbRecipientRepository::install($this->wpdb);
+
+    expect(schemaAndLoggingSql())->toContain('191');
+});
+
+test('a message table is created', function () {
+    WpdbMessageRepository::install($this->wpdb);
+
+    expect(schemaAndLoggingSql())->toContain('fellowship_messages');
+});
+
+test('every table carries the sites charset', function () {
+    // Without it a table is created in the server default, which on an
+    // older host is latin1 — and a message body would lose every
+    // character outside it, silently, on the way in.
+    Schema::install($this->wpdb);
+
+    expect(schemaAndLoggingSql())->toContain('utf8mb4');
+});
+
+test('the schema version is recorded so the next load is cheap', function () {
+    // ensureInstalled runs from Plugin::init on every request. The
+    // common path has to be one option read and nothing else.
+    Schema::markInstalled();
+
+    expect(WpState::$options[Schema::OPTION] ?? null)->toBe(Schema::VERSION);
+});
+
+test('an older schema is upgraded', function () {
+    WpState::$options[Schema::OPTION] = Schema::VERSION - 1;
+
+    Schema::ensureInstalled();
+
+    expect($GLOBALS['__fellowship_dbdelta'])->not->toBe([]);
+    expect(WpState::$options[Schema::OPTION] ?? null)->toBe(Schema::VERSION);
+});
+
+// ── Capabilities ──────────────────────────────────────────────────
+
+test('the administrator gets every capability', function () {
+    // Granted on every load rather than only at activation: an update
+    // over an active plugin never fires the activation hook, so a
+    // capability introduced in a release would otherwise never reach
+    // an existing site and the buttons it guards would go dead.
+    $role = new \WP_Role();
+
+    when('get_role')->justReturn($role);
+
+    Capabilities::ensureAssigned();
+
+    foreach (Capabilities::ALL as $capability) {
+        expect($role->has_cap($capability))->toBeTrue($capability . ' was not granted.');
+    }
+});
+
+test('assigning is skipped when there is no administrator role', function () {
+    // Possible on a partially set-up site, and a fatal here would run
+    // on every page load.
+    when('get_role')->justReturn(null);
+
+    Capabilities::ensureAssigned();
+})->throwsNoExceptions();
+
+// ── Logging ───────────────────────────────────────────────────────
+
+test('every level reaches the channel', function () {
+    // The suite loads the sentinel stub group, so wp_log exists here
+    // and the resolution path runs for real rather than being skipped
+    // by HasLogger's function_exists guard. Every level is exercised
+    // because they are all on paths that only run when something has
+    // already gone wrong — which is precisely where a typo would sit
+    // unnoticed.
+    $subject = new class {
+        use HasLogger;
+    };
+
+    $channel = $subject::log();
+    expect($channel)->not->toBeNull();
+
+    $subject::logEmergency('m');
+    $subject::logAlert('m');
+    $subject::logCritical('m');
+    $subject::logError('m');
+    $subject::logWarning('m');
+    $subject::logNotice('m');
+    $subject::logInfo('m');
+    $subject::logDebug('m');
+
+    expect($channel->levels())->toBe(['emergency', 'alert', 'critical', 'error', 'warning', 'notice', 'info', 'debug']);
+});
+
+test('the channel is named after the class using it', function () {
+    // So a line in the log says which part of the plugin wrote it.
+    $channel = Schema::log();
+
+    expect($channel)->not->toBeNull();
+    expect($channel->channel)->toBe('fellowship');
+});
+
+function schemaAndLoggingSql(): string
 {
-    private RecordingWpdb $wpdb;
-
-    protected function setUp(): void
-    {
-        parent::setUp();
-
-        $this->wpdb = new RecordingWpdb();
-        $GLOBALS['wpdb'] = $this->wpdb;
-        $GLOBALS['__fellowship_dbdelta'] = [];
-    }
-
-    // ── The tables ────────────────────────────────────────────────────
-
-    public function testADeviceTokenHashIsUnique(): void
-    {
-        // What makes a bearer token identify one device rather than
-        // whichever row happened to come back first.
-        WpdbDeviceRepository::install($this->wpdb);
-
-        self::assertMatchesRegularExpression('~UNIQUE KEY \w*\s*\(token_hash\)~i', $this->sql());
-    }
-
-    public function testARecipientIsUniquePerMessageAndMember(): void
-    {
-        // The arbiter the INSERT IGNORE relies on. Without it two sends
-        // racing on the same committee both write, and a member receives
-        // the same message twice.
-        WpdbRecipientRepository::install($this->wpdb);
-
-        $sql = $this->sql();
-
-        self::assertStringContainsString('message_id', $sql);
-        self::assertStringContainsString('member_email', $sql);
-        self::assertMatchesRegularExpression('~UNIQUE KEY~i', $sql);
-    }
-
-    public function testAnAddressIsIndexedAtAPrefixRatherThanItsFullLength(): void
-    {
-        // A utf8mb4 index entry is four bytes per character, and a
-        // composite key over a full 254 would clear InnoDB's 3072-byte
-        // limit only by luck.
-        WpdbRecipientRepository::install($this->wpdb);
-
-        self::assertStringContainsString('191', $this->sql());
-    }
-
-    public function testAMessageTableIsCreated(): void
-    {
-        WpdbMessageRepository::install($this->wpdb);
-
-        self::assertStringContainsString('fellowship_messages', $this->sql());
-    }
-
-    public function testEveryTableCarriesTheSitesCharset(): void
-    {
-        // Without it a table is created in the server default, which on an
-        // older host is latin1 — and a message body would lose every
-        // character outside it, silently, on the way in.
-        Schema::install($this->wpdb);
-
-        self::assertStringContainsString('utf8mb4', $this->sql());
-    }
-
-    public function testTheSchemaVersionIsRecordedSoTheNextLoadIsCheap(): void
-    {
-        // ensureInstalled runs from Plugin::init on every request. The
-        // common path has to be one option read and nothing else.
-        Schema::markInstalled();
-
-        self::assertSame(Schema::VERSION, WpState::$options[Schema::OPTION] ?? null);
-    }
-
-    public function testAnOlderSchemaIsUpgraded(): void
-    {
-        WpState::$options[Schema::OPTION] = Schema::VERSION - 1;
-
-        Schema::ensureInstalled();
-
-        self::assertNotSame([], $GLOBALS['__fellowship_dbdelta']);
-        self::assertSame(Schema::VERSION, WpState::$options[Schema::OPTION] ?? null);
-    }
-
-    // ── Capabilities ──────────────────────────────────────────────────
-
-    public function testTheAdministratorGetsEveryCapability(): void
-    {
-        // Granted on every load rather than only at activation: an update
-        // over an active plugin never fires the activation hook, so a
-        // capability introduced in a release would otherwise never reach
-        // an existing site and the buttons it guards would go dead.
-        $role = new \WP_Role();
-
-        when('get_role')->justReturn($role);
-
-        Capabilities::ensureAssigned();
-
-        foreach (Capabilities::ALL as $capability) {
-            self::assertTrue($role->has_cap($capability), $capability . ' was not granted.');
-        }
-    }
-
-    public function testAssigningIsSkippedWhenThereIsNoAdministratorRole(): void
-    {
-        // Possible on a partially set-up site, and a fatal here would run
-        // on every page load.
-        when('get_role')->justReturn(null);
-
-        Capabilities::ensureAssigned();
-
-        self::assertTrue(true);
-    }
-
-    // ── Logging ───────────────────────────────────────────────────────
-
-    public function testEveryLevelReachesTheChannel(): void
-    {
-        // The suite loads the sentinel stub group, so wp_log exists here
-        // and the resolution path runs for real rather than being skipped
-        // by HasLogger's function_exists guard. Every level is exercised
-        // because they are all on paths that only run when something has
-        // already gone wrong — which is precisely where a typo would sit
-        // unnoticed.
-        $subject = new class {
-            use HasLogger;
-        };
-
-        $channel = $subject::log();
-        self::assertNotNull($channel);
-
-        $subject::logEmergency('m');
-        $subject::logAlert('m');
-        $subject::logCritical('m');
-        $subject::logError('m');
-        $subject::logWarning('m');
-        $subject::logNotice('m');
-        $subject::logInfo('m');
-        $subject::logDebug('m');
-
-        self::assertSame(
-            ['emergency', 'alert', 'critical', 'error', 'warning', 'notice', 'info', 'debug'],
-            $channel->levels(),
-        );
-    }
-
-    public function testTheChannelIsNamedAfterTheClassUsingIt(): void
-    {
-        // So a line in the log says which part of the plugin wrote it.
-        $channel = Schema::log();
-
-        self::assertNotNull($channel);
-        self::assertSame('fellowship', $channel->channel);
-    }
-
-    private function sql(): string
-    {
-        return implode(' ', array_map('strval', $GLOBALS['__fellowship_dbdelta'] ?? []));
-    }
+    return implode(' ', array_map('strval', $GLOBALS['__fellowship_dbdelta'] ?? []));
 }

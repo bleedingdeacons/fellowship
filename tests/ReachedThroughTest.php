@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
-use PHPUnit\Framework\Attributes\CoversClass;
 use function Brain\Monkey\Functions\when;
-use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Admin\MessagesPage;
 use Fellowship\Devices\MemberGate;
@@ -50,427 +48,384 @@ use WP_Error;
  * message that vanishes unless the refusal is logged — which is the only
  * thing separating "nobody sent one" from "one was thrown away".
  */
-#[CoversClass(\Fellowship\Messaging\MessageApi::class)]
-#[CoversClass(\Fellowship\Directory\DirectoryPresenter::class)]
-#[CoversClass(\Fellowship\Messaging\WpdbRecipientRepository::class)]
-#[CoversClass(\Fellowship\Messaging\WpdbMessageRepository::class)]
-#[CoversClass(\Fellowship\Devices\WpdbDeviceRepository::class)]
-#[CoversClass(\Fellowship\Admin\MessagesPage::class)]
-final class ReachedThroughTest extends TestCase
-{
-    private RecordingWpdb $wpdb;
-    private InMemoryMessageRepository $messages;
-    private InMemoryRecipientRepository $recipients;
-    private InMemoryDeviceRepository $devices;
-
-    protected function setUp(): void
-    {
-        parent::setUp();
-
-        $_GET = [];
-        WpState::$userCan = true;
-
-        when('paginate_links')->justReturn('<a href="#">2</a>');
-        when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
-        when('add_query_arg')->justReturn('https://example.org/wp-admin/admin.php');
-        when('wp_generate_uuid4')->alias(static fn(): string => '11111111-2222-4333-8444-555555555555');
-
-        $this->wpdb = new RecordingWpdb();
-        $this->messages = new InMemoryMessageRepository();
-        $this->recipients = new InMemoryRecipientRepository();
-        $this->devices = new InMemoryDeviceRepository();
-    }
-
-    // ── The send API ──────────────────────────────────────────────────
-
-    public function testAMessageSentThroughTheApiIsStoredAndAudited(): void
-    {
-        $audit = new SpyAuditLogger();
-
-        $id = $this->api($audit)->send([
-            'subject' => 'Intergroup moved',
-            'body' => 'Now the 14th.',
-            'member_emails' => ['dave@example.org'],
-        ]);
-
-        self::assertIsInt($id);
-        self::assertNotEmpty($audit->entries);
-    }
-
-    public function testASendWithNoMemberBehindItIsAttributedToNobody(): void
-    {
-        // Entity id 0 is the intergroup speaking. Inventing a member to
-        // attribute it to would make the audit trail say something
-        // untrue.
-        $audit = new SpyAuditLogger();
-
-        $this->api($audit)->send([
-            'subject' => 'Intergroup moved',
-            'body' => 'Now the 14th.',
-            'member_emails' => ['dave@example.org'],
-        ]);
-
-        self::assertNotEmpty($audit->entries);
-    }
-
-    public function testASendWithNoSenderNameIsSignedWithTheSiteName(): void
-    {
-        when('get_bloginfo')->justReturn('Bristol Intergroup');
-
-        $this->api()->send([
-            'subject' => 'Intergroup moved',
-            'body' => 'Now the 14th.',
-            'member_emails' => ['dave@example.org'],
-        ]);
-
-        self::assertSame('Bristol Intergroup', $this->stored()->senderName);
-    }
-
-    public function testASiteWithNoNameIsStillSignedWithSomething(): void
-    {
-        // A blank "from" on a handset reads as a message from nobody.
-        when('get_bloginfo')->justReturn('');
-
-        $this->api()->send([
-            'subject' => 'Intergroup moved',
-            'body' => 'Now the 14th.',
-            'member_emails' => ['dave@example.org'],
-        ]);
-
-        self::assertSame('Intergroup', $this->stored()->senderName);
-    }
-
-    public function testACallerCanSignTheMessageItself(): void
-    {
-        $this->api()->send([
-            'subject' => 'Intergroup moved',
-            'body' => 'Now the 14th.',
-            'member_emails' => ['dave@example.org'],
-            'sender_name' => 'The Steering Committee',
-        ]);
-
-        self::assertSame('The Steering Committee', $this->stored()->senderName);
-    }
-
-    public function testAMalformedRequestIsRefusedRatherThanStored(): void
-    {
-        $result = $this->api()->send(['subject' => '', 'body' => '']);
-
-        self::assertInstanceOf(WP_Error::class, $result);
-        self::assertSame([], $this->messages->rows);
-    }
-
-    public function testAStorageFailureIsAnErrorRatherThanAFatal(): void
-    {
-        // It must not propagate into whatever plugin asked to send.
-        $members = $this->members();
-        $gate = new MemberGate($members);
-
-        $api = new MessageApi(
-            new MessageDispatcher($this->throwingMessages(), $this->recipients, $this->devices, $this->transport()),
-            new RecipientResolver($members, new InMemoryCommitteeRepository(), $gate),
-            new SpyAuditLogger(),
-        );
-
-        $result = $api->send([
-            'subject' => 'Intergroup moved',
-            'body' => 'Now the 14th.',
-            'member_emails' => ['dave@example.org'],
-        ]);
-
-        self::assertInstanceOf(WP_Error::class, $result);
-        self::assertSame('fellowship_send_failed', $result->get_error_code());
-    }
-
-    public function testTheActionFormSendsWithoutAnsweringAnything(): void
-    {
-        $this->api()->sendFromAction([
-            'subject' => 'Intergroup moved',
-            'body' => 'Now the 14th.',
-            'member_emails' => ['dave@example.org'],
-        ]);
-
-        self::assertCount(1, $this->messages->rows);
-    }
-
-    public function testTheActionFormLogsARefusalRatherThanDroppingItSilently(): void
-    {
-        // do_action discards return values, so a refusal that is not
-        // logged is a message that simply vanished.
-        $this->api()->sendFromAction(['subject' => '', 'body' => '']);
-
-        self::assertSame([], $this->messages->rows);
-    }
-
-    // ── The address book ──────────────────────────────────────────────
-
-    public function testCommitteesAreListedWhenTheAppAsksForThem(): void
-    {
-        $directory = $this->presenter([
-            new CommitteeStub(id: 2, slug: 'steering', name: 'Steering', parentId: 0),
-            new CommitteeStub(id: 3, slug: 'archives', name: 'Archives', parentId: 2),
-        ]);
-
-        $committees = $directory->forApp(true)['committees'];
-
-        self::assertCount(2, $committees);
-        self::assertSame(['slug' => 'archives', 'name' => 'Archives', 'parent' => 2], $committees[0]);
-    }
-
-    public function testCommitteesAreOmittedWhenTheAppDoesNotAskForThem(): void
-    {
-        $directory = $this->presenter([new CommitteeStub(id: 2, slug: 'steering', name: 'Steering')]);
-
-        self::assertSame([], $directory->forApp(false)['committees']);
-    }
-
-    public function testCommitteesAreOrderedByNameRatherThanByTermId(): void
-    {
-        // The app renders the list as it arrives, so the ordering is a
-        // server-side decision or it is nobody's.
-        $directory = $this->presenter([
-            new CommitteeStub(id: 9, slug: 'steering', name: 'Steering'),
-            new CommitteeStub(id: 2, slug: 'archives', name: 'Archives'),
-        ]);
-
-        $names = array_column($directory->forApp(true)['committees'], 'name');
-
-        self::assertSame(['Archives', 'Steering'], $names);
-    }
-
-    public function testAMemberTheGateRefusesIsNotInTheAddressBook(): void
-    {
-        // Being listed and being reachable are the same permission here:
-        // the app can only address somebody it can see.
-        $members = new InMemoryMemberRepository([
-            new MemberStub(id: 7, anonymousName: 'Dave P', showMemberProfile: true, personalEmail: ''),
-        ]);
-
-        $directory = new DirectoryPresenter(
-            $members,
-            new InMemoryCommitteeRepository(),
-            new MemberGate($members),
-            $this->devices,
-        );
-
-        self::assertSame([], $directory->forApp(false)['members']);
-    }
-
-    // ── Reading rows back ─────────────────────────────────────────────
-
-    public function testRecipientRowsBecomeRecipients(): void
-    {
-        $this->wpdb->results = [
-            [
-                'id' => 1,
-                'message_id' => 9,
-                'member_email' => 'dave@example.org',
-                'member_id' => 7,
-                'created_at' => 1788000000,
-                'read_at' => 1788000100,
-                'pushed_at' => null,
-            ],
-        ];
-
-        $recipients = (new WpdbRecipientRepository($this->wpdb))->forMessage(9);
-
-        self::assertCount(1, $recipients);
-        self::assertSame('dave@example.org', $recipients[0]->memberEmail);
-        self::assertSame(1788000100, $recipients[0]->readAt);
-    }
-
-    public function testARecipientNobodyHasReadCarriesNoReadDate(): void
-    {
-        // Null rather than zero: the log counts reads by asking whether
-        // the column is set, and a zero would read as "read in 1970".
-        $this->wpdb->results = [
-            [
-                'id' => 1,
-                'message_id' => 9,
-                'member_email' => 'dave@example.org',
-                'member_id' => 7,
-                'created_at' => 1788000000,
-            ],
-        ];
-
-        $recipients = (new WpdbRecipientRepository($this->wpdb))->forMessage(9);
-
-        self::assertNull($recipients[0]->readAt);
-        self::assertNull($recipients[0]->pushedAt);
-    }
-
-    public function testMessageRowsBecomeMessages(): void
-    {
-        $this->wpdb->results = [$this->messageRow(9), $this->messageRow(10)];
-
-        $messages = (new WpdbMessageRepository($this->wpdb))->list(20, 0);
-
-        self::assertCount(2, $messages);
-        self::assertSame('Intergroup moved', $messages[0]->subject);
-    }
-
-    public function testMessagesFetchedTogetherAreKeyedByTheirId(): void
-    {
-        // The log reads them back in one query and then looks each one
-        // up by id, so a plain list would make the screen O(n^2).
-        $this->wpdb->results = [$this->messageRow(9), $this->messageRow(10)];
-
-        $messages = (new WpdbMessageRepository($this->wpdb))->findByIds([9, 10]);
-
-        self::assertArrayHasKey(9, $messages);
-        self::assertSame(10, $messages[10]->id);
-    }
-
-    public function testAKeyFaultIsClearedWhenAHandsetRotatesItsKey(): void
-    {
-        // Left set, the admin list would keep flagging a handset that is
-        // now perfectly healthy.
-        (new WpdbDeviceRepository($this->wpdb))->clearKeyFault(4);
-
-        self::assertSame(['key_fault_at' => null], $this->wpdb->updates[0]['data']);
-        self::assertSame(['id' => 4], $this->wpdb->updates[0]['where']);
-    }
-
-    // ── The log's own rendering ───────────────────────────────────────
-
-    public function testALongBodyIsShortenedRatherThanBreakingTheColumn(): void
-    {
-        $this->store('Intergroup moved', str_repeat('a very long sentence indeed ', 20), 1788000000);
-
-        self::assertStringContainsString('…', $this->renderLog());
-    }
-
-    public function testTheLogPaginatesOnceThereIsMoreThanOnePage(): void
-    {
-        for ($i = 0; $i < 60; $i++) {
-            $this->store('Subject ' . $i, 'Body', 1788000000);
-        }
-
-        self::assertStringContainsString('tablenav-pages', $this->renderLog());
-    }
-
-    public function testAMessageWithNoDateShowsNothingRatherThanTheEpoch(): void
-    {
-        // "1 Jan 1970" in the sent column reads as a bug in the data
-        // rather than as an absent date.
-        $this->store('Intergroup moved', 'Now the 14th.', 0);
-
-        self::assertStringNotContainsString('1970', $this->renderLog());
-    }
-
-    // ── Fixtures ──────────────────────────────────────────────────────
-
-    private function store(string $subject, string $body, int $createdAt): void
-    {
-        $this->messages->create(
-            'uuid-' . count($this->messages->rows),
-            'dave@example.org',
-            7,
-            'Dave P',
-            $subject,
-            $body,
-            'all',
-            '',
-            $createdAt,
-            0,
-            0,
-        );
-    }
-
-    private function stored(): Message
-    {
-        self::assertNotSame([], $this->messages->rows, 'Nothing was stored.');
-
-        return array_values($this->messages->rows)[0];
-    }
-
-    private function transport(): FcmTransport
-    {
-        return new FcmTransport(new FcmClient(), new Settings(), new MessageSealer());
-    }
-
-    private function renderLog(): string
-    {
-        ob_start();
-
-        try {
-            (new MessagesPage($this->messages, $this->recipients))->render();
-        } finally {
-            $markup = (string) ob_get_clean();
-        }
-
-        return $markup;
-    }
-
-    private function api(?SpyAuditLogger $audit = null): MessageApi
-    {
-        $members = $this->members();
-        $gate = new MemberGate($members);
-
-        return new MessageApi(
-            new MessageDispatcher($this->messages, $this->recipients, $this->devices, $this->transport()),
-            new RecipientResolver($members, new InMemoryCommitteeRepository(), $gate),
-            $audit ?? new SpyAuditLogger(),
-        );
-    }
-
-    private function members(): InMemoryMemberRepository
-    {
-        return new InMemoryMemberRepository([
-            new MemberStub(id: 7, anonymousName: 'Dave P', showMemberProfile: true, personalEmail: 'dave@example.org'),
-        ]);
-    }
-
-    /** @param list<CommitteeStub> $committees */
-    private function presenter(array $committees): DirectoryPresenter
-    {
-        $members = $this->members();
-
-        return new DirectoryPresenter(
-            $members,
-            new InMemoryCommitteeRepository($committees),
-            new MemberGate($members),
-            $this->devices,
-        );
-    }
-
-    private function throwingMessages(): InMemoryMessageRepository
-    {
-        return new class extends InMemoryMessageRepository {
-            public function create(
-                string $uuid,
-                string $senderEmail,
-                int $senderId,
-                string $senderName,
-                string $subject,
-                string $body,
-                string $audienceType,
-                string $audienceRef,
-                int $createdAt,
-                int $replyToId,
-                int $senderDeviceId,
-            ): Message {
-                throw new RuntimeException('The messages table is gone.');
-            }
-        };
-    }
-
-    /** @return array<string, mixed> */
-    private function messageRow(int $id): array
-    {
-        return [
-            'id' => $id,
-            'uuid' => 'uuid-' . $id,
-            'sender_email' => 'dave@example.org',
-            'sender_id' => 7,
-            'sender_name' => 'Dave P',
-            'subject' => 'Intergroup moved',
-            'body' => 'Now the 14th.',
-            'audience_type' => 'all',
-            'audience_ref' => '',
+
+covers(\Fellowship\Messaging\MessageApi::class, \Fellowship\Directory\DirectoryPresenter::class, \Fellowship\Messaging\WpdbRecipientRepository::class, \Fellowship\Messaging\WpdbMessageRepository::class, \Fellowship\Devices\WpdbDeviceRepository::class, \Fellowship\Admin\MessagesPage::class);
+
+beforeEach(function () {
+    $_GET = [];
+    WpState::$userCan = true;
+
+    when('paginate_links')->justReturn('<a href="#">2</a>');
+    when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
+    when('add_query_arg')->justReturn('https://example.org/wp-admin/admin.php');
+    when('wp_generate_uuid4')->alias(static fn(): string => '11111111-2222-4333-8444-555555555555');
+
+    $this->wpdb = new RecordingWpdb();
+    $this->messages = new InMemoryMessageRepository();
+    $this->recipients = new InMemoryRecipientRepository();
+    $this->devices = new InMemoryDeviceRepository();
+});
+
+// ── The send API ──────────────────────────────────────────────────
+
+test('a message sent through the API is stored and audited', function () {
+    $audit = new SpyAuditLogger();
+
+    $id = reachedThroughApi($audit)->send([
+        'subject' => 'Intergroup moved',
+        'body' => 'Now the 14th.',
+        'member_emails' => ['dave@example.org'],
+    ]);
+
+    expect($id)->toBeInt();
+    expect($audit->entries)->not->toBeEmpty();
+});
+
+test('a send with no member behind it is attributed to nobody', function () {
+    // Entity id 0 is the intergroup speaking. Inventing a member to
+    // attribute it to would make the audit trail say something
+    // untrue.
+    $audit = new SpyAuditLogger();
+
+    reachedThroughApi($audit)->send([
+        'subject' => 'Intergroup moved',
+        'body' => 'Now the 14th.',
+        'member_emails' => ['dave@example.org'],
+    ]);
+
+    expect($audit->entries)->not->toBeEmpty();
+});
+
+test('a send with no sender name is signed with the site name', function () {
+    when('get_bloginfo')->justReturn('Bristol Intergroup');
+
+    reachedThroughApi()->send([
+        'subject' => 'Intergroup moved',
+        'body' => 'Now the 14th.',
+        'member_emails' => ['dave@example.org'],
+    ]);
+
+    expect(reachedThroughStored()->senderName)->toBe('Bristol Intergroup');
+});
+
+test('a site with no name is still signed with something', function () {
+    // A blank "from" on a handset reads as a message from nobody.
+    when('get_bloginfo')->justReturn('');
+
+    reachedThroughApi()->send([
+        'subject' => 'Intergroup moved',
+        'body' => 'Now the 14th.',
+        'member_emails' => ['dave@example.org'],
+    ]);
+
+    expect(reachedThroughStored()->senderName)->toBe('Intergroup');
+});
+
+test('a caller can sign the message itself', function () {
+    reachedThroughApi()->send([
+        'subject' => 'Intergroup moved',
+        'body' => 'Now the 14th.',
+        'member_emails' => ['dave@example.org'],
+        'sender_name' => 'The Steering Committee',
+    ]);
+
+    expect(reachedThroughStored()->senderName)->toBe('The Steering Committee');
+});
+
+test('a malformed request is refused rather than stored', function () {
+    $result = reachedThroughApi()->send(['subject' => '', 'body' => '']);
+
+    expect($result)->toBeInstanceOf(WP_Error::class);
+    expect($this->messages->rows)->toBe([]);
+});
+
+test('a storage failure is an error rather than a fatal', function () {
+    // It must not propagate into whatever plugin asked to send.
+    $members = reachedThroughMembers();
+    $gate = new MemberGate($members);
+
+    $api = new MessageApi(
+        new MessageDispatcher(reachedThroughThrowingMessages(), $this->recipients, $this->devices, reachedThroughTransport()),
+        new RecipientResolver($members, new InMemoryCommitteeRepository(), $gate),
+        new SpyAuditLogger(),
+    );
+
+    $result = $api->send([
+        'subject' => 'Intergroup moved',
+        'body' => 'Now the 14th.',
+        'member_emails' => ['dave@example.org'],
+    ]);
+
+    expect($result)->toBeInstanceOf(WP_Error::class);
+    expect($result->get_error_code())->toBe('fellowship_send_failed');
+});
+
+test('the action form sends without answering anything', function () {
+    reachedThroughApi()->sendFromAction([
+        'subject' => 'Intergroup moved',
+        'body' => 'Now the 14th.',
+        'member_emails' => ['dave@example.org'],
+    ]);
+
+    expect($this->messages->rows)->toHaveCount(1);
+});
+
+test('the action form logs a refusal rather than dropping it silently', function () {
+    // do_action discards return values, so a refusal that is not
+    // logged is a message that simply vanished.
+    reachedThroughApi()->sendFromAction(['subject' => '', 'body' => '']);
+
+    expect($this->messages->rows)->toBe([]);
+});
+
+// ── The address book ──────────────────────────────────────────────
+
+test('committees are listed when the app asks for them', function () {
+    $directory = reachedThroughPresenter([
+        new CommitteeStub(id: 2, slug: 'steering', name: 'Steering', parentId: 0),
+        new CommitteeStub(id: 3, slug: 'archives', name: 'Archives', parentId: 2),
+    ]);
+
+    $committees = $directory->forApp(true)['committees'];
+
+    expect($committees)->toHaveCount(2);
+    expect($committees[0])->toBe(['slug' => 'archives', 'name' => 'Archives', 'parent' => 2]);
+});
+
+test('committees are omitted when the app does not ask for them', function () {
+    $directory = reachedThroughPresenter([new CommitteeStub(id: 2, slug: 'steering', name: 'Steering')]);
+
+    expect($directory->forApp(false)['committees'])->toBe([]);
+});
+
+test('committees are ordered by name rather than by term id', function () {
+    // The app renders the list as it arrives, so the ordering is a
+    // server-side decision or it is nobody's.
+    $directory = reachedThroughPresenter([
+        new CommitteeStub(id: 9, slug: 'steering', name: 'Steering'),
+        new CommitteeStub(id: 2, slug: 'archives', name: 'Archives'),
+    ]);
+
+    $names = array_column($directory->forApp(true)['committees'], 'name');
+
+    expect($names)->toBe(['Archives', 'Steering']);
+});
+
+test('a member the gate refuses is not in the address book', function () {
+    // Being listed and being reachable are the same permission here:
+    // the app can only address somebody it can see.
+    $members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', showMemberProfile: true, personalEmail: ''),
+    ]);
+
+    $directory = new DirectoryPresenter(
+        $members,
+        new InMemoryCommitteeRepository(),
+        new MemberGate($members),
+        $this->devices,
+    );
+
+    expect($directory->forApp(false)['members'])->toBe([]);
+});
+
+// ── Reading rows back ─────────────────────────────────────────────
+
+test('recipient rows become recipients', function () {
+    $this->wpdb->results = [
+        [
+            'id' => 1,
+            'message_id' => 9,
+            'member_email' => 'dave@example.org',
+            'member_id' => 7,
             'created_at' => 1788000000,
-            'reply_to' => 0,
-            'device_id' => 0,
-        ];
+            'read_at' => 1788000100,
+            'pushed_at' => null,
+        ],
+    ];
+
+    $recipients = (new WpdbRecipientRepository($this->wpdb))->forMessage(9);
+
+    expect($recipients)->toHaveCount(1);
+    expect($recipients[0]->memberEmail)->toBe('dave@example.org');
+    expect($recipients[0]->readAt)->toBe(1788000100);
+});
+
+test('a recipient nobody has read carries no read date', function () {
+    // Null rather than zero: the log counts reads by asking whether
+    // the column is set, and a zero would read as "read in 1970".
+    $this->wpdb->results = [
+        [
+            'id' => 1,
+            'message_id' => 9,
+            'member_email' => 'dave@example.org',
+            'member_id' => 7,
+            'created_at' => 1788000000,
+        ],
+    ];
+
+    $recipients = (new WpdbRecipientRepository($this->wpdb))->forMessage(9);
+
+    expect($recipients[0]->readAt)->toBeNull();
+    expect($recipients[0]->pushedAt)->toBeNull();
+});
+
+test('message rows become messages', function () {
+    $this->wpdb->results = [messageRow(9), messageRow(10)];
+
+    $messages = (new WpdbMessageRepository($this->wpdb))->list(20, 0);
+
+    expect($messages)->toHaveCount(2);
+    expect($messages[0]->subject)->toBe('Intergroup moved');
+});
+
+test('messages fetched together are keyed by their id', function () {
+    // The log reads them back in one query and then looks each one
+    // up by id, so a plain list would make the screen O(n^2).
+    $this->wpdb->results = [messageRow(9), messageRow(10)];
+
+    $messages = (new WpdbMessageRepository($this->wpdb))->findByIds([9, 10]);
+
+    expect($messages)->toHaveKey(9);
+    expect($messages[10]->id)->toBe(10);
+});
+
+test('a key fault is cleared when a handset rotates its key', function () {
+    // Left set, the admin list would keep flagging a handset that is
+    // now perfectly healthy.
+    (new WpdbDeviceRepository($this->wpdb))->clearKeyFault(4);
+
+    expect($this->wpdb->updates[0]['data'])->toBe(['key_fault_at' => null]);
+    expect($this->wpdb->updates[0]['where'])->toBe(['id' => 4]);
+});
+
+// ── The log's own rendering ───────────────────────────────────────
+
+test('a long body is shortened rather than breaking the column', function () {
+    reachedThroughStore('Intergroup moved', str_repeat('a very long sentence indeed ', 20), 1788000000);
+
+    expect(renderLog())->toContain('…');
+});
+
+test('the log paginates once there is more than one page', function () {
+    for ($i = 0; $i < 60; $i++) {
+        reachedThroughStore('Subject ' . $i, 'Body', 1788000000);
     }
+
+    expect(renderLog())->toContain('tablenav-pages');
+});
+
+test('a message with no date shows nothing rather than the epoch', function () {
+    // "1 Jan 1970" in the sent column reads as a bug in the data
+    // rather than as an absent date.
+    reachedThroughStore('Intergroup moved', 'Now the 14th.', 0);
+
+    expect(renderLog())->not->toContain('1970');
+});
+
+// ── Fixtures ──────────────────────────────────────────────────────
+
+function reachedThroughStore(string $subject, string $body, int $createdAt): void
+{
+    test()->messages->create(
+        'uuid-' . count(test()->messages->rows),
+        'dave@example.org',
+        7,
+        'Dave P',
+        $subject,
+        $body,
+        'all',
+        '',
+        $createdAt,
+        0,
+        0,
+    );
+}
+
+function reachedThroughStored(): Message
+{
+    expect(test()->messages->rows)->not->toBe([], 'Nothing was stored.');
+
+    return array_values(test()->messages->rows)[0];
+}
+
+function reachedThroughTransport(): FcmTransport
+{
+    return new FcmTransport(new FcmClient(), new Settings(), new MessageSealer());
+}
+
+function renderLog(): string
+{
+    return captureOutput(fn() => (new MessagesPage(test()->messages, test()->recipients))->render());
+}
+
+function reachedThroughApi(?SpyAuditLogger $audit = null): MessageApi
+{
+    $members = reachedThroughMembers();
+    $gate = new MemberGate($members);
+
+    return new MessageApi(
+        new MessageDispatcher(test()->messages, test()->recipients, test()->devices, reachedThroughTransport()),
+        new RecipientResolver($members, new InMemoryCommitteeRepository(), $gate),
+        $audit ?? new SpyAuditLogger(),
+    );
+}
+
+function reachedThroughMembers(): InMemoryMemberRepository
+{
+    return new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', showMemberProfile: true, personalEmail: 'dave@example.org'),
+    ]);
+}
+
+/** @param list<CommitteeStub> $committees */
+function reachedThroughPresenter(array $committees): DirectoryPresenter
+{
+    $members = reachedThroughMembers();
+
+    return new DirectoryPresenter(
+        $members,
+        new InMemoryCommitteeRepository($committees),
+        new MemberGate($members),
+        test()->devices,
+    );
+}
+
+function reachedThroughThrowingMessages(): InMemoryMessageRepository
+{
+    return new class extends InMemoryMessageRepository {
+        public function create(
+            string $uuid,
+            string $senderEmail,
+            int $senderId,
+            string $senderName,
+            string $subject,
+            string $body,
+            string $audienceType,
+            string $audienceRef,
+            int $createdAt,
+            int $replyToId,
+            int $senderDeviceId,
+        ): Message {
+            throw new RuntimeException('The messages table is gone.');
+        }
+    };
+}
+
+/** @return array<string, mixed> */
+function messageRow(int $id): array
+{
+    return [
+        'id' => $id,
+        'uuid' => 'uuid-' . $id,
+        'sender_email' => 'dave@example.org',
+        'sender_id' => 7,
+        'sender_name' => 'Dave P',
+        'subject' => 'Intergroup moved',
+        'body' => 'Now the 14th.',
+        'audience_type' => 'all',
+        'audience_ref' => '',
+        'created_at' => 1788000000,
+        'reply_to' => 0,
+        'device_id' => 0,
+    ];
 }

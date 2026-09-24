@@ -4,10 +4,8 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests;
 
-use PHPUnit\Framework\Attributes\CoversClass;
 use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\Exceptions\WpDieException;
-use BleedingDeacons\WpMocks\TestCase;
 use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Admin\ComposePage;
 use Fellowship\Admin\DevicesPage;
@@ -57,298 +55,247 @@ use Unity\Testing\Doubles\MemberStub;
  * the page chose to render is not a permission check, and the tests treat
  * those as two separate claims because the code does.
  */
-#[CoversClass(\Fellowship\Admin\SettingsPage::class)]
-#[CoversClass(\Fellowship\Admin\MessagesPage::class)]
-#[CoversClass(\Fellowship\Admin\ComposePage::class)]
-#[CoversClass(\Fellowship\Admin\DevicesPage::class)]
-final class AdminScreensTest extends TestCase
+
+covers(\Fellowship\Admin\SettingsPage::class, \Fellowship\Admin\MessagesPage::class, \Fellowship\Admin\ComposePage::class, \Fellowship\Admin\DevicesPage::class);
+
+const ADMIN_SCREENS_MEMBER = 'member@example.org';
+
+beforeEach(function () {
+    $_POST = [];
+    $_GET = [];
+
+    WpState::$userCan = true;
+
+    when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
+    when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
+    when('get_current_user_id')->justReturn(3);
+    when('submit_button')->justReturn(null);
+    when('paginate_links')->justReturn('');
+
+    $this->messages = new InMemoryMessageRepository();
+    $this->recipients = new InMemoryRecipientRepository();
+    $this->devices = new InMemoryDeviceRepository();
+    $this->audit = new SpyAuditLogger();
+
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: ADMIN_SCREENS_MEMBER),
+    ]);
+});
+
+// ── Settings ──────────────────────────────────────────────────────
+
+test('the settings screen offers every sign in provider', function () {
+    $markup = captureOutput(fn() => (new SettingsPage(new Settings()))->render());
+
+    foreach (['Google', 'Microsoft', 'Facebook', 'Apple'] as $provider) {
+        expect($markup)->toContain($provider);
+    }
+});
+
+test('the settings screen shows the redirect URI to register', function () {
+    // Whoever is configuring an OAuth client needs this exact string,
+    // and getting it from the screen beats getting it from a README
+    // that may not match the site.
+    $markup = captureOutput(fn() => (new SettingsPage(new Settings()))->render());
+
+    expect($markup)->toContain('auth/callback');
+});
+
+test('a stored secret is never rendered back', function () {
+    // The field is write-only. Painting the stored value into the
+    // markup would put every client secret in the page source of an
+    // admin screen.
+    $settings = new Settings();
+    $settings->setClientId('google', 'google-client-id');
+
+    $markup = captureOutput(fn() => (new SettingsPage($settings))->render());
+
+    expect($markup)->toContain('google-client-id');
+    expect($markup)->not->toContain('value="a-secret"');
+});
+
+test('saving settings without the capability is refused', function () {
+    WpState::$userCan = false;
+
+    (new SettingsPage(new Settings()))->handleSave();
+})->throws(WpDieException::class);
+
+test('the settings screen renders nothing to a reader who may not see it', function () {
+    WpState::$userCan = false;
+
+    expect(captureOutput(fn() => (new SettingsPage(new Settings()))->render()))->toBe('');
+});
+
+// ── The message log ───────────────────────────────────────────────
+
+test('an empty message log says so rather than rendering an empty table', function () {
+    $markup = captureOutput(fn() => adminScreensMessagesPage()->render());
+
+    expect($markup)->toContain('No messages');
+});
+
+test('the message log lists what was sent', function () {
+    $this->messages->create(
+        'uuid-1',
+        'dave@example.org',
+        7,
+        'Dave B',
+        'Intergroup moved',
+        'Now the 14th.',
+        'committee',
+        'steering',
+        1788000000,
+        0,
+        0,
+    );
+
+    $markup = captureOutput(fn() => adminScreensMessagesPage()->render());
+
+    expect($markup)->toContain('Intergroup moved');
+});
+
+test('the message log renders nothing without the capability', function () {
+    // The log carries message subjects, which are the members' own
+    // words.
+    WpState::$userCan = false;
+
+    expect(captureOutput(fn() => adminScreensMessagesPage()->render()))->toBe('');
+});
+
+// ── Compose ───────────────────────────────────────────────────────
+
+test('the compose screen offers the committees', function () {
+    $markup = captureOutput(fn() => adminScreensComposePage()->render());
+
+    expect($markup)->toContain('<form');
+});
+
+test('the compose screen renders nothing without the capability', function () {
+    WpState::$userCan = false;
+
+    expect(captureOutput(fn() => adminScreensComposePage()->render()))->toBe('');
+});
+
+test('sending without the capability is refused', function () {
+    // The one that matters most on this screen: sending reaches every
+    // handset on a committee.
+    WpState::$userCan = false;
+
+    adminScreensComposePage()->handleSend();
+})->throws(WpDieException::class);
+
+// ── Devices ───────────────────────────────────────────────────────
+
+test('the devices screen says so when nothing is enrolled', function () {
+    $markup = captureOutput(fn() => adminScreensDevicesPage()->render());
+
+    expect($markup)->toContain('No handsets');
+});
+
+test('the devices screen lists a handset and whose it is', function () {
+    enrolADevice();
+
+    $markup = captureOutput(fn() => adminScreensDevicesPage()->render());
+
+    expect($markup)->toContain('Pixel 6a');
+});
+
+test('a reader who cannot manage is shown no buttons', function () {
+    // Not a permission check in itself — the handlers check again —
+    // but a button that answers 403 is a worse screen than one that
+    // does not offer it.
+    enrolADevice();
+    WpState::$deniedCaps = ['fellowship_manage_devices'];
+
+    $markup = captureOutput(fn() => adminScreensDevicesPage()->render());
+
+    expect($markup)->not->toContain('Revoke');
+});
+
+test('the devices screen renders nothing without the view capability', function () {
+    WpState::$userCan = false;
+
+    expect(captureOutput(fn() => adminScreensDevicesPage()->render()))->toBe('');
+});
+
+test('revoking without the capability is refused', function () {
+    WpState::$userCan = false;
+
+    adminScreensDevicesPage()->handleRevoke();
+})->throws(WpDieException::class);
+
+test('removing without the capability is refused', function () {
+    WpState::$userCan = false;
+
+    adminScreensDevicesPage()->handleRemove();
+})->throws(WpDieException::class);
+
+// ── Fixtures ──────────────────────────────────────────────────────
+
+/**
+ * Run a screen and capture what it printed.
+ *
+ * The screens echo directly, as WordPress admin screens do, so the
+ * only way to assert on the markup is to buffer it.
+ */
+function adminScreensMessagesPage(): MessagesPage
 {
-    private const MEMBER = 'member@example.org';
+    return new MessagesPage(test()->messages, test()->recipients);
+}
 
-    private InMemoryMessageRepository $messages;
-    private InMemoryRecipientRepository $recipients;
-    private InMemoryDeviceRepository $devices;
-    private InMemoryMemberRepository $members;
-    private SpyAuditLogger $audit;
+function adminScreensComposePage(): ComposePage
+{
+    // A real MessageApi: the class is final, and doubling it would
+    // only prove the page calls something. What these tests are about
+    // is the capability guard, which sits in front of it either way.
+    $gate = new MemberGate(test()->members);
+    $settings = new Settings();
+    $sealer = new MessageSealer();
 
-    protected function setUp(): void
-    {
-        parent::setUp();
-
-        $_POST = [];
-        $_GET = [];
-
-        WpState::$userCan = true;
-
-        when('admin_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-admin/' . $p);
-        when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
-        when('get_current_user_id')->justReturn(3);
-        when('submit_button')->justReturn(null);
-        when('paginate_links')->justReturn('');
-
-        $this->messages = new InMemoryMessageRepository();
-        $this->recipients = new InMemoryRecipientRepository();
-        $this->devices = new InMemoryDeviceRepository();
-        $this->audit = new SpyAuditLogger();
-
-        $this->members = new InMemoryMemberRepository([
-            new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: self::MEMBER),
-        ]);
-    }
-
-    // ── Settings ──────────────────────────────────────────────────────
-
-    public function testTheSettingsScreenOffersEverySignInProvider(): void
-    {
-        $markup = $this->render(fn() => (new SettingsPage(new Settings()))->render());
-
-        foreach (['Google', 'Microsoft', 'Facebook', 'Apple'] as $provider) {
-            self::assertStringContainsString($provider, $markup);
-        }
-    }
-
-    public function testTheSettingsScreenShowsTheRedirectUriToRegister(): void
-    {
-        // Whoever is configuring an OAuth client needs this exact string,
-        // and getting it from the screen beats getting it from a README
-        // that may not match the site.
-        $markup = $this->render(fn() => (new SettingsPage(new Settings()))->render());
-
-        self::assertStringContainsString('auth/callback', $markup);
-    }
-
-    public function testAStoredSecretIsNeverRenderedBack(): void
-    {
-        // The field is write-only. Painting the stored value into the
-        // markup would put every client secret in the page source of an
-        // admin screen.
-        $settings = new Settings();
-        $settings->setClientId('google', 'google-client-id');
-
-        $markup = $this->render(fn() => (new SettingsPage($settings))->render());
-
-        self::assertStringContainsString('google-client-id', $markup);
-        self::assertStringNotContainsString('value="a-secret"', $markup);
-    }
-
-    public function testSavingSettingsWithoutTheCapabilityIsRefused(): void
-    {
-        WpState::$userCan = false;
-
-        $this->expectException(WpDieException::class);
-
-        (new SettingsPage(new Settings()))->handleSave();
-    }
-
-    public function testTheSettingsScreenRendersNothingToAReaderWhoMayNotSeeIt(): void
-    {
-        WpState::$userCan = false;
-
-        self::assertSame('', $this->render(fn() => (new SettingsPage(new Settings()))->render()));
-    }
-
-    // ── The message log ───────────────────────────────────────────────
-
-    public function testAnEmptyMessageLogSaysSoRatherThanRenderingAnEmptyTable(): void
-    {
-        $markup = $this->render(fn() => $this->messagesPage()->render());
-
-        self::assertStringContainsString('No messages', $markup);
-    }
-
-    public function testTheMessageLogListsWhatWasSent(): void
-    {
-        $this->messages->create(
-            'uuid-1',
-            'dave@example.org',
-            7,
-            'Dave B',
-            'Intergroup moved',
-            'Now the 14th.',
-            'committee',
-            'steering',
-            1788000000,
-            0,
-            0,
-        );
-
-        $markup = $this->render(fn() => $this->messagesPage()->render());
-
-        self::assertStringContainsString('Intergroup moved', $markup);
-    }
-
-    public function testTheMessageLogRendersNothingWithoutTheCapability(): void
-    {
-        // The log carries message subjects, which are the members' own
-        // words.
-        WpState::$userCan = false;
-
-        self::assertSame('', $this->render(fn() => $this->messagesPage()->render()));
-    }
-
-    // ── Compose ───────────────────────────────────────────────────────
-
-    public function testTheComposeScreenOffersTheCommittees(): void
-    {
-        $markup = $this->render(fn() => $this->composePage()->render());
-
-        self::assertStringContainsString('<form', $markup);
-    }
-
-    public function testTheComposeScreenRendersNothingWithoutTheCapability(): void
-    {
-        WpState::$userCan = false;
-
-        self::assertSame('', $this->render(fn() => $this->composePage()->render()));
-    }
-
-    public function testSendingWithoutTheCapabilityIsRefused(): void
-    {
-        // The one that matters most on this screen: sending reaches every
-        // handset on a committee.
-        WpState::$userCan = false;
-
-        $this->expectException(WpDieException::class);
-
-        $this->composePage()->handleSend();
-    }
-
-    // ── Devices ───────────────────────────────────────────────────────
-
-    public function testTheDevicesScreenSaysSoWhenNothingIsEnrolled(): void
-    {
-        $markup = $this->render(fn() => $this->devicesPage()->render());
-
-        self::assertStringContainsString('No handsets', $markup);
-    }
-
-    public function testTheDevicesScreenListsAHandsetAndWhoseItIs(): void
-    {
-        $this->enrolADevice();
-
-        $markup = $this->render(fn() => $this->devicesPage()->render());
-
-        self::assertStringContainsString('Pixel 6a', $markup);
-    }
-
-    public function testAReaderWhoCannotManageIsShownNoButtons(): void
-    {
-        // Not a permission check in itself — the handlers check again —
-        // but a button that answers 403 is a worse screen than one that
-        // does not offer it.
-        $this->enrolADevice();
-        WpState::$deniedCaps = ['fellowship_manage_devices'];
-
-        $markup = $this->render(fn() => $this->devicesPage()->render());
-
-        self::assertStringNotContainsString('Revoke', $markup);
-    }
-
-    public function testTheDevicesScreenRendersNothingWithoutTheViewCapability(): void
-    {
-        WpState::$userCan = false;
-
-        self::assertSame('', $this->render(fn() => $this->devicesPage()->render()));
-    }
-
-    public function testRevokingWithoutTheCapabilityIsRefused(): void
-    {
-        WpState::$userCan = false;
-
-        $this->expectException(WpDieException::class);
-
-        $this->devicesPage()->handleRevoke();
-    }
-
-    public function testRemovingWithoutTheCapabilityIsRefused(): void
-    {
-        WpState::$userCan = false;
-
-        $this->expectException(WpDieException::class);
-
-        $this->devicesPage()->handleRemove();
-    }
-
-    // ── Fixtures ──────────────────────────────────────────────────────
-
-    /**
-     * Run a screen and capture what it printed.
-     *
-     * The screens echo directly, as WordPress admin screens do, so the
-     * only way to assert on the markup is to buffer it.
-     */
-    private function render(callable $screen): string
-    {
-        ob_start();
-
-        try {
-            $screen();
-        } finally {
-            $markup = (string) ob_get_clean();
-        }
-
-        return $markup;
-    }
-
-    private function messagesPage(): MessagesPage
-    {
-        return new MessagesPage($this->messages, $this->recipients);
-    }
-
-    private function composePage(): ComposePage
-    {
-        // A real MessageApi: the class is final, and doubling it would
-        // only prove the page calls something. What these tests are about
-        // is the capability guard, which sits in front of it either way.
-        $gate = new MemberGate($this->members);
-        $settings = new Settings();
-        $sealer = new MessageSealer();
-
-        return new ComposePage(
-            new MessageApi(
-                new MessageDispatcher(
-                    $this->messages,
-                    $this->recipients,
-                    $this->devices,
-                    new FcmTransport(new FcmClient(), $settings, $sealer),
-                ),
-                new RecipientResolver($this->members, new InMemoryCommitteeRepository(), $gate),
-                $this->audit,
+    return new ComposePage(
+        new MessageApi(
+            new MessageDispatcher(
+                test()->messages,
+                test()->recipients,
+                test()->devices,
+                new FcmTransport(new FcmClient(), $settings, $sealer),
             ),
-            new InMemoryCommitteeRepository(),
-        );
-    }
+            new RecipientResolver(test()->members, new InMemoryCommitteeRepository(), $gate),
+            test()->audit,
+        ),
+        new InMemoryCommitteeRepository(),
+    );
+}
 
-    private function devicesPage(): DevicesPage
-    {
-        $gate = new MemberGate($this->members);
+function adminScreensDevicesPage(): DevicesPage
+{
+    $gate = new MemberGate(test()->members);
 
-        return new DevicesPage(
-            $this->devices,
-            $this->members,
-            $this->audit,
-            new PasswordAuthenticator(
-                new InMemoryPasswordCredentialRepository(),
-                $gate,
-                new PasswordResetMailer(),
-                new PasswordPolicy(),
-            ),
+    return new DevicesPage(
+        test()->devices,
+        test()->members,
+        test()->audit,
+        new PasswordAuthenticator(
+            new InMemoryPasswordCredentialRepository(),
             $gate,
-        );
-    }
+            new PasswordResetMailer(),
+            new PasswordPolicy(),
+        ),
+        $gate,
+    );
+}
 
-    private function enrolADevice(): void
-    {
-        $this->devices->create(
-            'hash-1',
-            self::MEMBER,
-            7,
-            'Pixel 6a',
-            'android',
-            'spki',
-            'fcm',
-            'token-1',
-            1788000000,
-        );
-    }
+function enrolADevice(): void
+{
+    test()->devices->create(
+        'hash-1',
+        ADMIN_SCREENS_MEMBER,
+        7,
+        'Pixel 6a',
+        'android',
+        'spki',
+        'fcm',
+        'token-1',
+        1788000000,
+    );
 }
