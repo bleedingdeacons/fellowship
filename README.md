@@ -1,6 +1,7 @@
 # Fellowship
 
 [![CI](https://github.com/bleedingdeacons/fellowship/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/bleedingdeacons/fellowship/actions/workflows/ci.yml)
+[![Tests](https://github.com/bleedingdeacons/fellowship/actions/workflows/ci.yml/badge.svg)](https://github.com/bleedingdeacons/fellowship/actions/workflows/ci.yml)
 [![Semgrep](https://github.com/bleedingdeacons/fellowship/actions/workflows/semgrep.yml/badge.svg?branch=main)](https://github.com/bleedingdeacons/fellowship/actions/workflows/semgrep.yml)
 [![Coverage Status](https://coveralls.io/repos/github/bleedingdeacons/fellowship/badge.svg?branch=main)](https://coveralls.io/github/bleedingdeacons/fellowship?branch=main)
 ![PHPStan](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbleedingdeacons%2Ffellowship%2Fmain%2Fphpstan.neon.dist&query=%24.parameters.level&label=PHPStan&prefix=level%20&color=brightgreen)
