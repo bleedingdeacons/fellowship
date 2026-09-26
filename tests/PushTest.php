@@ -270,6 +270,26 @@ test('the body on the wire is sealed rather than readable', function () {
     expect($body)->not->toContain('Intergroup moved');
 });
 
+test('a pushed envelope names its sender by member id, as a polled one does', function () {
+    // A message that arrived by push is answered exactly as one that
+    // was polled, so both carry the id a reply is addressed back to.
+    $settings = new Settings();
+    $settings->setFcmServiceAccount(pushAccountJson());
+
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(200, '{}');
+
+    pushTransport($settings)->send(pushDevice(publicKey: pushPublicKey()), pushMessage());
+
+    $sent = json_decode((string) (FakeWpHttp::sentArgs(1)['body'] ?? ''), true);
+    expect($sent)->toBeArray();
+
+    $opened = messageSealerOpen($sent['message']['data'], pushPrivateKey());
+
+    expect($opened['sender'])->toBe('Dave B');
+    expect($opened['sender_id'])->toBe(7);
+});
+
 test('the sealed envelope reaches iOS in the APNs payload', function () {
     // iOS never sees the top-level data block as such — it reads an
     // APNs payload. FCM does merge one into the other, and the app

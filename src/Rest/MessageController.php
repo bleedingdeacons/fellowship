@@ -540,6 +540,13 @@ final class MessageController
      * that has been offline needs to know which of these it has already
      * dealt with elsewhere.
      *
+     * `sender_id` is the sender's Unity member id — the same opaque id
+     * the directory hands out — so a reply can be addressed back to them
+     * without the handset matching on a name several people share. It
+     * tells the recipient nothing the directory has not already told
+     * them. 0 for a message composed in WordPress admin, which has no
+     * member behind it to answer.
+     *
      * @return array<string, string|int>
      */
     private function payloadFor(Message $message, ?int $readAt): array
@@ -550,6 +557,7 @@ final class MessageController
             'subject'    => $message->subject,
             'body'       => $message->body,
             'sender'     => $message->senderName,
+            'sender_id'  => $message->senderMemberId,
             'created_at' => $message->createdAt,
             'reply_to'   => $message->replyToId,
             'read_at'    => $readAt ?? 0,

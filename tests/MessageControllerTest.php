@@ -101,6 +101,23 @@ test('the inbox hands back sealed envelopes and nothing else', function () {
     expect($encoded)->not->toContain('same room');
 });
 
+test('the envelope names its sender by member id, so a reply can be addressed back', function () {
+    // Link pre-addresses a reply to whoever sent the message. A name
+    // cannot do that — an intergroup has several Dave Bs — so the
+    // envelope carries the same opaque id the directory hands out.
+    $token = messageControllerEnrol();
+    giveMessage('Intergroup moved', 'Now the 14th, same room.');
+
+    $response = messageControllerController()->inbox(messageControllerRequest([], $token));
+
+    expect($response)->toBeInstanceOf(WP_REST_Response::class);
+
+    $opened = messageSealerOpen(((array) $response->get_data())['messages'][0], $this->privateKey);
+
+    expect($opened['sender'])->toBe('Dave B');
+    expect($opened['sender_id'])->toBe(9);
+});
+
 test('a handset only sees its own messages', function () {
     $token = messageControllerEnrol();
 
