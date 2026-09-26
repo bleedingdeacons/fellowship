@@ -349,6 +349,7 @@ function adminBranchesComposePage(array $committees = []): ComposePage
             test()->audit,
         ),
         new InMemoryCommitteeRepository($committees),
+        $gate,
     );
 }
 

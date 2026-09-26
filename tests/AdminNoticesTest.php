@@ -219,7 +219,7 @@ function adminNoticesDevicesPage(): DevicesPage
 
 function adminNoticesComposePage(): ComposePage
 {
-    return new ComposePage(adminNoticesApi(), new InMemoryCommitteeRepository());
+    return new ComposePage(adminNoticesApi(), new InMemoryCommitteeRepository(), new MemberGate(test()->members));
 }
 
 function adminNoticesApi(): MessageApi

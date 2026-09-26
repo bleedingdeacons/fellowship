@@ -36,7 +36,11 @@ keystore and sends the public half. The private half never leaves the
 device.
 
 Messages are addressed to named members or to a whole committee, from the
-app or from WordPress admin, and can be replied to.
+app or from WordPress admin, and can be replied to. A message written in
+WordPress admin is sent under the name of the member who wrote it, matched
+on their WordPress email, so a reply from the app goes back to them; a
+WordPress user who is not a member sends as the intergroup, under the
+site's name.
 
 ## The encryption, stated precisely
 

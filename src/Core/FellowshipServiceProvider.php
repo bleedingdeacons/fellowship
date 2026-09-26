@@ -233,6 +233,7 @@ final class FellowshipServiceProvider
         $container->register(ComposePage::class, fn(ContainerInterface $c) => new ComposePage(
             $c->get(MessageApi::class),
             $c->get(CommitteeRepository::class),
+            $c->get(MemberGate::class),
         ));
         $container->register(DevicesPage::class, fn(ContainerInterface $c) => new DevicesPage(
             $c->get(DeviceRepository::class),

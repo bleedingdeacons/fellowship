@@ -259,6 +259,7 @@ function coreUnitsComposePage(): ComposePage
             new SpyAuditLogger(),
         ),
         new InMemoryCommitteeRepository(),
+        $gate,
     );
 }
 

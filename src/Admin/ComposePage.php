@@ -9,10 +9,12 @@ if (!defined('ABSPATH')) {
 }
 
 use Fellowship\Core\Capabilities;
+use Fellowship\Devices\MemberGate;
 use Fellowship\Messaging\Message;
 use Fellowship\Messaging\MessageApi;
 use Fellowship\Messaging\MessageRequest;
 use Unity\Committees\Interfaces\CommitteeRepository;
+use Unity\Members\Interfaces\Member;
 use WP_Error;
 
 /**
@@ -29,6 +31,14 @@ use WP_Error;
  * The confirmation step is not politeness. "Everyone" on a live
  * intergroup is several hundred handsets and there is no unsend, so the
  * count is shown before the send and not after it.
+ *
+ * <b>A message is credited to whoever wrote it, when they are a
+ * member.</b> The signed-in user's WordPress email is looked up in Unity
+ * the way a handset's is, and a match sends under that member's name and
+ * id — so the app can address a reply straight back to them. A user who
+ * is not a member still sends as the intergroup, under the site's name,
+ * with nobody for a reply to go to. The screen says which it will be
+ * before anything is sent.
  */
 final class ComposePage
 {
@@ -60,6 +70,7 @@ final class ComposePage
     public function __construct(
         private readonly MessageApi $api,
         private readonly CommitteeRepository $committees,
+        private readonly MemberGate $gate,
     ) {
     }
 
@@ -138,6 +149,8 @@ final class ComposePage
 
         echo '</tbody></table>';
 
+        $this->sendingAs();
+
         submit_button(__('Send message', 'fellowship'));
 
         echo '</form></div>';
@@ -182,7 +195,7 @@ final class ComposePage
             'subject'   => (string) ($_POST['subject'] ?? ''),
             'body'      => (string) ($_POST['body'] ?? ''),
             'committee' => sanitize_text_field((string) ($_POST['committee'] ?? '')),
-        ]);
+        ], $this->author());
 
         if ($result instanceof WP_Error) {
             // The reason waits in a one-shot per-user transient rather
@@ -198,6 +211,36 @@ final class ComposePage
         }
 
         return 'sent';
+    }
+
+    /**
+     * The member the signed-in user is, or null when they are not one.
+     *
+     * Matched on email through {@see MemberGate}, the same rule that
+     * decides whether a handset may enrol, so a WordPress user is credited
+     * as exactly the member who could have sent this from the app.
+     */
+    private function author(): ?Member
+    {
+        return $this->gate->authorisedMember(wp_get_current_user()->user_email);
+    }
+
+    /**
+     * Say who the message will be from, before it is sent.
+     */
+    private function sendingAs(): void
+    {
+        $author = $this->author();
+
+        $text = $author !== null
+            ? sprintf(
+                /* translators: %s: the sender's anonymous name */
+                __('Sent as %s. Replies from the app will come to you, and you will not receive a copy.', 'fellowship'),
+                $author->getAnonymousName()
+            )
+            : __('Sent from the intergroup, not a member: your WordPress email is not a Unity member\'s, so replies cannot be addressed back to anybody.', 'fellowship');
+
+        echo '<p class="description">' . esc_html($text) . '</p>';
     }
 
     /**
