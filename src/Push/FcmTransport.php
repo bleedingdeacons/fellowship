@@ -144,6 +144,10 @@ final class FcmTransport
      * beside the sealed blob for the handset to read first, because it
      * does not need anything first. See {@see MessageSealer}.
      *
+     * The same shape as the poll's, `sender_id` included: a message that
+     * arrived by push has to be answerable exactly as one that was
+     * polled. See MessageController::payloadFor().
+     *
      * @return array<string, string|int>
      */
     private function payloadFor(Message $message): array
@@ -154,6 +158,7 @@ final class FcmTransport
             'subject'    => $message->subject,
             'body'       => $message->body,
             'sender'     => $message->senderName,
+            'sender_id'  => $message->senderMemberId,
             'created_at' => $message->createdAt,
             'reply_to'   => $message->replyToId,
         ];

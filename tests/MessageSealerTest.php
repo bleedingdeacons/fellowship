@@ -118,6 +118,7 @@ test('the worst case payload the API accepts fits inside an FCM data message', f
         'subject'    => bin2hex(random_bytes(100)),   // 200 chars
         'body'       => bin2hex(random_bytes(1000)),  // 2000 chars
         'sender'     => str_repeat('x', 200),
+        'sender_id'  => 999999,
         'created_at' => 1893456000,
         'reply_to'   => 999999,
         'read_at'    => 1893456000,
