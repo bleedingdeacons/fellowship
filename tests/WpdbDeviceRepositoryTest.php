@@ -233,6 +233,28 @@ test('a push token is replaced', function () {
     expect($this->wpdb->updates[0]['data']['push_token'])->toBe('token-2');
 });
 
+test('a dead push token is cleared only while it is still the one on the row', function () {
+    // The token is in the WHERE, so a fresh one the handset reported
+    // in the meantime survives the clear.
+    $this->wpdb->updateResult = 1;
+
+    expect($this->repository->clearPushToken(4, 'token-dead'))->toBeTrue();
+    expect($this->wpdb->updates[0]['data'])->toBe(['push_token' => '']);
+    expect($this->wpdb->updates[0]['where'])->toBe(['id' => 4, 'push_token' => 'token-dead']);
+});
+
+test('clearing a push token that has already been replaced reports nothing cleared', function () {
+    $this->wpdb->updateResult = 0;
+
+    expect($this->repository->clearPushToken(4, 'token-dead'))->toBeFalse();
+});
+
+test('an empty token is never cleared', function () {
+    // There is nothing to forget, and no write should claim otherwise.
+    expect($this->repository->clearPushToken(4, ''))->toBeFalse();
+    expect($this->wpdb->updates)->toBe([]);
+});
+
 test('last seen is stamped', function () {
     $this->wpdb->updateResult = 1;
 

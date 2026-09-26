@@ -54,6 +54,10 @@ covers(\Fellowship\Admin\SettingsPage::class, \Fellowship\Admin\DevicesPage::cla
 
 const ADMIN_BRANCHES_MEMBER = 'member@example.org';
 
+/** FCM's answer for a registration token that no longer belongs to an installation. */
+const ADMIN_BRANCHES_UNREGISTERED = '{"error":{"code":404,"status":"NOT_FOUND","details":['
+    . '{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"UNREGISTERED"}]}}';
+
 beforeEach(function () {
     $_POST = [];
     $_GET = [];
@@ -283,6 +287,98 @@ test('a push that fails leaves the recipient unpushed', function () {
     $message = adminBranchesDispatch($settings);
 
     expect($this->recipients->forMessage($message)[0]->pushedAt)->toBeNull();
+    // A 404 on its own is not a dead token, so the token stays put.
+    expect($this->devices->findById(1)?->pushToken)->toBe('token-1');
+});
+
+test('a token FCM no longer recognises is cleared from the handset', function () {
+    // Left in place it would fail the same way for every later message
+    // while the admin list showed the handset as push-capable. Cleared,
+    // the row reads "no push token yet" until the handset reports a
+    // live one.
+    $settings = new Settings();
+    $settings->setFcmServiceAccount(adminBranchesAccountJson());
+
+    adminBranchesEnrol(adminBranchesPublicKey());
+
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(404, ADMIN_BRANCHES_UNREGISTERED);
+
+    $message = adminBranchesDispatch($settings);
+
+    $device = $this->devices->findById(1);
+    expect($device)->not->toBeNull();
+    expect($device?->pushToken)->toBe('');
+    expect($device?->pushBlocker())->toBe('no push token yet');
+    expect($this->recipients->forMessage($message)[0]->pushedAt)->toBeNull();
+});
+
+test('the next message does not try the cleared token again', function () {
+    $settings = new Settings();
+    $settings->setFcmServiceAccount(adminBranchesAccountJson());
+
+    adminBranchesEnrol(adminBranchesPublicKey());
+
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(404, ADMIN_BRANCHES_UNREGISTERED);
+
+    adminBranchesDispatch($settings);
+    $calls = FakeWpHttp::callCount();
+
+    adminBranchesDispatch($settings);
+
+    expect(FakeWpHttp::callCount())->toBe($calls);
+});
+
+test('a token the handset replaced mid-send survives the clear', function () {
+    // The handset reported a new token after the dispatcher read the row
+    // and before FCM answered for the old one. Clearing unconditionally
+    // would throw the live token away.
+    $settings = new Settings();
+    $settings->setFcmServiceAccount(adminBranchesAccountJson());
+
+    adminBranchesEnrol(adminBranchesPublicKey());
+
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(404, ADMIN_BRANCHES_UNREGISTERED);
+
+    $devices = test()->devices;
+    $request = MessageRequest::fromArray([
+        'subject' => 'Intergroup moved',
+        'body' => 'Now the 14th.',
+        'member_emails' => [ADMIN_BRANCHES_MEMBER],
+    ]);
+    expect($request)->toBeInstanceOf(MessageRequest::class);
+
+    // Hands the dispatcher the row as it was read, then rotates the
+    // token behind it, which is the race in question.
+    $racing = new class ($devices) extends InMemoryDeviceRepository {
+        public function __construct(private readonly InMemoryDeviceRepository $inner)
+        {
+        }
+
+        public function findByMemberEmail(string $memberEmail): array
+        {
+            $read = $this->inner->findByMemberEmail($memberEmail);
+            $this->inner->updatePush(1, 'fcm', 'token-2');
+
+            return $read;
+        }
+
+        public function clearPushToken(int $id, string $deadToken): bool
+        {
+            return $this->inner->clearPushToken($id, $deadToken);
+        }
+    };
+
+    (new MessageDispatcher(
+        test()->messages,
+        test()->recipients,
+        $racing,
+        new FcmTransport(new FcmClient(), $settings, new MessageSealer()),
+    ))->dispatch($request, [['email' => ADMIN_BRANCHES_MEMBER, 'member_id' => 7]], '', 0, 'Intergroup');
+
+    expect($devices->findById(1)?->pushToken)->toBe('token-2');
 });
 
 // ── Fixtures ──────────────────────────────────────────────────────

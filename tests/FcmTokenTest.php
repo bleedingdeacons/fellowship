@@ -11,6 +11,7 @@ use Fellowship\Devices\Device;
 use Fellowship\Messaging\Message;
 use Fellowship\Push\FcmClient;
 use Fellowship\Push\FcmTransport;
+use Fellowship\Push\PushOutcome;
 use Fellowship\Push\ServiceAccount;
 
 /**
@@ -55,7 +56,7 @@ test('a token is fetched and the message sent', function () {
     FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
     FakeWpHttp::pushResponse(200, '{"name":"projects/x/messages/1"}');
 
-    expect((new FcmClient())->send(fcmTokenAccount(), ['token' => 'fcm-1']))->toBeTrue();
+    expect((new FcmClient())->send(fcmTokenAccount(), ['token' => 'fcm-1']))->toBe(PushOutcome::Sent);
     expect(FakeWpHttp::callCount())->toBe(2);
 });
 
@@ -123,7 +124,7 @@ test('a private key that will not load means no token and no request', function 
 
     expect($broken)->not->toBeNull();
 
-    expect((new FcmClient())->send($broken, ['token' => 'fcm-1']))->toBeFalse();
+    expect((new FcmClient())->send($broken, ['token' => 'fcm-1']))->toBe(PushOutcome::Failed);
     expect(FakeWpHttp::callCount())->toBe(0);
 });
 

@@ -269,6 +269,25 @@ final class WpdbDeviceRepository implements DeviceRepository
         );
     }
 
+    public function clearPushToken(int $id, string $deadToken): bool
+    {
+        if ($deadToken === '') {
+            return false;
+        }
+
+        // The token is part of the WHERE, so a token the handset reported
+        // since the row was read is left alone. See the interface.
+        $updated = $this->wpdb->update(
+            self::tableName($this->wpdb),
+            ['push_token' => ''],
+            ['id' => $id, 'push_token' => $deadToken],
+            ['%s'],
+            ['%d', '%s'],
+        );
+
+        return is_int($updated) && $updated > 0;
+    }
+
     public function updatePublicKey(int $id, string $publicKey): bool
     {
         // A new key clears any standing key fault in the same write. The

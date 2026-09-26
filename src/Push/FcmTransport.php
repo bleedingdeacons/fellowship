@@ -63,18 +63,21 @@ final class FcmTransport
     }
 
     /**
-     * Push a message to one device. False means it did not go — which is
-     * survivable, because the handset will collect it on its next poll.
+     * Push a message to one device. Anything but Sent means it did not go,
+     * which is survivable because the handset will collect it on its next
+     * poll. Unregistered also means it will never go to this token again;
+     * acting on that is the caller's job, because this class does not own
+     * the device row.
      */
-    public function send(Device $device, Message $message): bool
+    public function send(Device $device, Message $message): PushOutcome
     {
         $account = $this->account();
         if ($account === null) {
-            return false;
+            return PushOutcome::Failed;
         }
 
         if (!$device->wantsPush()) {
-            return false;
+            return PushOutcome::Failed;
         }
 
         $sealed = $this->sealer->seal($this->payloadFor($message), $device->publicKey);
@@ -86,7 +89,7 @@ final class FcmTransport
                 'device'  => $device->id,
                 'message' => $message->id,
             ]);
-            return false;
+            return PushOutcome::Failed;
         }
 
         // Named once so the two places it travels cannot disagree. It goes
