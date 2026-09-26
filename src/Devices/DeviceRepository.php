@@ -99,6 +99,21 @@ interface DeviceRepository
     public function updatePush(int $id, string $pushProvider, string $pushToken): void;
 
     /**
+     * Forget a push token FCM has said is dead, only if it is still the
+     * one on the row.
+     *
+     * <b>Conditional on purpose.</b> A handset whose token rotated reports
+     * the new one, from the rotation or at its next launch, and that can
+     * land between the dispatcher reading this row and FCM answering for
+     * the old token. An unconditional clear would then wipe the token that
+     * works, leaving the handset poll-only until its next launch, which
+     * is what this method exists to stop.
+     *
+     * @return bool Whether a token was cleared.
+     */
+    public function clearPushToken(int $id, string $deadToken): bool;
+
+    /**
      * Replace a handset's public key.
      *
      * Its keypair is regenerated when the platform invalidates the old one

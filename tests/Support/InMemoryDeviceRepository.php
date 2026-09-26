@@ -137,6 +137,18 @@ class InMemoryDeviceRepository implements DeviceRepository
         $this->replace($id, ['pushProvider' => $pushProvider, 'pushToken' => $pushToken]);
     }
 
+    public function clearPushToken(int $id, string $deadToken): bool
+    {
+        $existing = $this->rows[$id] ?? null;
+        if ($existing === null || $deadToken === '' || $existing->pushToken !== $deadToken) {
+            return false;
+        }
+
+        $this->replace($id, ['pushToken' => '']);
+
+        return true;
+    }
+
     public function updatePublicKey(int $id, string $publicKey): bool
     {
         if (!isset($this->rows[$id])) {

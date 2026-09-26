@@ -11,6 +11,7 @@ if (!defined('ABSPATH')) {
 use Fellowship\Devices\DeviceRepository;
 use Fellowship\Logger\HasLogger;
 use Fellowship\Push\FcmTransport;
+use Fellowship\Push\PushOutcome;
 
 /**
  * Stores a message, records who it is for, and pushes it.
@@ -135,8 +136,25 @@ final class MessageDispatcher
                     continue;
                 }
 
-                if ($this->transport->send($device, $message)) {
+                $outcome = $this->transport->send($device, $message);
+
+                if ($outcome === PushOutcome::Sent) {
                     $pushed = true;
+                    continue;
+                }
+
+                // A dead token is cleared rather than kept. Left on the
+                // row it looks push-capable in the admin list and fails
+                // identically for every message until the handset next
+                // launches. Cleared, the row reads "no push token yet",
+                // which is true, and the handset's next launch or
+                // rotation puts a live one back.
+                if ($outcome === PushOutcome::Unregistered) {
+                    $cleared = $this->devices->clearPushToken($device->id, $device->pushToken);
+                    $pollOnly[] = $device->id . ': '
+                        . ($cleared
+                            ? 'push token no longer registered with FCM; cleared'
+                            : 'push token no longer registered with FCM; already replaced');
                 }
             }
 

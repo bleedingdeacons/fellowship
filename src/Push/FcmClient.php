@@ -24,6 +24,11 @@ use Fellowship\Logger\HasLogger;
  * message to every member failing, not one dead phone. Reach ran with
  * exactly that fault undetected for weeks because it was logged at
  * warning alongside the ordinary refusals it is nothing like.
+ *
+ * <b>A token FCM reports as `UNREGISTERED` gets its own answer</b>, and is
+ * not logged here at all. It is about one device row rather than one
+ * message: the dispatcher clears the token and reports it in its single
+ * line per message. See {@see PushOutcome::Unregistered}.
  */
 final class FcmClient
 {
@@ -50,11 +55,11 @@ final class FcmClient
      * @param array<string, mixed> $message The `message` object, as the
      *        HTTP v1 API defines it — token, data, android, and so on.
      */
-    public function send(ServiceAccount $account, array $message): bool
+    public function send(ServiceAccount $account, array $message): PushOutcome
     {
         $token = $this->accessToken($account);
         if ($token === '') {
-            return false;
+            return PushOutcome::Failed;
         }
 
         $response = wp_remote_post($account->sendEndpoint(), [
@@ -69,15 +74,20 @@ final class FcmClient
 
         if (is_wp_error($response)) {
             self::logWarning('FCM send failed', ['error' => $response->get_error_message()]);
-            return false;
+            return PushOutcome::Failed;
         }
 
         $status = (int) wp_remote_retrieve_response_code($response);
         if ($status >= 200 && $status < 300) {
-            return true;
+            return PushOutcome::Sent;
         }
 
-        $body = substr((string) wp_remote_retrieve_body($response), 0, 500);
+        $fullBody = (string) wp_remote_retrieve_body($response);
+        if (self::isUnregistered($fullBody)) {
+            return PushOutcome::Unregistered;
+        }
+
+        $body = substr($fullBody, 0, 500);
 
         if ($status === 401 || $status === 403) {
             self::logError(
@@ -88,14 +98,47 @@ final class FcmClient
                 ['status' => $status, 'body' => $body],
             );
 
+            return PushOutcome::Failed;
+        }
+
+        // Everything else is about this one message: a malformed payload,
+        // a rate limit, a bad hour at Google. Ordinary, survivable, and
+        // not worth more than a warning — the handset will collect the
+        // message on its next poll.
+        self::logWarning('FCM rejected a message', ['status' => $status, 'body' => $body]);
+
+        return PushOutcome::Failed;
+    }
+
+    /**
+     * Whether FCM said the registration token is dead.
+     *
+     * <b>Read from the error code, never from the HTTP status.</b> FCM
+     * answers a dead token with 404 `NOT_FOUND` and an `FcmError` detail
+     * whose `errorCode` is `UNREGISTERED`, but a 404 on its own says
+     * nothing about the token. A wrong project id in the endpoint is a 404
+     * too, and clearing every handset's token over that would turn a
+     * configuration fault into a fellowship that has to relaunch Link
+     * before push works again. `INVALID_ARGUMENT` is not treated as dead
+     * either: a malformed payload gets it too.
+     */
+    private static function isUnregistered(string $body): bool
+    {
+        $decoded = json_decode($body, true);
+        if (!is_array($decoded) || !is_array($decoded['error'] ?? null)) {
             return false;
         }
 
-        // Everything else is about this one message: a dead registration
-        // token, a malformed payload, a rate limit, a bad hour at Google.
-        // Ordinary, survivable, and not worth more than a warning —
-        // the handset will collect the message on its next poll.
-        self::logWarning('FCM rejected a message', ['status' => $status, 'body' => $body]);
+        $details = $decoded['error']['details'] ?? null;
+        if (!is_array($details)) {
+            return false;
+        }
+
+        foreach ($details as $detail) {
+            if (is_array($detail) && ($detail['errorCode'] ?? null) === 'UNREGISTERED') {
+                return true;
+            }
+        }
 
         return false;
     }

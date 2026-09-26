@@ -163,6 +163,15 @@ well as listening. A phone in a tunnel catches up when it surfaces; a
 handset whose FCM token silently rotated still gets its messages; a site
 with no Firebase service account configured still delivers everything.
 
+When FCM answers that a token is `UNREGISTERED` (the app was reinstalled,
+its data cleared, or a rotation never reached the server), Fellowship
+clears that token from the device row instead of trying it again on every
+message. The handset then shows in the admin list and the log as "no push
+token yet", which is accurate, until its next launch or rotation reports a
+live token. The clear only applies while the row still holds the dead
+token, so a fresh one reported mid-send is not thrown away. A bare 404 is
+not read as a dead token: a wrong project id produces one as well.
+
 The polling route returns the *same sealed envelope* the push carries,
 rather than plain JSON over TLS. It would have been easy to do the
 latter — but then one message exists in two forms and the app needs two

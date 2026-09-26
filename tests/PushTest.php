@@ -11,6 +11,7 @@ use Fellowship\Devices\Device;
 use Fellowship\Messaging\Message;
 use Fellowship\Push\FcmClient;
 use Fellowship\Push\FcmTransport;
+use Fellowship\Push\PushOutcome;
 use Fellowship\Push\ServiceAccount;
 
 /**
@@ -94,7 +95,7 @@ test('a site with a service account is configured', function () {
 test('nothing is sent when there is no service account', function () {
     // False, not an exception: the message is stored and the poll
     // will fetch it.
-    expect(pushTransport()->send(pushDevice(), pushMessage()))->toBeFalse();
+    expect(pushTransport()->send(pushDevice(), pushMessage()))->toBe(PushOutcome::Failed);
     expect(FakeWpHttp::callCount())->toBe(0);
 });
 
@@ -104,7 +105,7 @@ test('a handset with no push token is not sent to', function () {
 
     $device = pushDevice(pushToken: '');
 
-    expect(pushTransport($settings)->send($device, pushMessage()))->toBeFalse();
+    expect(pushTransport($settings)->send($device, pushMessage()))->toBe(PushOutcome::Failed);
 });
 
 test('a handset with no public key is not sent to', function () {
@@ -116,7 +117,7 @@ test('a handset with no public key is not sent to', function () {
 
     $device = pushDevice(publicKey: '');
 
-    expect(pushTransport($settings)->send($device, pushMessage()))->toBeFalse();
+    expect(pushTransport($settings)->send($device, pushMessage()))->toBe(PushOutcome::Failed);
 });
 
 // ── The client ────────────────────────────────────────────────────
@@ -127,7 +128,7 @@ test('an unreachable token endpoint means no send', function () {
 
     FakeWpHttp::push(new \WP_Error('http_request_failed', 'offline'));
 
-    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBeFalse();
+    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBe(PushOutcome::Failed);
 });
 
 test('a token endpoint that answers no token means no send', function () {
@@ -136,7 +137,7 @@ test('a token endpoint that answers no token means no send', function () {
 
     FakeWpHttp::pushResponse(200, '{"not_an_access_token":true}');
 
-    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBeFalse();
+    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBe(PushOutcome::Failed);
 });
 
 test('a refused send is reported rather than thrown', function () {
@@ -148,18 +149,62 @@ test('a refused send is reported rather than thrown', function () {
     FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
     FakeWpHttp::pushResponse(403, '{"error":{"status":"PERMISSION_DENIED"}}');
 
-    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBeFalse();
+    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBe(PushOutcome::Failed);
 });
 
-test('a dead registration token is also just false', function () {
-    // Ordinary and survivable: one handset reinstalled the app.
+test('a token FCM reports as unregistered is its own outcome', function () {
+    // One handset reinstalled the app, or its token rotated unheard.
+    // Distinct from Failed because the caller has to stop sending to
+    // it: this token will fail the same way for every message.
+    $account = ServiceAccount::fromJson(pushAccountJson());
+    expect($account)->not->toBeNull();
+
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(404, (string) wp_json_encode(['error' => [
+        'code' => 404,
+        'status' => 'NOT_FOUND',
+        'details' => [[
+            '@type' => 'type.googleapis.com/google.firebase.fcm.v1.FcmError',
+            'errorCode' => 'UNREGISTERED',
+        ]],
+    ]]));
+
+    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBe(PushOutcome::Unregistered);
+});
+
+test('a 404 without the unregistered code is only a failure', function () {
+    // A wrong project id in the endpoint is a 404 too. Reading the
+    // status as a dead token would clear every handset's token over a
+    // configuration fault.
     $account = ServiceAccount::fromJson(pushAccountJson());
     expect($account)->not->toBeNull();
 
     FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
     FakeWpHttp::pushResponse(404, '{"error":{"status":"NOT_FOUND"}}');
 
-    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBeFalse();
+    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBe(PushOutcome::Failed);
+});
+
+test('an invalid argument is not read as a dead token', function () {
+    // INVALID_ARGUMENT is what a malformed payload gets as well, so it
+    // says nothing reliable about the handset.
+    $account = ServiceAccount::fromJson(pushAccountJson());
+    expect($account)->not->toBeNull();
+
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(400, '{"error":{"status":"INVALID_ARGUMENT","details":[{"errorCode":"INVALID_ARGUMENT"}]}}');
+
+    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBe(PushOutcome::Failed);
+});
+
+test('an error body that is not JSON is only a failure', function () {
+    $account = ServiceAccount::fromJson(pushAccountJson());
+    expect($account)->not->toBeNull();
+
+    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
+    FakeWpHttp::pushResponse(502, '<html>Bad Gateway</html>');
+
+    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBe(PushOutcome::Failed);
 });
 
 test('a message FCM accepts is a send', function () {
@@ -172,7 +217,7 @@ test('a message FCM accepts is a send', function () {
     FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
     FakeWpHttp::pushResponse(200, '{"name":"projects/x/messages/1"}');
 
-    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBeTrue();
+    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBe(PushOutcome::Sent);
     expect(FakeWpHttp::callCount())->toBe(2);
 });
 
@@ -216,7 +261,7 @@ test('a send that never reaches Google is just false', function () {
     FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
     FakeWpHttp::push(new \WP_Error('http_request_failed', 'offline'));
 
-    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBeFalse();
+    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBe(PushOutcome::Failed);
 });
 
 test('a key that will not load stops before any request', function () {
@@ -235,7 +280,7 @@ not-a-real-key
     ]));
 
     expect($account)->not->toBeNull();
-    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBeFalse();
+    expect((new FcmClient())->send($account, ['token' => 'fcm-1']))->toBe(PushOutcome::Failed);
     expect(FakeWpHttp::callCount())->toBe(0);
 });
 
@@ -250,7 +295,7 @@ test('a configured site seals the body and pushes it', function () {
 
     $device = pushDevice(publicKey: pushPublicKey());
 
-    expect(pushTransport($settings)->send($device, pushMessage()))->toBeTrue();
+    expect(pushTransport($settings)->send($device, pushMessage()))->toBe(PushOutcome::Sent);
 });
 
 test('the body on the wire is sealed rather than readable', function () {
@@ -348,7 +393,7 @@ test('a handset whose key will not load is skipped rather than sent to in the cl
     $settings = new Settings();
     $settings->setFcmServiceAccount(pushAccountJson());
 
-    expect(pushTransport($settings)->send(pushDevice(publicKey: 'not-a-key'), pushMessage()))->toBeFalse();
+    expect(pushTransport($settings)->send(pushDevice(publicKey: 'not-a-key'), pushMessage()))->toBe(PushOutcome::Failed);
     expect(FakeWpHttp::callCount())->toBe(0);
 });
 
