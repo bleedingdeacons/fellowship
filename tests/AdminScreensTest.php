@@ -264,6 +264,7 @@ function adminScreensComposePage(): ComposePage
             test()->audit,
         ),
         new InMemoryCommitteeRepository(),
+        $gate,
     );
 }
 

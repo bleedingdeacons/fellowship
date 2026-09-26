@@ -120,6 +120,84 @@ test('a refused send writes no audit entry', function () {
     expect($this->audit->entries)->toBe([]);
 });
 
+test('a message from a member is credited to them', function () {
+    // The signed-in user's WordPress email is a member's, so the message
+    // goes out under that member's name and id. The id is what lets a
+    // reply from the app be addressed straight back to them.
+    composeSendAuthorIsMember();
+    $_POST['subject'] = 'Intergroup moved';
+    $_POST['body'] = 'Now the 14th.';
+    $_POST['committee'] = '';
+
+    composeSendPage()->sendFromRequest();
+
+    $message = array_values($this->messages->rows)[0];
+    expect($message->senderMemberId)->toBe(9);
+    expect($message->senderName)->toBe('Jo B');
+});
+
+test('a member who writes one does not receive it', function () {
+    // What a send from the app does. Their own message arriving on
+    // their phone would offer a reply addressed to themselves.
+    composeSendAuthorIsMember();
+    $_POST['subject'] = 'Intergroup moved';
+    $_POST['body'] = 'Now the 14th.';
+
+    composeSendPage()->sendFromRequest();
+
+    expect($this->recipients->rows)->toHaveCount(2);
+});
+
+test('a member\'s send is audited against them', function () {
+    composeSendAuthorIsMember();
+    $_POST['subject'] = 'Intergroup moved';
+    $_POST['body'] = 'Now the 14th.';
+
+    composeSendPage()->sendFromRequest();
+
+    expect($this->audit->entries[0]['entityId'])->toBe(9);
+});
+
+test('a user who is not a member still sends as the intergroup', function () {
+    // Nobody to credit, and nobody for a reply to go back to.
+    $_POST['subject'] = 'Intergroup moved';
+    $_POST['body'] = 'Now the 14th.';
+
+    composeSendPage()->sendFromRequest();
+
+    $message = array_values($this->messages->rows)[0];
+    expect($message->senderMemberId)->toBe(0);
+    expect($this->audit->entries[0]['entityId'])->toBe(0);
+});
+
+test('the screen says who the message will be from', function () {
+    when('submit_button')->justReturn(null);
+
+    composeSendAuthorIsMember();
+
+    expect(captureOutput(fn() => composeSendPage()->render()))->toContain('Sent as Jo B');
+});
+
+test('the screen says when it will not be from a member', function () {
+    when('submit_button')->justReturn(null);
+
+    expect(captureOutput(fn() => composeSendPage()->render()))->toContain('Sent from the intergroup');
+});
+
+/**
+ * Make the signed-in user a member. wp-mocks' current user has a fixed
+ * email, so the member is given that address rather than the user being
+ * given another.
+ */
+function composeSendAuthorIsMember(): void
+{
+    test()->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: 'dave@example.org'),
+        new MemberStub(id: 8, anonymousName: 'Sue M', personalEmail: 'sue@example.org'),
+        new MemberStub(id: 9, anonymousName: 'Jo B', personalEmail: (new \WP_User())->user_email),
+    ]);
+}
+
 function composeSendPage(): ComposePage
 {
     $gate = new MemberGate(test()->members);
@@ -138,5 +216,6 @@ function composeSendPage(): ComposePage
             test()->audit,
         ),
         new InMemoryCommitteeRepository(),
+        $gate,
     );
 }

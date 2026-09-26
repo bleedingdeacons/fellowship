@@ -11,6 +11,7 @@ if (!defined('ABSPATH')) {
 use Fellowship\Logger\HasLogger;
 use Scrutiny\Audit\Interfaces\AuditLogger;
 use Throwable;
+use Unity\Members\Interfaces\Member;
 use WP_Error;
 
 use function add_action;
@@ -24,11 +25,19 @@ use function add_action;
  * action `fellowship/send_message` registered here for callers that
  * would rather not depend on a function existing.
  *
- * <b>A send from here has no member behind it.</b> It is the intergroup
- * speaking, not a person, so the sender name is the site's own and there
- * is no sender email to exclude from the audience. A send from a handset
- * goes through {@see \Fellowship\Rest\MessageController} instead, which
- * has a member and passes one.
+ * <b>A send from here has no member behind it unless one is passed.</b>
+ * Through the function or the action it is the intergroup speaking, not a
+ * person, so the sender name is the site's own and there is no sender
+ * email to exclude from the audience. The admin compose screen passes
+ * the member who wrote it, when they are one, so that it is credited to
+ * them and a reply from the app can be addressed back to them — which a
+ * message from the site's name cannot be. A send from a handset goes
+ * through {@see \Fellowship\Rest\MessageController} instead.
+ *
+ * The author is a typed argument rather than an input key on purpose.
+ * The input array is what other plugins hand in, and a key there would
+ * let any of them put a member's name on a message that member never
+ * wrote.
  */
 final class MessageApi
 {
@@ -53,9 +62,13 @@ final class MessageApi
 
     /**
      * @param array<string, mixed> $input
+     * @param Member|null $author The member who wrote it, or null for the
+     *        intergroup. When given, the message carries their name and
+     *        id, it is not delivered back to them, and the audit entry is
+     *        recorded against them — what a send from the app does.
      * @return int|WP_Error The stored message id, or why it was refused.
      */
-    public function send(array $input): int|WP_Error
+    public function send(array $input, ?Member $author = null): int|WP_Error
     {
         $request = MessageRequest::fromArray($input);
         if ($request instanceof WP_Error) {
@@ -65,10 +78,18 @@ final class MessageApi
         $senderName = isset($input['sender_name']) && is_string($input['sender_name']) && trim($input['sender_name']) !== ''
             ? trim($input['sender_name'])
             : $this->siteName();
+        $senderEmail = '';
+        $senderMemberId = 0;
+
+        if ($author !== null) {
+            $senderName = $author->getAnonymousName();
+            $senderEmail = strtolower(trim($author->getPersonalEmail()));
+            $senderMemberId = $author->getId();
+        }
 
         try {
-            $members = $this->resolver->resolve($request);
-            $message = $this->dispatcher->dispatch($request, $members, '', 0, $senderName);
+            $members = $this->resolver->resolve($request, $senderEmail);
+            $message = $this->dispatcher->dispatch($request, $members, $senderEmail, $senderMemberId, $senderName);
         } catch (Throwable $e) {
             // A storage failure here is a real fault and the caller needs
             // to know, but it must not propagate as a fatal into whatever
@@ -90,13 +111,13 @@ final class MessageApi
         // AuditDetail on why the subject is the one piece of the message
         // text that earns its place here.
         //
-        // Entity id 0: this send has no member behind it. It is the
-        // intergroup speaking, and inventing a member to attribute it to
-        // would make the audit trail say something untrue.
+        // Entity id 0 when there is no author: then it is the intergroup
+        // speaking, and inventing a member to attribute it to would make
+        // the audit trail say something untrue.
         $this->auditLogger->log(
             AuditLogger::ACTION_MESSAGE,
             AuditLogger::ENTITY_MEMBER,
-            0,
+            $senderMemberId,
             'message',
             AuditDetail::forMessage($message, 'Message sent from WordPress', count($members)),
         );
