@@ -151,6 +151,29 @@ final class SettingsPage
         echo '</td></tr>';
         echo '</tbody></table>';
 
+        echo '<h2>' . esc_html__('Link logging', 'fellowship') . '</h2>';
+        echo '<table class="form-table" role="presentation"><tbody>';
+        $this->textRow(
+            'log_endpoint',
+            __('Better Stack ingest endpoint', 'fellowship'),
+            $this->settings->getLogEndpoint(),
+        );
+        echo '<tr><th scope="row"><label for="log_source_token">' . esc_html__('Source token', 'fellowship') . '</label></th><td>';
+        echo '<input type="password" name="log_source_token" id="log_source_token" class="regular-text" autocomplete="new-password" placeholder="'
+            . esc_attr__('Leave blank to keep what is stored', 'fellowship') . '">';
+        echo '<p class="description">' . esc_html(
+            $this->settings->getLogSourceToken() !== ''
+                ? __('A token is stored.', 'fellowship')
+                : __('No token is stored — handsets keep their logs to themselves.', 'fellowship')
+        ) . '</p>';
+        echo '<label><input type="checkbox" name="clear_log_source_token" value="1"> '
+            . esc_html__('Clear the stored token', 'fellowship') . '</label>';
+        echo '<p class="description">'
+            . esc_html__('Given to signed-in handsets rather than built into the app. A change reaches each handset the next time Link starts; clearing the token stops them shipping.', 'fellowship')
+            . '</p>';
+        echo '</td></tr>';
+        echo '</tbody></table>';
+
         echo '<h2>' . esc_html__('Policy', 'fellowship') . '</h2>';
         echo '<table class="form-table" role="presentation"><tbody>';
 
@@ -209,6 +232,15 @@ final class SettingsPage
      */
     public function saveFromRequest(): string
     {
+        // Checked before anything is written, so the notice's "nothing
+        // was changed" is true of the whole form.
+        $logEndpoint = Settings::normaliseLogEndpoint(
+            sanitize_text_field((string) wp_unslash($_POST['log_endpoint'] ?? '')),
+        );
+        if ($logEndpoint === null) {
+            return 'bad_log_endpoint';
+        }
+
         $this->settings->setClientId(
             GoogleProvider::PROVIDER_NAME,
             sanitize_text_field((string) wp_unslash($_POST['google_client_id'] ?? '')),
@@ -279,6 +311,17 @@ final class SettingsPage
             }
 
             $this->settings->setFcmServiceAccount($fcm);
+        }
+
+        $this->settings->setLogEndpoint($logEndpoint);
+
+        // Blank keeps, the checkbox clears — the same rule as the client
+        // secrets above, for the same reason.
+        $logToken = trim((string) wp_unslash($_POST['log_source_token'] ?? ''));
+        if (!empty($_POST['clear_log_source_token'])) {
+            $this->settings->setLogSourceToken('');
+        } elseif ($logToken !== '') {
+            $this->settings->setLogSourceToken($logToken);
         }
 
         $this->settings->setCommitteeSendFromApp(!empty($_POST['app_committee_send']));
@@ -352,6 +395,13 @@ final class SettingsPage
         if ($result === 'bad_service_account') {
             echo '<div class="notice notice-error is-dismissible"><p>'
                 . esc_html__('That does not look like a Firebase service-account JSON file. Nothing was changed.', 'fellowship')
+                . '</p></div>';
+            return;
+        }
+
+        if ($result === 'bad_log_endpoint') {
+            echo '<div class="notice notice-error is-dismissible"><p>'
+                . esc_html__('The logging endpoint must be an HTTPS address — the token travels with every batch. Nothing was changed.', 'fellowship')
                 . '</p></div>';
         }
     }

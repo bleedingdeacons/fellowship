@@ -266,6 +266,7 @@ Everything is under `fellowship/v1` and everything requires HTTPS.
 | `POST /messages/received` | device | `ids`: messages this handset has opened. Ids not addressed to the member are ignored. |
 | `GET /messages/receipts` | device | `ids`: the member's own sent messages. Answers recipients, received and read counts for each; ids they did not send are left out. |
 | `GET /directory` | device | Address book. |
+| `GET /logging` | device | Where to ship logs: Better Stack `endpoint` and `source_token`, or both empty. Sent `Cache-Control: no-store`. |
 
 Two sign-in flows meet at one exchange:
 
@@ -280,6 +281,26 @@ used.
 **Apple (client-side).** `start` → the app runs the platform sheet with
 the nonce it was given → `exchange` with the state and the ID token.
 There is no browser leg and no client secret.
+
+## Link's log shipping
+
+Link ships its logs to Better Stack, and the endpoint and source token come
+from here rather than being built into the app. They are set under *Link
+logging* on the settings screen (the token encrypted with the other
+secrets) and handed to a signed-in handset by `GET /logging`.
+
+A token built into Link would be in every copy of the APK and IPA, and
+changing it would take a release. From here it reaches only enrolled
+handsets, and a revoked handset is refused. Replacing or clearing it takes
+effect on each handset the next time Link starts. The handset still holds
+a copy, so this keeps the token out of the binary but does not make it a
+server-side secret. A Better Stack source token can write to its source
+but cannot read from it.
+
+An endpoint without a token, or a token without an endpoint, is answered
+as both empty, which Link reads as "do not ship". An `http://` endpoint is
+refused at save, because the token travels as a bearer header on every
+batch.
 
 ## Sending from another plugin
 
