@@ -129,6 +129,73 @@ test('committee names too long to store are refused rather than truncated', func
     expect($result->get_error_code())->toBe('fellowship_too_many_committees');
 });
 
+// ── All GSRs ──────────────────────────────────────────────────────
+
+test('all gsrs travels as a committee', function () {
+    // Gated, stored and resolved as a committee is, so it is recorded
+    // as one: a token in the ref rather than a column of its own.
+    $request = MessageRequest::fromArray([
+        'subject' => 'Assembly',
+        'body'    => 'Saturday, 10am.',
+        'gsrs'    => true,
+    ]);
+
+    expect($request)->toBeInstanceOf(MessageRequest::class);
+    expect($request->audienceType)->toBe(Message::AUDIENCE_COMMITTEE);
+    expect($request->audienceRef)->toBe(MessageRequest::ALL_GSRS);
+    expect($request->includesAllGsrs())->toBeTrue();
+});
+
+test('all gsrs comes first among committees', function () {
+    $request = MessageRequest::fromArray([
+        'subject'    => 'Assembly',
+        'body'       => 'Saturday, 10am.',
+        'gsrs'       => 'true',
+        'committees' => ['steering'],
+    ]);
+
+    expect($request->audienceRef)->toBe(MessageRequest::ALL_GSRS . ',steering');
+});
+
+test('all gsrs and named members together are mixed', function () {
+    $request = MessageRequest::fromArray([
+        'subject'       => 'Assembly',
+        'body'          => 'Saturday, 10am.',
+        'gsrs'          => 1,
+        'member_emails' => ['sue@example.org'],
+    ]);
+
+    expect($request->audienceType)->toBe(Message::AUDIENCE_MIXED);
+    expect($request->includesAllGsrs())->toBeTrue();
+});
+
+test('the token written into committees is accepted, once', function () {
+    // Which is how a stored ref reads back.
+    $request = MessageRequest::fromArray([
+        'subject'    => 'Assembly',
+        'body'       => 'Saturday, 10am.',
+        'gsrs'       => true,
+        'committees' => [MessageRequest::ALL_GSRS],
+    ]);
+
+    expect($request->audienceRef)->toBe(MessageRequest::ALL_GSRS);
+});
+
+test('only a real yes asks for all gsrs', function (mixed $no) {
+    // It widens who a message reaches, so nothing that was not meant as
+    // yes may do that. Asked for with no other audience, a no leaves
+    // the request addressed to nobody in particular.
+    $request = MessageRequest::fromArray([
+        'subject'       => 'Assembly',
+        'body'          => 'Saturday, 10am.',
+        'gsrs'          => $no,
+        'member_emails' => ['sue@example.org'],
+    ]);
+
+    expect($request->includesAllGsrs())->toBeFalse();
+    expect($request->audienceType)->toBe(Message::AUDIENCE_MEMBERS);
+})->with([false, 0, '0', 'false', '', 'yes', null, [[true]]]);
+
 test('a subject is required', function () {
     $result = MessageRequest::fromArray(['body' => 'No subject here.']);
 

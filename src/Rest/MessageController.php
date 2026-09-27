@@ -255,10 +255,19 @@ final class MessageController
         $committees = $request->get_param('committees');
         $committees = is_array($committees) ? $committees : [];
 
-        if (($committee !== '' || $committees !== []) && !$this->settings->allowsCommitteeSendFromApp()) {
+        // All GSRs is behind the same switch as committees: it is the same
+        // kind of send — a part of the intergroup, resolved here, that the
+        // app cannot take back — and a site that has not allowed one has
+        // not allowed the other.
+        $gsrs = $request->get_param('gsrs');
+
+        if (
+            ($committee !== '' || $committees !== [] || ($gsrs !== null && $gsrs !== false && $gsrs !== ''))
+            && !$this->settings->allowsCommitteeSendFromApp()
+        ) {
             return new WP_Error(
                 'fellowship_committee_send_disabled',
-                'Sending to a committee from the app is not enabled on this site.',
+                'Sending to a committee or to all GSRs from the app is not enabled on this site.',
                 ['status' => 403],
             );
         }
@@ -276,6 +285,7 @@ final class MessageController
             'body'          => $request->get_param('body'),
             'committee'     => $committee,
             'committees'    => $committees,
+            'gsrs'          => $gsrs,
             'member_emails' => $this->emailsForIds($request->get_param('member_ids')),
             'reply_to'      => $replyTo,
         ]);

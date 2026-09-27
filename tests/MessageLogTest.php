@@ -100,6 +100,21 @@ test('each audience is named in words', function () {
     expect(messageLogRender())->toContain('Everyone');
 });
 
+test('a send to all gsrs says so in words, not as its token', function () {
+    messageLogGive('committee', '@gsrs,steering', 'Dave P');
+
+    $markup = messageLogRender();
+
+    expect($markup)->toContain('All GSRs, committee: steering');
+    expect($markup)->not->toContain('@gsrs');
+});
+
+test('all gsrs with named members says both', function () {
+    messageLogGive('mixed', '@gsrs', 'Dave P');
+
+    expect(messageLogRender())->toContain('Named members, All GSRs');
+});
+
 // ── Who is calling ────────────────────────────────────────────────
 
 test('an enrolled handset is recognised', function () {

@@ -111,13 +111,36 @@ final class DirectoryPresenter
     }
 
     /**
-     * @return array{members: list<array<string, mixed>>, committees: list<array<string, mixed>>}
+     * How many GSRs a send to all of them would reach. Counted while the
+     * member list is built, so it costs no second pass over Unity.
+     */
+    private int $gsrCount = 0;
+
+    /**
+     * The address book, and whether "All GSRs" may be offered.
+     *
+     * <b>`gsrs` is how many GSRs that send would reach, or null when it
+     * is not on offer</b> — the site does not allow sends to parts of the
+     * intergroup from the app, or there is nobody to reach. It is also
+     * how the app learns this server understands the audience at all: a
+     * Fellowship older than it ignores `gsrs` on a send, and alongside
+     * named members that would quietly send to them alone, so the app
+     * offers the choice only when this says it may.
+     *
+     * The count includes GSRs who are not listed, because the send
+     * reaches them too; see {@see \Fellowship\Messaging\RecipientResolver}.
+     * A count, and nothing about who they are.
+     *
+     * @return array{members: list<array<string, mixed>>, committees: list<array<string, mixed>>, gsrs: int|null}
      */
     public function forApp(bool $includeCommittees): array
     {
+        $members = $this->memberList();
+
         return [
-            'members'    => $this->memberList(),
+            'members'    => $members,
             'committees' => $includeCommittees ? $this->committeeList() : [],
+            'gsrs'       => $includeCommittees && $this->gsrCount > 0 ? $this->gsrCount : null,
         ];
     }
 
@@ -127,10 +150,17 @@ final class DirectoryPresenter
     private function memberList(): array
     {
         $listed = [];
+        $this->gsrCount = 0;
 
         foreach ($this->members->findAll() as $member) {
             if (!$member instanceof Member || !$this->gate->isAuthorised($member)) {
                 continue;
+            }
+
+            // Before the listing test, not after it: an unlisted GSR is
+            // still reached by a send to all of them.
+            if ($member->isGSR()) {
+                $this->gsrCount++;
             }
 
             if (!$member->showMemberProfile()) {

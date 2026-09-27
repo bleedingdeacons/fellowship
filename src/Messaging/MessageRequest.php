@@ -46,6 +46,27 @@ final class MessageRequest
      */
     public const MAX_COMMITTEES = 10;
 
+    /**
+     * Every member who is a GSR, carried among the committee slugs.
+     *
+     * <b>A committee in every way that matters, and so it travels as
+     * one.</b> It is a part of the intergroup resolved to its members at
+     * send time, not a list fixed by the sender, and it is gated, stored,
+     * audited and de-duplicated exactly as a committee is. Giving it a
+     * column or an audience type of its own would have been a schema
+     * change to say the same thing.
+     *
+     * The `@` is what keeps it apart: a committee is a taxonomy term, and
+     * a term's slug is sanitize_title() output, which can never contain
+     * one — so no real committee can be mistaken for it or shadow it.
+     *
+     * Callers ask for it with `gsrs => true` rather than by writing the
+     * token, so the token stays this class's business; one written into
+     * `committees` is accepted too, which is how a stored message's ref
+     * reads back.
+     */
+    public const ALL_GSRS = '@gsrs';
+
     /** How much room {@see Message} has for the joined slugs. */
     private const AUDIENCE_REF_MAX = 200;
 
@@ -94,6 +115,12 @@ final class MessageRequest
         // fellowship_send_message() callers wrote against it.
         $committees = self::committees($input['committees'] ?? $input['committee'] ?? []);
         $emails     = self::emails($input['member_emails'] ?? []);
+
+        // First, so a stored ref reads "all GSRs, then these committees"
+        // in the order a person would say it.
+        if (self::flag($input['gsrs'] ?? false) && !in_array(self::ALL_GSRS, $committees, true)) {
+            array_unshift($committees, self::ALL_GSRS);
+        }
 
         if (count($emails) > self::MAX_EXPLICIT_RECIPIENTS) {
             return new WP_Error(
@@ -188,6 +215,25 @@ final class MessageRequest
         }
 
         return $slugs;
+    }
+
+    /** Whether this is addressed to every GSR. See {@see ALL_GSRS}. */
+    public function includesAllGsrs(): bool
+    {
+        return in_array(self::ALL_GSRS, $this->committees, true);
+    }
+
+    /**
+     * A yes from JSON or from a form: true, 1, "1", "true".
+     *
+     * Anything else is no, and deliberately so — this widens who a
+     * message reaches, and a value nobody meant as yes must not do that.
+     */
+    private static function flag(mixed $value): bool
+    {
+        return $value === true
+            || $value === 1
+            || (is_string($value) && in_array(strtolower(trim($value)), ['1', 'true'], true));
     }
 
     /**
