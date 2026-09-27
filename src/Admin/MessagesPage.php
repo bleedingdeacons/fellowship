@@ -9,6 +9,7 @@ if (!defined('ABSPATH')) {
 }
 
 use Fellowship\Messaging\MessageRepository;
+use Fellowship\Messaging\MessageRequest;
 use Fellowship\Messaging\RecipientRepository;
 use Scrutiny\Privacy\PersonalDataPolicy;
 
@@ -127,6 +128,22 @@ final class MessagesPage
 
     private function audience(string $type, string $ref): string
     {
+        $slugs = array_values(array_filter(explode(',', $ref), static fn(string $s): bool => $s !== ''));
+
+        // All GSRs travels among the committee slugs as a token nobody
+        // should have to read; it is said in words, and ahead of the
+        // committees, as it is stored.
+        if (in_array(MessageRequest::ALL_GSRS, $slugs, true)) {
+            $slugs = array_values(array_diff($slugs, [MessageRequest::ALL_GSRS]));
+            $rest  = $slugs === [] ? '' : sprintf(__('committee: %s', 'fellowship'), implode(', ', $slugs));
+
+            return implode(', ', array_filter([
+                $type === 'mixed' ? __('Named members', 'fellowship') : '',
+                __('All GSRs', 'fellowship'),
+                $rest,
+            ]));
+        }
+
         // The ref holds slugs joined with commas, so a send to several
         // reads as a list rather than as one oddly-named committee.
         $named = str_replace(',', ', ', $ref);

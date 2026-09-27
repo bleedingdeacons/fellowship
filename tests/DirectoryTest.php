@@ -116,6 +116,35 @@ test('committees are only included when the site allows sending to them', functi
     expect(directoryPresenter()->forApp(false)['committees'])->toBe([]);
 });
 
+test('all gsrs is only offered when the site allows committee sends', function () {
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', showMemberProfile: true, personalEmail: DIRECTORY_MEMBER, isGSR: true),
+    ]);
+
+    expect(directoryPresenter()->forApp(false)['gsrs'])->toBeNull();
+    expect(directoryPresenter()->forApp(true)['gsrs'])->toBe(1);
+});
+
+test('the gsr count includes gsrs who are not listed', function () {
+    // The send reaches them, so the count the sender is shown must too.
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', showMemberProfile: true, personalEmail: DIRECTORY_MEMBER, isGSR: true),
+        new MemberStub(id: 8, anonymousName: 'Sue M', showMemberProfile: false, personalEmail: 'sue@example.org', isGSR: true),
+        new MemberStub(id: 9, anonymousName: 'Jo B', showMemberProfile: true, personalEmail: 'jo@example.org'),
+        new MemberStub(id: 10, anonymousName: 'No Address', showMemberProfile: true, personalEmail: '', isGSR: true),
+    ]);
+
+    $directory = directoryPresenter()->forApp(true);
+
+    expect($directory['gsrs'])->toBe(2);
+    expect(array_column($directory['members'], 'name'))->toBe(['Dave P', 'Jo B']);
+});
+
+test('all gsrs is not offered when there are none', function () {
+    // A choice that would reach nobody is not a choice.
+    expect(directoryPresenter()->forApp(true)['gsrs'])->toBeNull();
+});
+
 // ── The route ─────────────────────────────────────────────────────
 
 test('an enrolled handset is given the directory', function () {

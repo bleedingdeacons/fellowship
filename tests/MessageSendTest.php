@@ -126,6 +126,41 @@ test('committee sending is refused unless the site allows it', function () {
     expect($response->get_error_code())->toBe('fellowship_committee_send_disabled');
 });
 
+test('all gsrs is refused unless the site allows committee sends', function () {
+    // The same kind of send, behind the same switch.
+    $token = messageSendEnrol();
+
+    $response = messageSendController()->send(messageSendRequest([
+        'subject' => 'Assembly',
+        'body' => 'Saturday, 10am.',
+        'gsrs' => true,
+    ], $token));
+
+    expect($response)->toBeInstanceOf(WP_Error::class);
+    expect($response->get_error_code())->toBe('fellowship_committee_send_disabled');
+    expect($this->messages->rows)->toBe([]);
+});
+
+test('all gsrs reaches the gsrs when the site allows it', function () {
+    $this->settings->setCommitteeSendFromApp(true);
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: MESSAGE_SEND_MEMBER),
+        new MemberStub(id: 8, anonymousName: 'Sue M', personalEmail: MESSAGE_SEND_OTHER, isGSR: true),
+        new MemberStub(id: 9, anonymousName: 'Jo B', personalEmail: 'jo@example.org'),
+    ]);
+    $token = messageSendEnrol();
+
+    $response = messageSendController()->send(messageSendRequest([
+        'subject' => 'Assembly',
+        'body' => 'Saturday, 10am.',
+        'gsrs' => true,
+    ], $token));
+
+    expect($response)->toBeInstanceOf(WP_REST_Response::class);
+    expect(array_map(static fn($row) => $row->memberEmail, $this->recipients->rows))->toBe([MESSAGE_SEND_OTHER]);
+    expect($this->messages->rows[array_key_first($this->messages->rows)]->audienceRef)->toBe('@gsrs');
+});
+
 test('a message with no subject is refused', function () {
     $token = messageSendEnrol();
 

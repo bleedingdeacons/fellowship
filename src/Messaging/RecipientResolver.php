@@ -100,12 +100,37 @@ final class RecipientResolver
         $members = [];
 
         foreach ($committees as $committee) {
-            foreach ($this->fromCommittee($committee) as $member) {
+            $found = $committee === MessageRequest::ALL_GSRS
+                ? $this->gsrs()
+                : $this->fromCommittee($committee);
+
+            foreach ($found as $member) {
                 $members[] = $member;
             }
         }
 
         return $members;
+    }
+
+    /**
+     * Every member Unity says is a GSR.
+     *
+     * Asked of Unity at send time, like a committee's membership, rather
+     * than taken from whatever the sender's address book showed: a GSR
+     * who has opted out of being listed in directories is still a GSR,
+     * and is still reached — being contactable by the intergroup is not
+     * the same as being browsable by everyone, the same line
+     * {@see \Fellowship\Directory\DirectoryPresenter} draws for
+     * committees.
+     *
+     * @return list<Member>
+     */
+    private function gsrs(): array
+    {
+        return array_values(array_filter(
+            $this->members->findAll(),
+            static fn($m): bool => $m instanceof Member && $m->isGSR(),
+        ));
     }
 
     /**

@@ -201,6 +201,59 @@ test('rubbish decrypts to nothing rather than throwing', function () {
  * @param array<string, mixed> $request
  * @return list<array{email: string, member_id: int}>
  */
+// ── All GSRs ──────────────────────────────────────────────────────
+
+test('all gsrs reaches every gsr and nobody else', function () {
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: 'dave@example.org', isGSR: true),
+        new MemberStub(id: 8, anonymousName: 'Sue M', personalEmail: 'sue@example.org'),
+        new MemberStub(id: 10, anonymousName: 'Jo B', personalEmail: 'jo@example.org', isGSR: true),
+    ]);
+
+    $resolved = recipientResolverResolve(['gsrs' => true]);
+
+    expect(array_column($resolved, 'member_id'))->toBe([7, 10]);
+});
+
+test('a gsr who is not listed in directories is still reached', function () {
+    // Being contactable by the intergroup is not the same as being
+    // browsable by everyone — the line committees already draw.
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', showMemberProfile: false, personalEmail: 'dave@example.org', isGSR: true),
+    ]);
+
+    expect(recipientResolverResolve(['gsrs' => true]))->toHaveCount(1);
+});
+
+test('a gsr who sends to all gsrs is not sent their own copy', function () {
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: 'dave@example.org', isGSR: true),
+        new MemberStub(id: 10, anonymousName: 'Jo B', personalEmail: 'jo@example.org', isGSR: true),
+    ]);
+
+    $resolved = recipientResolverResolve(['gsrs' => true], sender: 'dave@example.org');
+
+    expect(array_column($resolved, 'member_id'))->toBe([10]);
+});
+
+test('a gsr who is also named gets one copy', function () {
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: 'dave@example.org', isGSR: true),
+    ]);
+
+    $resolved = recipientResolverResolve(['gsrs' => true, 'member_emails' => ['dave@example.org']]);
+
+    expect($resolved)->toHaveCount(1);
+});
+
+test('a gsr with no address is dropped like anybody else', function () {
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 9, anonymousName: 'No Address', personalEmail: '', isGSR: true),
+    ]);
+
+    expect(recipientResolverResolve(['gsrs' => true]))->toBe([]);
+});
+
 function recipientResolverResolve(array $request, string $sender = ''): array
 {
     $built = MessageRequest::fromArray(array_merge([
