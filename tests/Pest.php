@@ -41,6 +41,7 @@ pest()->extend(TestCase::class)->in(
     'DispatcherTest.php',
     'EnrolmentEdgesTest.php',
     'FcmTokenTest.php',
+    'IdentityBrokerTest.php',
     'InsecureAndLimitedTest.php',
     'LoggingTest.php',
     'MessageControllerTest.php',

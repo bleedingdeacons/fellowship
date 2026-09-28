@@ -8,7 +8,9 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+use Fellowship\Auth\AudienceRegistry;
 use Fellowship\Auth\DeviceCodeStore;
+use Fellowship\Auth\LinkAudience;
 use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Auth\PasswordResetResult;
 use Fellowship\Auth\DeviceRedirectValidator;
@@ -83,6 +85,9 @@ final class DeviceAuthController
     private const LABEL_MAX_BYTES = 200;
     private const PUSH_TOKEN_MAX_BYTES = 512;
 
+    /** Link's audience, and any another plugin registered. See SignInAudience. */
+    private readonly AudienceRegistry $audiences;
+
     public function __construct(
         private readonly DeviceRepository $devices,
         private readonly DeviceTokenMinter $minter,
@@ -95,7 +100,12 @@ final class DeviceAuthController
         private readonly RateLimiter $rateLimiter,
         private readonly AuditLogger $auditLogger,
         private readonly PasswordAuthenticator $passwords,
+        ?AudienceRegistry $audiences = null,
     ) {
+        // Defaulted so a caller that predates audiences gets Link's rules
+        // and nothing else, which is exactly the behaviour it was written
+        // against.
+        $this->audiences = $audiences ?? new AudienceRegistry(new LinkAudience($redirects, $gate));
     }
 
     public function register(): void
@@ -336,8 +346,16 @@ final class DeviceAuthController
             return new WP_Error('fellowship_bad_state', 'That sign-in has expired. Please try again.', ['status' => 400]);
         }
 
+        // Whoever started this sign-in decides where its code may go and
+        // who may have one -- Link, or another plugin that registered an
+        // audience with the IdentityBroker. See SignInAudience.
+        $audience = $this->audiences->get($stored['audience']);
+        if ($audience === null) {
+            return new WP_Error('fellowship_bad_state', 'That sign-in has expired. Please try again.', ['status' => 400]);
+        }
+
         $redirect = $stored['device_redirect'];
-        if (!$this->redirects->isAllowed($redirect)) {
+        if (!$audience->allowsRedirect($redirect, $stored['context'])) {
             return new WP_Error('fellowship_bad_redirect', 'That redirect target is not allowed.', ['status' => 400]);
         }
 
@@ -363,18 +381,18 @@ final class DeviceAuthController
             return $this->redirectTo($redirect, ['error' => 'verification']);
         }
 
-        // The gate is consulted here as well as at exchange, so somebody
-        // whose address is not a member's is told so in the browser —
-        // where they can read it — rather than by an opaque failure two
-        // steps later inside the app.
-        if ($this->gate->authorisedMember($identity->email) === null) {
-            self::logInfo('Sign-in refused: the verified address is not a member', [
-                'provider' => $identity->provider,
-            ]);
-            return $this->redirectTo($redirect, ['error' => 'not_a_member']);
+        // The audience is consulted here as well as at its exchange, so
+        // somebody it will not admit is told so in the browser -- where
+        // they can read it -- rather than by an opaque failure two steps
+        // later inside the app. For Link that is the member gate.
+        $refusal = $audience->refusalFor($identity, $stored['context']);
+        if ($refusal !== null) {
+            return $this->redirectTo($redirect, ['error' => $refusal]);
         }
 
-        return $this->redirectTo($redirect, ['code' => $this->codes->issue($identity)]);
+        return $this->redirectTo($redirect, [
+            'code' => $this->codes->issue($identity, $audience->name(), $stored['context']),
+        ]);
     }
 
     /**
@@ -896,7 +914,8 @@ final class DeviceAuthController
         }
 
         $stored = $this->stateStore->consume($state);
-        if ($stored === null) {
+        if ($stored === null || $stored['audience'] !== LinkAudience::NAME) {
+            // Another audience's state is not Link's to spend.
             return new WP_Error('fellowship_bad_state', 'That sign-in has expired. Please try again.', ['status' => 400]);
         }
 

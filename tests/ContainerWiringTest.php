@@ -104,6 +104,8 @@ test('every service can be built', function (string $service) {
     [PasswordAuthenticator::class],
     [ProviderRegistry::class],
     [FcmTransport::class],
+    [\Fellowship\Auth\IdentityBroker::class],
+    [\Fellowship\Auth\AudienceRegistry::class],
 ]);
 
 test('every sign in provider is registered', function () {
@@ -134,4 +136,13 @@ test('the same instance comes back each time', function () {
     // the admin screens a different device repository from the REST
     // controllers.
     expect($this->container->get(DeviceRepository::class))->toBe($this->container->get(DeviceRepository::class));
+});
+
+test('an audience registered through the broker reaches the controller callback', function () {
+    // One registry, shared. A second instance would accept another
+    // plugin's registration and leave the callback refusing its states.
+    $broker = $this->container->get(\Fellowship\Auth\IdentityBroker::class);
+    $broker->registerAudience(new \Fellowship\Tests\Support\StubAudience());
+
+    expect($this->container->get(\Fellowship\Auth\AudienceRegistry::class)->get('freedom'))->not->toBeNull();
 });

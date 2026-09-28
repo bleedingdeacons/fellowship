@@ -324,6 +324,59 @@ Alerts may carry no personal data because their text lands on a lock
 screen; message bodies are sealed and never appear in a notification, so
 a message may carry ordinary fellowship business.
 
+## Signing in on behalf of another plugin
+
+*Added 2026-09-28, for Freedom.*
+
+Another plugin can use this sign-in. It gets either a Google-verified
+address or a live Link enrolment, through `Fellowship\Auth\IdentityBroker`,
+which is in the container. There is no second copy of the OAuth classes,
+and Google's console is unchanged: Fellowship's own HTTPS `/auth/callback`
+is still the only registered redirect.
+
+Two of the browser leg's rules used to be Link's alone:
+
+- it would only redirect to `link://auth`;
+- it would only issue a code to a member.
+
+Those rules now belong to an **audience**, a `SignInAudience`. A plugin
+registers its own on `fellowship/loaded`:
+
+```php
+add_action('fellowship/loaded', function ($container) {
+    $container->get(\Fellowship\Auth\IdentityBroker::class)->registerAudience(new MyAudience());
+});
+```
+
+- **`begin($provider, $audience, $context, $redirectUri)`** starts the
+  browser leg for that audience and answers `{state, authorization_url}`.
+  `$context` is at most 512 bytes. It is the plugin's own opaque data, and
+  it comes back when the code is redeemed.
+- **At the callback**, the audience decides whether the redirect is
+  allowed and whether this person is admitted. Link's audience still
+  refuses non-members with `not_a_member`.
+- **`redeem($code, $audience)`** spends the one-time code. A code is
+  issued for one audience and refused by every other. Presenting it at the
+  wrong one still spends it.
+- **`sessionFor($linkDeviceToken)`** accepts a live Link enrolment in
+  place of a second sign-in. That token was minted after a Google sign-in,
+  and the member gate is re-run on it, so it proves what another trip
+  through the browser would have.
+- **`isLive($deviceId)`** lets the plugin stop the moment Link's enrolment
+  stops.
+
+Sign-ins already in flight when this deploys keep working: a state or a
+code written before audiences existed reads as Link's.
+
+**Must agree.** Freedom now depends on these classes. Changing any of
+them changes a second plugin:
+
+- `IdentityBroker`, `SignInAudience`, `BrokeredIdentity`, `LinkSession`,
+  `VerifiedIdentity`
+- `MemberGate`
+- `MessageSealer` and `DevicePublicKey`, whose envelope Freedom reuses
+- `RateLimiter`
+
 ## Conventions
 
 `declare(strict_types=1)`, a namespaced `Fellowship\` PSR-4 autoloader, a
