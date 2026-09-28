@@ -12,10 +12,13 @@ use Fellowship\Admin\ComposePage;
 use Fellowship\Admin\DevicesPage;
 use Fellowship\Admin\MessagesPage;
 use Fellowship\Admin\SettingsPage;
+use Fellowship\Auth\AudienceRegistry;
 use Fellowship\Auth\DeviceCodeStore;
 use Fellowship\Auth\DeviceRedirectValidator;
 use Fellowship\Auth\DeviceTokenMinter;
+use Fellowship\Auth\IdentityBroker;
 use Fellowship\Auth\JwtVerifier;
+use Fellowship\Auth\LinkAudience;
 use Fellowship\Auth\PasswordAuthenticator;
 use Unity\Auth\Interfaces\PasswordCredentialRepository;
 use Fellowship\Auth\PasswordPolicy;
@@ -105,6 +108,24 @@ final class FellowshipServiceProvider
         $container->register(CurrentDevice::class, fn(ContainerInterface $c) => new CurrentDevice(
             $c->get(DeviceRepository::class),
             $c->get(DeviceTokenMinter::class),
+            $c->get(MemberGate::class),
+        ));
+
+        // ── Signing in on behalf of other plugins ──
+        //
+        // One registry, shared: the controller's callback reads it and
+        // another plugin writes into it through the broker, on
+        // fellowship/loaded. See SignInAudience.
+        $container->register(AudienceRegistry::class, fn(ContainerInterface $c) => new AudienceRegistry(
+            new LinkAudience($c->get(DeviceRedirectValidator::class), $c->get(MemberGate::class)),
+        ));
+        $container->register(IdentityBroker::class, fn(ContainerInterface $c) => new IdentityBroker(
+            $c->get(AudienceRegistry::class),
+            $c->get(ProviderRegistry::class),
+            $c->get(StateStore::class),
+            $c->get(DeviceCodeStore::class),
+            $c->get(CurrentDevice::class),
+            $c->get(DeviceRepository::class),
             $c->get(MemberGate::class),
         ));
 
@@ -204,6 +225,7 @@ final class FellowshipServiceProvider
             $c->get(RateLimiter::class),
             $c->get(AuditLogger::class),
             $c->get(PasswordAuthenticator::class),
+            $c->get(AudienceRegistry::class),
         ));
 
         $container->register(MessageController::class, fn(ContainerInterface $c) => new MessageController(

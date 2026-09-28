@@ -22,6 +22,12 @@ if (!defined('ABSPATH')) {
  *
  * Stored keyed by SHA-256 of the code, so the transient table holds no
  * usable code either.
+ *
+ * <b>A code is issued for one audience and spendable only there.</b>
+ * Link's exchange redeems for `link`, Freedom's for `freedom`, and a code
+ * presented to the wrong one is spent and refused — spent first, so that
+ * trying it at the wrong door cannot be followed by trying it at the
+ * right one. See {@see SignInAudience}.
  */
 final class DeviceCodeStore
 {
@@ -30,8 +36,11 @@ final class DeviceCodeStore
     /** Long enough for a redirect back into the app, short enough to be worthless if captured. */
     private const TTL_SECONDS = 120;
 
-    public function issue(VerifiedIdentity $identity): string
-    {
+    public function issue(
+        VerifiedIdentity $identity,
+        string $audience = LinkAudience::NAME,
+        string $context = '',
+    ): string {
         $code = bin2hex(random_bytes(32));
 
         set_transient(
@@ -40,6 +49,8 @@ final class DeviceCodeStore
                 'email'    => $identity->email,
                 'provider' => $identity->provider,
                 'sub'      => $identity->sub,
+                'audience' => $audience,
+                'context'  => $context,
             ],
             self::TTL_SECONDS,
         );
@@ -47,7 +58,22 @@ final class DeviceCodeStore
         return $code;
     }
 
+    /**
+     * The identity a Link code was issued for. Kept for Link's callers;
+     * a code issued to any other audience is refused.
+     */
     public function consume(string $code): ?VerifiedIdentity
+    {
+        return $this->redeem($code, LinkAudience::NAME)?->identity;
+    }
+
+    /**
+     * Spend a code for the audience presenting it.
+     *
+     * The transient is deleted before the audience is compared, so a code
+     * is single-use whoever presents it.
+     */
+    public function redeem(string $code, string $audience): ?BrokeredIdentity
     {
         if ($code === '') {
             return null;
@@ -66,10 +92,19 @@ final class DeviceCodeStore
             return null;
         }
 
-        return new VerifiedIdentity(
-            email: $email,
-            provider: (string) ($stored['provider'] ?? ''),
-            sub: (string) ($stored['sub'] ?? ''),
+        // A code written before audiences existed was Link's.
+        $issuedFor = (string) ($stored['audience'] ?? '');
+        if (!hash_equals($issuedFor !== '' ? $issuedFor : LinkAudience::NAME, $audience)) {
+            return null;
+        }
+
+        return new BrokeredIdentity(
+            new VerifiedIdentity(
+                email: $email,
+                provider: (string) ($stored['provider'] ?? ''),
+                sub: (string) ($stored['sub'] ?? ''),
+            ),
+            (string) ($stored['context'] ?? ''),
         );
     }
 

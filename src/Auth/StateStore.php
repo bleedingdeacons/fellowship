@@ -23,6 +23,11 @@ if (!defined('ABSPATH')) {
  * Microsoft and Apple simply leave it null. The verifier never leaves this
  * server: only its SHA-256 challenge goes out on the authorise leg, which
  * is the whole point of the mechanism.
+ *
+ * <b>So does the audience the sign-in is for</b>, and that audience's
+ * opaque context — see {@see SignInAudience}. A record written before
+ * audiences existed has neither, and reads back as Link's with an empty
+ * context, so a sign-in in flight across the deploy still finishes.
  */
 final class StateStore
 {
@@ -32,8 +37,13 @@ final class StateStore
     /**
      * @return array{state: string, nonce: string, code_verifier: string|null}
      */
-    public function issue(string $provider, string $deviceRedirect, ?string $codeVerifier = null): array
-    {
+    public function issue(
+        string $provider,
+        string $deviceRedirect,
+        ?string $codeVerifier = null,
+        string $audience = LinkAudience::NAME,
+        string $context = '',
+    ): array {
         $state = bin2hex(random_bytes(16));
         $nonce = bin2hex(random_bytes(16));
 
@@ -44,6 +54,8 @@ final class StateStore
                 'nonce'           => $nonce,
                 'device_redirect' => $deviceRedirect,
                 'code_verifier'   => $codeVerifier,
+                'audience'        => $audience,
+                'context'         => $context,
             ],
             self::TTL_SECONDS,
         );
@@ -52,7 +64,14 @@ final class StateStore
     }
 
     /**
-     * @return array{provider: string, nonce: string, device_redirect: string, code_verifier: string|null}|null
+     * @return array{
+     *     provider: string,
+     *     nonce: string,
+     *     device_redirect: string,
+     *     code_verifier: string|null,
+     *     audience: string,
+     *     context: string
+     * }|null
      */
     public function consume(string $state): ?array
     {
@@ -69,12 +88,15 @@ final class StateStore
         delete_transient($key);
 
         $verifier = $stored['code_verifier'] ?? null;
+        $audience = (string) ($stored['audience'] ?? '');
 
         return [
             'provider'        => (string) ($stored['provider'] ?? ''),
             'nonce'           => (string) ($stored['nonce'] ?? ''),
             'device_redirect' => (string) ($stored['device_redirect'] ?? ''),
             'code_verifier'   => is_string($verifier) && $verifier !== '' ? $verifier : null,
+            'audience'        => $audience !== '' ? $audience : LinkAudience::NAME,
+            'context'         => (string) ($stored['context'] ?? ''),
         ];
     }
 }

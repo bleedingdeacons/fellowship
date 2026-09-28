@@ -80,7 +80,17 @@ final class CurrentDevice
      */
     public function resolve(WP_REST_Request $request): DeviceResolution
     {
-        $token = $this->minter->bearerFrom((string) $request->get_header('authorization'));
+        return $this->resolveToken($this->minter->bearerFrom((string) $request->get_header('authorization')));
+    }
+
+    /**
+     * The same resolution for a bare device token, for a caller that did
+     * not receive it as this request's own bearer — another plugin
+     * accepting a Link session in place of a second sign-in. See
+     * {@see \Fellowship\Auth\IdentityBroker::sessionFor()}.
+     */
+    public function resolveToken(string $token): DeviceResolution
+    {
         if ($token === '' || !$this->minter->looksLikeToken($token)) {
             return DeviceResolution::unauthenticated();
         }
