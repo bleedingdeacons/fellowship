@@ -24,7 +24,6 @@ use Fellowship\Messaging\MessageRepository;
 use Fellowship\Messaging\RecipientRepository;
 use Fellowship\Rest\DeviceAuthController;
 use Fellowship\Rest\DirectoryController;
-use Fellowship\Rest\LoggingController;
 use Fellowship\Rest\MessageController;
 use Psr\Container\ContainerInterface;
 use RuntimeException;
@@ -94,7 +93,6 @@ final class Plugin
         $container->get(DeviceAuthController::class)->register();
         $container->get(MessageController::class)->register();
         $container->get(DirectoryController::class)->register();
-        $container->get(LoggingController::class)->register();
 
         // The action form of the sending API. The function form
         // (fellowship_send_message) needs no registration — it is

@@ -48,8 +48,12 @@ final class Schema
      * 1 — devices, messages and message recipients.
      * 2 — password credentials, for members who set one.
      * 3 — recipients.received_at, for delivery receipts.
+     * 4 — no table change: drops the retired Link logging settings from
+     *     the settings rows (see Settings::dropRetired()). This is the one
+     *     hook an existing site runs on update, so it is where a one-off
+     *     clean-up has to live.
      */
-    public const VERSION = 3;
+    public const VERSION = 4;
 
     public const OPTION = 'fellowship_schema_version';
 
@@ -119,5 +123,7 @@ final class Schema
         WpdbDeviceRepository::install($wpdb);
         WpdbMessageRepository::install($wpdb);
         WpdbRecipientRepository::install($wpdb);
+
+        Settings::dropRetired();
     }
 }

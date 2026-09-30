@@ -47,7 +47,6 @@ use Fellowship\Push\FcmClient;
 use Fellowship\Push\FcmTransport;
 use Fellowship\Rest\DeviceAuthController;
 use Fellowship\Rest\DirectoryController;
-use Fellowship\Rest\LoggingController;
 use Fellowship\Rest\MessageController;
 use Psr\Container\ContainerInterface;
 use Scrutiny\Audit\Interfaces\AuditLogger;
@@ -246,11 +245,6 @@ final class FellowshipServiceProvider
             $c->get(DirectoryPresenter::class),
             $c->get(Settings::class),
             $c->get(AuditLogger::class),
-        ));
-
-        $container->register(LoggingController::class, fn(ContainerInterface $c) => new LoggingController(
-            $c->get(CurrentDevice::class),
-            $c->get(Settings::class),
         ));
 
         // ── Admin ──
