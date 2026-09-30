@@ -138,76 +138,38 @@ final class Settings
     }
 
     /**
-     * Where Link ships its logs: Better Stack's HTTP ingest endpoint.
+     * Keys the rows used to hold and hold nothing now, by row.
      *
-     * Not a secret — it names a region and a source, not a credential —
-     * so it lives in the public row beside the client ids. Empty means
-     * handsets are not asked to ship at all.
+     * `log_endpoint` and `log_source_token` were where Link was told to
+     * ship its logs, served by the `/logging` route until 2026-09-30. Link
+     * takes those settings from Freedom now, and the route, the admin
+     * fields and the accessors are gone. The token was a credential, so it
+     * is removed rather than left encrypted in a row nothing reads.
      */
-    public function getLogEndpoint(): string
-    {
-        return $this->publicString('log_endpoint');
-    }
+    private const RETIRED = [
+        self::OPTION_PUBLIC  => ['log_endpoint'],
+        self::OPTION_SECRETS => ['log_source_token'],
+    ];
 
     /**
-     * Stores the endpoint as {@see self::normaliseLogEndpoint()} left it.
-     * Callers validate first; a value that would not survive that is not
-     * something to store quietly.
+     * Drop retired keys from the settings rows. Idempotent; run by the
+     * schema upgrade that retired them, see {@see Schema::VERSION}.
      */
-    public function setLogEndpoint(string $value): void
+    public static function dropRetired(): void
     {
-        $this->writePublic('log_endpoint', self::normaliseLogEndpoint($value) ?? '');
-    }
+        foreach (self::RETIRED as $option => $keys) {
+            $all = get_option($option, []);
+            if (!is_array($all)) {
+                continue;
+            }
 
-    /**
-     * The Better Stack source token handed to enrolled handsets.
-     *
-     * With the secrets rather than the public row although Better Stack
-     * treats it as write-only: it cannot read a log back, but it can fill
-     * the source with anything and spend its quota doing so. The whole
-     * reason it is here rather than in the app is that it reaches only
-     * handsets that have signed in.
-     */
-    public function getLogSourceToken(): string
-    {
-        $stored = $this->secretString('log_source_token');
-        return $stored === '' ? '' : $this->cipher->decrypt($stored);
-    }
+            $present = array_intersect_key($all, array_flip($keys));
+            if ($present === []) {
+                continue;
+            }
 
-    public function setLogSourceToken(string $value): void
-    {
-        $value = trim($value);
-        $this->writeSecret('log_source_token', $value === '' ? '' : $this->cipher->encrypt($value));
-    }
-
-    /**
-     * An endpoint as it should be stored, or null when it must be refused.
-     *
-     * Better Stack's dashboard shows the ingest address as a bare host
-     * name, so that is what gets pasted; it is given `https://`. An
-     * explicit `http://` is refused rather than upgraded: the token rides
-     * every batch as a bearer header, and a value that says plain HTTP is
-     * a mistake to point out, not one to correct behind somebody's back.
-     * Link applies the same rule on its side and ships nothing to an
-     * endpoint that fails it.
-     */
-    public static function normaliseLogEndpoint(string $value): ?string
-    {
-        $value = trim($value);
-        if ($value === '') {
-            return '';
+            update_option($option, array_diff_key($all, $present), false);
         }
-
-        if (!str_contains($value, '://')) {
-            $value = 'https://' . $value;
-        }
-
-        $parts = parse_url($value);
-        if (!is_array($parts) || ($parts['scheme'] ?? '') !== 'https' || ($parts['host'] ?? '') === '') {
-            return null;
-        }
-
-        return rtrim($value, '/');
     }
 
     private function publicString(string $key): string

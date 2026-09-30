@@ -266,7 +266,6 @@ Everything is under `fellowship/v1` and everything requires HTTPS.
 | `POST /messages/received` | device | `ids`: messages this handset has opened. Ids not addressed to the member are ignored. |
 | `GET /messages/receipts` | device | `ids`: the member's own sent messages. Answers recipients, received and read counts for each; ids they did not send are left out. |
 | `GET /directory` | device | Address book. |
-| `GET /logging` | device | Where to ship logs: Better Stack `endpoint` and `source_token`, or both empty. Sent `Cache-Control: no-store`. |
 
 Two sign-in flows meet at one exchange:
 
@@ -284,23 +283,20 @@ There is no browser leg and no client secret.
 
 ## Link's log shipping
 
-Link ships its logs to Better Stack, and the endpoint and source token come
-from here rather than being built into the app. They are set under *Link
-logging* on the settings screen (the token encrypted with the other
-secrets) and handed to a signed-in handset by `GET /logging`.
+Not here any more. Until 2026-09-30 Link's Better Stack endpoint and source
+token were set under *Link logging* on this plugin's settings screen and
+handed to signed-in handsets by `GET /logging`. Link now takes them from
+the [Freedom](https://github.com/bleedingdeacons/freedom) plugin: an
+application called `link`, keys `betterstack.endpoint` and
+`betterstack.source_token`, signed in to by handing over the handset's
+Fellowship session (see *Signing in on behalf of another plugin*). That is
+where every app's settings live now, Register's included.
 
-A token built into Link would be in every copy of the APK and IPA, and
-changing it would take a release. From here it reaches only enrolled
-handsets, and a revoked handset is refused. Replacing or clearing it takes
-effect on each handset the next time Link starts. The handset still holds
-a copy, so this keeps the token out of the binary but does not make it a
-server-side secret. A Better Stack source token can write to its source
-but cannot read from it.
-
-An endpoint without a token, or a token without an endpoint, is answered
-as both empty, which Link reads as "do not ship". An `http://` endpoint is
-refused at save, because the token travels as a bearer header on every
-batch.
+The route, the settings fields and their accessors are gone. Schema
+version 4 removes the two stored values from the settings rows on update —
+the token was a credential, and is not left encrypted in a row nothing
+reads. A Link build from before the change asks a route that answers 404,
+which it treats as no answer: it keeps shipping with what it last stored.
 
 ## Sending from another plugin
 

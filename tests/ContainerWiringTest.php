@@ -26,7 +26,6 @@ use Fellowship\Messaging\RecipientRepository;
 use Fellowship\Push\FcmTransport;
 use Fellowship\Rest\DeviceAuthController;
 use Fellowship\Rest\DirectoryController;
-use Fellowship\Rest\LoggingController;
 use Fellowship\Rest\MessageController;
 use Fellowship\Tests\Support\RecordingWpdb;
 use Unity\Testing\Doubles\FakeContainer;
@@ -91,7 +90,6 @@ test('every service can be built', function (string $service) {
     [DeviceAuthController::class],
     [MessageController::class],
     [DirectoryController::class],
-    [LoggingController::class],
     [MessageApi::class],
     [SettingsPage::class],
     [MessagesPage::class],

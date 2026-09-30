@@ -8,6 +8,7 @@ use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Core\Capabilities;
 use Fellowship\Core\Schema;
+use Fellowship\Core\Settings;
 use Fellowship\Devices\WpdbDeviceRepository;
 use Fellowship\Logger\HasLogger;
 use Fellowship\Messaging\WpdbMessageRepository;
@@ -54,7 +55,7 @@ use Fellowship\Tests\Support\RecordingWpdb;
  * came to be worth writing.)
  */
 
-covers(\Fellowship\Core\Schema::class, \Fellowship\Core\Capabilities::class, \Fellowship\Logger\HasLogger::class, \Fellowship\Devices\WpdbDeviceRepository::class, \Fellowship\Messaging\WpdbMessageRepository::class, \Fellowship\Messaging\WpdbRecipientRepository::class);
+covers(\Fellowship\Core\Schema::class, \Fellowship\Core\Settings::class, \Fellowship\Core\Capabilities::class, \Fellowship\Logger\HasLogger::class, \Fellowship\Devices\WpdbDeviceRepository::class, \Fellowship\Messaging\WpdbMessageRepository::class, \Fellowship\Messaging\WpdbRecipientRepository::class);
 
 beforeEach(function () {
     $this->wpdb = new RecordingWpdb();
@@ -124,6 +125,31 @@ test('an older schema is upgraded', function () {
 
     expect($GLOBALS['__fellowship_dbdelta'])->not->toBe([]);
     expect(WpState::$options[Schema::OPTION] ?? null)->toBe(Schema::VERSION);
+});
+
+test('the upgrade to version 4 drops the retired Link logging settings', function () {
+    // The /logging route went on 2026-09-30, when Link started taking its
+    // Better Stack settings from Freedom. The token was a credential, so
+    // the upgrade removes it rather than leaving it encrypted in a row
+    // nothing reads — and leaves everything else in both rows alone.
+    WpState::$options[Settings::OPTION_PUBLIC] = ['log_endpoint' => 'https://s1.betterstackdata.com', 'google_client_id' => 'kept'];
+    WpState::$options[Settings::OPTION_SECRETS] = ['log_source_token' => 'encrypted', 'google_client_secret' => 'kept'];
+    WpState::$options[Schema::OPTION] = 3;
+
+    Schema::ensureInstalled();
+
+    expect(WpState::$options[Settings::OPTION_PUBLIC])->toBe(['google_client_id' => 'kept']);
+    expect(WpState::$options[Settings::OPTION_SECRETS])->toBe(['google_client_secret' => 'kept']);
+});
+
+test('dropping retired settings leaves rows without them untouched', function () {
+    WpState::$options[Settings::OPTION_PUBLIC] = ['google_client_id' => 'kept'];
+
+    Settings::dropRetired();
+    Settings::dropRetired();
+
+    expect(WpState::$options[Settings::OPTION_PUBLIC])->toBe(['google_client_id' => 'kept']);
+    expect(WpState::$options)->not->toHaveKey(Settings::OPTION_SECRETS);
 });
 
 // ── Capabilities ──────────────────────────────────────────────────
