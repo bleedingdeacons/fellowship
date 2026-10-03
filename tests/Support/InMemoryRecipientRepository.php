@@ -53,7 +53,7 @@ class InMemoryRecipientRepository implements RecipientRepository
             static fn(Recipient $r): bool => $r->memberEmail === $email && $r->messageId > $sinceMessageId,
         );
 
-        usort($matching, static fn(Recipient $a, Recipient $b): int => $b->messageId <=> $a->messageId);
+        usort($matching, static fn(Recipient $a, Recipient $b): int => $a->messageId <=> $b->messageId);
 
         return array_slice(array_values($matching), 0, max(1, $limit));
     }

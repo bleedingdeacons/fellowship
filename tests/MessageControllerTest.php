@@ -154,6 +154,42 @@ test('the poll only returns what the handset does not hold', function () {
     expect(((array) $response->get_data())['messages'])->toHaveCount(1);
 });
 
+test('a handset that has been away walks forward from the oldest it lacks', function () {
+    // More waiting than one page holds. Newest first would hand back the
+    // top of the pile, the handset would ask from there next time, and
+    // everything underneath would never be fetched at all.
+    $token = messageControllerEnrol();
+    $first = giveMessage('First', 'One.');
+    $second = giveMessage('Second', 'Two.');
+    $third = giveMessage('Third', 'Three.');
+
+    $page = messageControllerController()->inbox(messageControllerRequest(['since' => 0, 'limit' => 2], $token));
+
+    expect($page)->toBeInstanceOf(WP_REST_Response::class);
+    $data = (array) $page->get_data();
+    expect(array_column($data['messages'], 'id'))->toBe([$first, $second]);
+    expect($data['more'])->toBeTrue();
+
+    $next = messageControllerController()->inbox(messageControllerRequest(['since' => $second, 'limit' => 2], $token));
+
+    expect($next)->toBeInstanceOf(WP_REST_Response::class);
+    $data = (array) $next->get_data();
+    expect(array_column($data['messages'], 'id'))->toBe([$third]);
+    expect($data['more'])->toBeFalse();
+});
+
+test('an inbox with nothing above the handset says there is no more', function () {
+    $token = messageControllerEnrol();
+    $only = giveMessage('Only', 'One.');
+
+    $response = messageControllerController()->inbox(messageControllerRequest(['since' => $only, 'limit' => 50], $token));
+
+    expect($response)->toBeInstanceOf(WP_REST_Response::class);
+    $data = (array) $response->get_data();
+    expect($data['messages'])->toBe([]);
+    expect($data['more'])->toBeFalse();
+});
+
 test('the unread count comes back with the inbox', function () {
     $token = messageControllerEnrol();
     giveMessage('First', 'One.');

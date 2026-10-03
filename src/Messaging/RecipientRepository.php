@@ -22,8 +22,8 @@ interface RecipientRepository
     public function addMany(int $messageId, array $members, int $now): int;
 
     /**
-     * A member's messages, newest first, optionally only those newer
-     * than an id the handset already holds.
+     * A member's messages above an id the handset has already collected,
+     * oldest first, so that a handset paging through them walks forward.
      *
      * @return list<Recipient>
      */

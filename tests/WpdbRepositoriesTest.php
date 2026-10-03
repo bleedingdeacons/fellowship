@@ -102,7 +102,7 @@ test('an inbox is paged from the highest id the handset holds', function () {
 
     $sql = $this->wpdb->lastQuery();
     expect($sql)->toContain('message_id > 40');
-    expect($sql)->toContain('ORDER BY message_id DESC');
+    expect($sql)->toContain('ORDER BY message_id ASC');
 });
 
 test('marking read is scoped to the members own row', function () {

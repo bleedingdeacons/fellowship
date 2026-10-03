@@ -151,16 +151,22 @@ final class MessageController
     }
 
     /**
-     * Everything addressed to this member since the id the handset
-     * already holds.
+     * Everything addressed to this member above the id the handset has
+     * already collected, a page at a time.
      *
-     * <b>Ordered newest first but paged by id, which is deliberate.</b> A
-     * handset that has been offline for a month asks for everything after
-     * its last id and walks forward; one that is up to date asks for
-     * everything after the newest it has and usually gets nothing. Paging
-     * by timestamp would be ambiguous for two messages in the same
-     * second, and this is the one query that runs every few minutes on
-     * every handset in the fellowship.
+     * <b>Oldest first, and paged by id.</b> A handset that has been
+     * offline for a month asks for everything after its last id and walks
+     * forward, a page at a time, while `more` says there is another; one
+     * that is up to date asks from the newest it has and usually gets
+     * nothing. Paging by timestamp would be ambiguous for two messages in
+     * the same second, and this is the one query that runs every few
+     * minutes on every handset in the fellowship.
+     *
+     * This was newest first until 2026-10-03, and that lost messages. A
+     * handset more than a page behind was handed the newest page, asked
+     * from the top of it next time, and never fetched anything
+     * underneath. `more` was added with the change, and a handset too old
+     * to read it still walks forward, one page per sync.
      */
     public function inbox(WP_REST_Request $request): WP_REST_Response|WP_Error
     {
@@ -172,9 +178,14 @@ final class MessageController
         $limit = min(self::PAGE_MAX, max(1, (int) $request->get_param('limit')));
         $since = max(0, (int) $request->get_param('since'));
 
-        $rows = $this->recipients->forMember($device->memberEmail, $since, $limit);
+        // One row past the page, which is how `more` is known without a
+        // second query.
+        $rows = $this->recipients->forMember($device->memberEmail, $since, $limit + 1);
+        $more = count($rows) > $limit;
+        $rows = array_slice($rows, 0, $limit);
+
         if ($rows === []) {
-            return new WP_REST_Response(['messages' => [], 'unread' => 0], 200);
+            return new WP_REST_Response(['messages' => [], 'unread' => 0, 'more' => false], 200);
         }
 
         $messages = $this->messages->findByIds(array_map(
@@ -221,6 +232,7 @@ final class MessageController
         return new WP_REST_Response([
             'messages' => $sealed,
             'unread'   => $this->recipients->countUnread($device->memberEmail),
+            'more'     => $more,
         ], 200);
     }
 
@@ -383,10 +395,11 @@ final class MessageController
      * A handset saying it has opened these messages.
      *
      * <b>Both routes a message can arrive by end here.</b> The server
-     * cannot infer receipt from a fetch: the poll is strictly exclusive,
-     * so a message that arrived by push is never fetched at all, and a
-     * push handler has no session token to report with. So Link reports
-     * from the sync behind either, for whatever it opened.
+     * cannot infer receipt from a fetch. A fetch is not an opening, a
+     * message that arrived by push may not be fetched until long after,
+     * by a Link older than 2026-10-03 not at all, and a push handler has
+     * no session token to report with. So Link reports from the sync
+     * behind either, for whatever it opened.
      *
      * Ids that were never addressed to this member are ignored rather
      * than refused, for the same reason {@see markRead()} answers them as
