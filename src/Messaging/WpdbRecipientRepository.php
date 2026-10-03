@@ -130,7 +130,7 @@ final class WpdbRecipientRepository implements RecipientRepository
             "SELECT {$this->columns()}
                FROM {$table}
               WHERE member_email = %s AND message_id > %d
-              ORDER BY message_id DESC
+              ORDER BY message_id ASC
               LIMIT %d",
             $email,
             max(0, $sinceMessageId),

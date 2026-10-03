@@ -185,7 +185,9 @@ test('an inbox with nothing above the handset says there is no more', function (
     $response = messageControllerController()->inbox(messageControllerRequest(['since' => $only, 'limit' => 50], $token));
 
     expect($response)->toBeInstanceOf(WP_REST_Response::class);
-    expect((array) $response->get_data())->toBe(['messages' => [], 'unread' => 1, 'more' => false]);
+    $data = (array) $response->get_data();
+    expect($data['messages'])->toBe([]);
+    expect($data['more'])->toBeFalse();
 });
 
 test('the unread count comes back with the inbox', function () {
