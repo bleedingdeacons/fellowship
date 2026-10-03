@@ -1,0 +1,570 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Link: server load of reading a pushed message">
+      <stringProp name="TestPlan.comments">What a Link handset asks Fellowship for after a push arrives. The push itself costs the server nothing on the read side: the envelope travels in the FCM payload and the handset opens it locally. Everything here is what follows. Seed with tests/load/seed-link-load.php first. Override any property with -J, e.g. -Jhost=example.org -Jthreads=50.</stringProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables">
+        <collectionProp name="Arguments.arguments">
+          <elementProp name="host" elementType="Argument">
+            <stringProp name="Argument.name">host</stringProp>
+            <stringProp name="Argument.value">${__P(host,stalwart-dev.local)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="port" elementType="Argument">
+            <stringProp name="Argument.name">port</stringProp>
+            <stringProp name="Argument.value">${__P(port,443)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="base" elementType="Argument">
+            <stringProp name="Argument.name">base</stringProp>
+            <stringProp name="Argument.value">${__P(base,/wp-json/fellowship/v1)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="csv" elementType="Argument">
+            <stringProp name="Argument.name">csv</stringProp>
+            <stringProp name="Argument.value">${__P(csv,devices.csv)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+        </collectionProp>
+      </elementProp>
+    </TestPlan>
+    <hashTree>
+      <ConfigTestElement guiclass="HttpDefaultsGui" testclass="ConfigTestElement" testname="Fellowship (HTTPS is required)">
+        <stringProp name="HTTPSampler.domain">${host}</stringProp>
+        <stringProp name="HTTPSampler.port">${port}</stringProp>
+        <stringProp name="HTTPSampler.protocol">https</stringProp>
+        <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
+        <stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
+        <stringProp name="HTTPSampler.connect_timeout">10000</stringProp>
+        <stringProp name="HTTPSampler.response_timeout">30000</stringProp>
+        <elementProp name="HTTPsampler.Arguments" elementType="Arguments" guiclass="HTTPArgumentsPanel" testclass="Arguments">
+          <collectionProp name="Arguments.arguments"/>
+        </elementProp>
+      </ConfigTestElement>
+      <hashTree/>
+      <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="Seeded devices">
+        <stringProp name="filename">${csv}</stringProp>
+        <stringProp name="fileEncoding">UTF-8</stringProp>
+        <stringProp name="variableNames"></stringProp>
+        <boolProp name="ignoreFirstLine">false</boolProp>
+        <stringProp name="delimiter">,</stringProp>
+        <boolProp name="quotedData">false</boolProp>
+        <boolProp name="recycle">true</boolProp>
+        <boolProp name="stopThread">false</boolProp>
+        <stringProp name="shareMode">shareMode.all</stringProp>
+      </CSVDataSet>
+      <hashTree/>
+      <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Link headers">
+        <collectionProp name="HeaderManager.headers">
+          <elementProp name="" elementType="Header">
+            <stringProp name="Header.name">Authorization</stringProp>
+            <stringProp name="Header.value">Bearer ${token}</stringProp>
+          </elementProp>
+          <elementProp name="" elementType="Header">
+            <stringProp name="Header.name">Accept</stringProp>
+            <stringProp name="Header.value">application/json</stringProp>
+          </elementProp>
+          <elementProp name="" elementType="Header">
+            <stringProp name="Header.name">Content-Type</stringProp>
+            <stringProp name="Header.value">application/json; charset=utf-8</stringProp>
+          </elementProp>
+          <elementProp name="" elementType="Header">
+            <stringProp name="Header.name">User-Agent</stringProp>
+            <stringProp name="Header.value">Link-JMeter/1.0</stringProp>
+          </elementProp>
+          <elementProp name="" elementType="Header">
+            <stringProp name="Header.name">Cookie</stringProp>
+            <stringProp name="Header.value">${__P(cookie,XDEBUG_IGNORE=1)}</stringProp>
+            <stringProp name="TestPlan.comments">Link sends no cookies. This one stops a site with xdebug.start_with_request=yes, such as Local, from opening a debug session on every request; it means nothing anywhere else.</stringProp>
+          </elementProp>
+        </collectionProp>
+      </HeaderManager>
+      <hashTree/>
+
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="A. Notification tapped (app was closed)">
+        <stringProp name="TestPlan.comments">The common case. The push stored the message and posted "New message"; the member taps it, Link launches, syncs, they open the conversation, then go back to the list. Mirrors App.OnStart, MessagesPage.OnAppearing -> MessageService.SyncAsync, and ConversationViewModel.LoadAsync.</stringProp>
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">${__P(threads,20)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(rampup,30)}</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">${__P(duration,300)}</stringProp>
+        <stringProp name="ThreadGroup.delay"></stringProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+      </ThreadGroup>
+      <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="2xx">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49586">2\d\d</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Fellowship refused. 401 = token not seeded or revoked; 403 = member no longer passes MemberGate; 404 on /read = seeded message gone.</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">1</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="A1 launch: re-register push token">
+          <stringProp name="TestPlan.comments">App.OnStart -> DeviceAuthService.RestoreAsync. Every launch, fire and forget.</stringProp>
+          <stringProp name="HTTPSampler.path">${base}/auth/device/push</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"push_provider":"fcm","push_token":"jmeter-load-${__threadNum}"}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <UniformRandomTimer guiclass="UniformRandomTimerGui" testclass="UniformRandomTimer" testname="Until the next message arrives">
+            <stringProp name="TestPlan.comments">A child of this sampler only: a timer at thread-group level would delay every request.</stringProp>
+            <stringProp name="ConstantTimer.delay">${__P(gap_ms,10000)}</stringProp>
+            <stringProp name="RandomTimer.range">${__P(gap_range_ms,20000)}</stringProp>
+          </UniformRandomTimer>
+          <hashTree/>
+        </hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="A2 sync: inbox collects the pushed message again (sealed)">
+          <stringProp name="TestPlan.comments">From Link 1.29.1 (link#72) since is the poll mark, which only a sync moves, so it sits below the pushed message and the poll fetches it again: a SELECT on recipients, a SELECT on messages, an AES-256-GCM seal plus an RSA-OAEP wrap, and a COUNT for unread. Before that release since was the highest id held, the pushed message itself, and this came back empty.</stringProp>
+          <stringProp name="HTTPSampler.path">${base}/messages?since=${__intSum(${message_id},-1)}</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="An envelope came back">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="107">"k":</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Empty inbox: the seeded message has gone. Re-seed.</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_data</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">16</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        </hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="A3 sync: acknowledge received">
+          <stringProp name="TestPlan.comments">MessageService.ReportReceiptsAsync. The push handler has no session token, so receipt of a pushed message reaches the server only here.</stringProp>
+          <stringProp name="HTTPSampler.path">${base}/messages/received</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"ids":[${message_id}]}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree/>
+        <IfController guiclass="IfControllerPanel" testclass="IfController" testname="Only if the reader has sent messages awaiting receipts (-Jreceipts=true)">
+          <stringProp name="IfController.condition">${__P(receipts,false)}</stringProp>
+          <boolProp name="IfController.evaluateAll">false</boolProp>
+          <boolProp name="IfController.useExpression">true</boolProp>
+        </IfController>
+        <hashTree>
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="A4 sync: receipts for own sent messages">
+            <stringProp name="TestPlan.comments">Only sent by a handset holding sent messages not yet read by everyone. Seeded devices sent nothing, so the answer is empty, but the queries still run.</stringProp>
+            <stringProp name="HTTPSampler.path">${base}/messages/receipts?ids=${message_id}</stringProp>
+            <stringProp name="HTTPSampler.method">GET</stringProp>
+            <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+            <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+              <collectionProp name="Arguments.arguments"/>
+            </elementProp>
+          </HTTPSamplerProxy>
+          <hashTree/>
+        </hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="A5 open conversation: mark read">
+          <stringProp name="TestPlan.comments">One per unread message in the conversation. Repeat iterations hit the already-read path (one extra SELECT); run the seeder's reset between runs.</stringProp>
+          <stringProp name="HTTPSampler.path">${base}/messages/${message_id}/read</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <UniformRandomTimer guiclass="UniformRandomTimerGui" testclass="UniformRandomTimer" testname="Glance at the list before tapping">
+            <stringProp name="ConstantTimer.delay">${__P(list_ms,1000)}</stringProp>
+            <stringProp name="RandomTimer.range">${__P(list_range_ms,2000)}</stringProp>
+          </UniformRandomTimer>
+          <hashTree/>
+        </hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="A6 back to list: sync again">
+          <stringProp name="TestPlan.comments">MessagesPage.OnAppearing fires again on return. A2 moved the poll mark up to the message, so this is the empty path (auth plus one SELECT), and the received ack was accepted, so it is the only request.</stringProp>
+          <stringProp name="HTTPSampler.path">${base}/messages?since=${message_id}</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <UniformRandomTimer guiclass="UniformRandomTimerGui" testclass="UniformRandomTimer" testname="Read the message">
+            <stringProp name="ConstantTimer.delay">${__P(read_ms,5000)}</stringProp>
+            <stringProp name="RandomTimer.range">${__P(read_range_ms,10000)}</stringProp>
+          </UniformRandomTimer>
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="B. Push missed, member opens Link by hand (-Jpoll_threads=N)">
+        <stringProp name="TestPlan.comments">The push never arrived (Doze, force-stop, rotated token), so there is no notification to tap and no launch push-token call from a cold start. Since Link 1.29.1 the poll costs the same as A2, because a delivered push no longer spares the server the fetch. Off by default.</stringProp>
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">${__P(poll_threads,0)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(rampup,30)}</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">${__P(duration,300)}</stringProp>
+        <stringProp name="ThreadGroup.delay"></stringProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+      </ThreadGroup>
+      <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="2xx">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49586">2\d\d</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Fellowship refused. 401 = token not seeded or revoked; 403 = member no longer passes MemberGate; 404 on /read = seeded message gone.</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">1</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="B1 sync: inbox returns the sealed message">
+          <stringProp name="HTTPSampler.path">${base}/messages?since=${__intSum(${message_id},-1)}</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="An envelope came back">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="107">"k":</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Empty inbox: the seeded message has gone. Re-seed.</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_data</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">16</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+          <UniformRandomTimer guiclass="UniformRandomTimerGui" testclass="UniformRandomTimer" testname="Until the next sync">
+            <stringProp name="TestPlan.comments">A child of this sampler only: a timer at thread-group level would delay every request.</stringProp>
+            <stringProp name="ConstantTimer.delay">${__P(gap_ms,10000)}</stringProp>
+            <stringProp name="RandomTimer.range">${__P(gap_range_ms,20000)}</stringProp>
+          </UniformRandomTimer>
+          <hashTree/>
+        </hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="B2 sync: acknowledge received">
+          <stringProp name="HTTPSampler.path">${base}/messages/received</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"ids":[${message_id}]}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree/>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="B3 open conversation: mark read">
+          <stringProp name="HTTPSampler.path">${base}/messages/${message_id}/read</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <UniformRandomTimer guiclass="UniformRandomTimerGui" testclass="UniformRandomTimer" testname="Glance at the list before tapping">
+            <stringProp name="ConstantTimer.delay">${__P(list_ms,1000)}</stringProp>
+            <stringProp name="RandomTimer.range">${__P(list_range_ms,2000)}</stringProp>
+          </UniformRandomTimer>
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="D. First sync after upgrading to Link 1.29.1 (-Jcatchup_threads=N)">
+        <stringProp name="TestPlan.comments">A history file written before 1.29.1 has no poll mark, so the first sync starts from the clear mark or the beginning and walks forward a page of 50 at a time while Fellowship says there is more, up to 10 pages: as many as 500 messages sealed in one sync. It happens once per handset, so each thread runs it once; ramp the threads to match how fast the update reaches phones. Seed with a message count (seed N CSV 500) to give it pages to walk. Off by default.</stringProp>
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <stringProp name="LoopController.loops">1</stringProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">${__P(catchup_threads,0)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(catchup_rampup,60)}</stringProp>
+        <boolProp name="ThreadGroup.scheduler">false</boolProp>
+        <stringProp name="ThreadGroup.duration"></stringProp>
+        <stringProp name="ThreadGroup.delay"></stringProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+      </ThreadGroup>
+      <hashTree>
+              <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="2xx">
+                <collectionProp name="Asserion.test_strings">
+                  <stringProp name="49586">2\d\d</stringProp>
+                </collectionProp>
+                <stringProp name="Assertion.custom_message">Fellowship refused. 401 = token not seeded or revoked; 403 = member no longer passes MemberGate; 404 on /read = seeded message gone.</stringProp>
+                <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+                <boolProp name="Assertion.assume_success">false</boolProp>
+                <intProp name="Assertion.test_type">1</intProp>
+              </ResponseAssertion>
+              <hashTree/>
+        <TransactionController guiclass="TransactionControllerGui" testclass="TransactionController" testname="D sync total: every page plus the acknowledgement">
+          <stringProp name="TestPlan.comments">The whole first sync as the member waits on it, as one sample alongside the per-page ones.</stringProp>
+          <boolProp name="TransactionController.parent">false</boolProp>
+          <boolProp name="TransactionController.includeTimers">false</boolProp>
+        </TransactionController>
+        <hashTree>
+          <TestAction guiclass="TestActionGui" testclass="TestAction" testname="Start the sync">
+            <stringProp name="TestPlan.comments">Does nothing itself and records no sample; it is here to carry the preprocessor that sets the sync's starting state.</stringProp>
+            <intProp name="ActionProcessor.action">1</intProp>
+            <intProp name="ActionProcessor.target">0</intProp>
+            <stringProp name="ActionProcessor.duration">0</stringProp>
+          </TestAction>
+          <hashTree>
+            <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="Where the first sync starts">
+              <stringProp name="scriptLanguage">groovy</stringProp>
+              <stringProp name="parameters"></stringProp>
+              <stringProp name="filename"></stringProp>
+              <stringProp name="cacheKey">true</stringProp>
+              <stringProp name="script">// One sync's starting state. A 1.29.1 handset starts from its poll mark, which an
+// upgraded history file does not have, so from the clear mark or from nothing.
+// The default here is just below the oldest seeded message, so every run fetches
+// exactly what was seeded; -Jcatchup_since=0 starts from the beginning instead and
+// includes whatever else these members have been sent.
+def from = props.get('catchup_since')
+vars.put('cu_since', from != null ? from : String.valueOf((vars.get('first_message_id') as long) - 1))
+vars.put('cu_more', 'true')
+vars.put('cu_pages', '0')
+vars.put('cu_ack', '')
+vars.putObject('cu_ids', [])</stringProp>
+            </JSR223PreProcessor>
+            <hashTree/>
+          </hashTree>
+          <WhileController guiclass="WhileControllerGui" testclass="WhileController" testname="While Fellowship says there is more">
+            <stringProp name="WhileController.condition">${__groovy(vars.get('cu_more') == 'true',)}</stringProp>
+          </WhileController>
+          <hashTree>
+            <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="D1 sync: inbox page (up to 50 sealed)">
+              <stringProp name="TestPlan.comments">Link sends no limit, so each page is Fellowship's default of 50.</stringProp>
+              <stringProp name="HTTPSampler.path">${base}/messages?since=${cu_since}</stringProp>
+              <stringProp name="HTTPSampler.method">GET</stringProp>
+              <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+              <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+                <collectionProp name="Arguments.arguments"/>
+              </elementProp>
+            </HTTPSamplerProxy>
+            <hashTree>
+              <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="Move the mark, decide whether to go on">
+                <stringProp name="scriptLanguage">groovy</stringProp>
+                <stringProp name="parameters"></stringProp>
+                <stringProp name="filename"></stringProp>
+                <stringProp name="cacheKey">true</stringProp>
+                <stringProp name="script">// What MessageService.SyncAsync does with a page: move the mark to the highest id
+// it opened, and carry on while Fellowship says there is more, the mark moved, and
+// fewer than PagesPerSync (10) pages have been read.
+import groovy.json.JsonSlurper
+
+int pages = (vars.get('cu_pages') as int) + 1
+vars.put('cu_pages', String.valueOf(pages))
+
+if (!prev.isSuccessful()) {
+    vars.put('cu_more', 'false')
+    return
+}
+
+def json = new JsonSlurper().parseText(prev.getResponseDataAsString())
+def ids = (json.messages ?: []).collect { it.id as long }
+
+def held = vars.getObject('cu_ids')
+held.addAll(ids)
+
+long since = vars.get('cu_since') as long
+long reached = ids ? Math.max(since, ids.max()) : since
+vars.put('cu_since', String.valueOf(reached))
+
+int cap = (props.get('catchup_pages') ?: '10') as int
+vars.put('cu_more', String.valueOf(json.more == true &amp;&amp; reached &gt; since &amp;&amp; pages &lt; cap))
+
+// ReportReceiptsAsync acknowledges at most 200 per sync.
+vars.put('cu_ack', held.take(200).join(','))</stringProp>
+              </JSR223PostProcessor>
+              <hashTree/>
+            </hashTree>
+          </hashTree>
+          <IfController guiclass="IfControllerPanel" testclass="IfController" testname="If anything came back">
+            <stringProp name="IfController.condition">${__groovy(vars.get('cu_ack') != '',)}</stringProp>
+            <boolProp name="IfController.evaluateAll">false</boolProp>
+            <boolProp name="IfController.useExpression">true</boolProp>
+          </IfController>
+          <hashTree>
+            <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="D2 sync: acknowledge received (up to 200)">
+              <stringProp name="TestPlan.comments">The worst case, as though the handset held none of what it fetched. An upgraded handset already held and acknowledged most of it, so it sends only what a later push once hid, often nothing.</stringProp>
+              <stringProp name="HTTPSampler.path">${base}/messages/received</stringProp>
+              <stringProp name="HTTPSampler.method">POST</stringProp>
+              <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+              <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+                <collectionProp name="Arguments.arguments">
+                  <elementProp name="" elementType="HTTPArgument">
+                    <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                    <stringProp name="Argument.value">{"ids":[${cu_ack}]}</stringProp>
+                    <stringProp name="Argument.metadata">=</stringProp>
+                  </elementProp>
+                </collectionProp>
+              </elementProp>
+              <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+            </HTTPSamplerProxy>
+            <hashTree/>
+          </hashTree>
+        </hashTree>
+      </hashTree>
+
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="C. Baseline: WordPress boot and REST routing only">
+        <stringProp name="TestPlan.comments">A request every couple of seconds that boots WordPress, loads every plugin and the theme, registers every REST route and dispatches to Fellowship, which refuses it before touching the database: a bearer that is not shaped like a device token fails the regex in DeviceTokenMinter::looksLikeToken. What A and B take beyond this is Fellowship's own work. Kept to one thread so it measures the load A and B produce rather than adding to it.</stringProp>
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">${__P(baseline_threads,1)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">0</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">${__P(duration,300)}</stringProp>
+        <stringProp name="ThreadGroup.delay"></stringProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+      </ThreadGroup>
+      <hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="C1 baseline: boot and routing, refused before any query">
+          <stringProp name="HTTPSampler.path">${base}/messages?since=0</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Not a device token">
+            <stringProp name="TestPlan.comments">Replaces the plan-level Authorization header for this sampler only. Anything not matching fdt_ plus 64 hex characters is refused without a database lookup.</stringProp>
+            <collectionProp name="HeaderManager.headers">
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Authorization</stringProp>
+                <stringProp name="Header.value">Bearer baseline</stringProp>
+              </elementProp>
+            </collectionProp>
+          </HeaderManager>
+          <hashTree/>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="401 not signed in">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="51509">401</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Expected 401. 403 with fellowship_insecure_transport means the request did not arrive as HTTPS; anything else means it was not refused where the baseline assumes.</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">true</boolProp>
+            <intProp name="Assertion.test_type">8</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+          <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer" testname="Every couple of seconds">
+            <stringProp name="ConstantTimer.delay">${__P(baseline_ms,2000)}</stringProp>
+          </ConstantTimer>
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+
+      <ResultCollector guiclass="SummaryReport" testclass="ResultCollector" testname="Summary Report">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time>
+            <latency>true</latency>
+            <timestamp>true</timestamp>
+            <success>true</success>
+            <label>true</label>
+            <code>true</code>
+            <message>true</message>
+            <threadName>true</threadName>
+            <dataType>true</dataType>
+            <encoding>false</encoding>
+            <assertions>true</assertions>
+            <subresults>true</subresults>
+            <responseData>false</responseData>
+            <samplerData>false</samplerData>
+            <xml>false</xml>
+            <fieldNames>true</fieldNames>
+            <responseHeaders>false</responseHeaders>
+            <requestHeaders>false</requestHeaders>
+            <responseDataOnError>false</responseDataOnError>
+            <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+            <assertionsResultsToSave>0</assertionsResultsToSave>
+            <bytes>true</bytes>
+            <sentBytes>true</sentBytes>
+            <url>true</url>
+            <threadCounts>true</threadCounts>
+            <idleTime>true</idleTime>
+            <connectTime>true</connectTime>
+          </value>
+        </objProp>
+        <stringProp name="filename"></stringProp>
+      </ResultCollector>
+      <hashTree/>
+      <ResultCollector guiclass="ViewResultsFullVisualizer" testclass="ResultCollector" testname="View Results Tree (debugging only)" enabled="false">
+        <boolProp name="ResultCollector.error_logging">true</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time>
+            <latency>true</latency>
+            <timestamp>true</timestamp>
+            <success>true</success>
+            <label>true</label>
+            <code>true</code>
+            <message>true</message>
+            <threadName>true</threadName>
+            <dataType>true</dataType>
+            <encoding>false</encoding>
+            <assertions>true</assertions>
+            <subresults>true</subresults>
+            <responseData>false</responseData>
+            <samplerData>false</samplerData>
+            <xml>false</xml>
+            <fieldNames>true</fieldNames>
+            <responseHeaders>false</responseHeaders>
+            <requestHeaders>false</requestHeaders>
+            <responseDataOnError>false</responseDataOnError>
+            <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+            <assertionsResultsToSave>0</assertionsResultsToSave>
+            <bytes>true</bytes>
+            <sentBytes>true</sentBytes>
+            <url>true</url>
+            <threadCounts>true</threadCounts>
+            <idleTime>true</idleTime>
+            <connectTime>true</connectTime>
+          </value>
+        </objProp>
+        <stringProp name="filename"></stringProp>
+      </ResultCollector>
+      <hashTree/>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>
