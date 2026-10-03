@@ -47,9 +47,11 @@ final class Recipient
          * <b>This is the delivery {@see $pushedAt} cannot be.</b> It is
          * written only by a handset that has the message in its hands —
          * see {@see \Fellowship\Rest\MessageController::markReceived()} —
-         * and never inferred from a fetch: a message that arrived by push
-         * is never fetched again, so a server that counted fetches would
-         * report the fastest deliveries as the ones that never arrived.
+         * and never inferred from a fetch: a fetch is not an opening, and
+         * a message that arrived by push is fetched again only once the
+         * handset's poll reaches it — by a Link older than 2026-10-03,
+         * never — so a server that counted fetches would report the
+         * fastest deliveries as the ones that never arrived.
          *
          * Like read state it is the member's rather than the handset's.
          * The first of their devices to open it sets it, and later ones

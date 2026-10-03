@@ -260,7 +260,7 @@ Everything is under `fellowship/v1` and everything requires HTTPS.
 | `POST /auth/device/key-fault` | device | "I cannot open my messages." |
 | `GET /auth/device/session` | device | Who am I. |
 | `DELETE /auth/device` | device | Sign out (self-revoke). |
-| `GET /messages?since=&limit=` | device | Sealed inbox, paged by message id. |
+| `GET /messages?since=&limit=` | device | Sealed inbox above `since`, oldest first, paged by message id; `more` says whether another page is waiting. |
 | `POST /messages` | device | Send. |
 | `POST /messages/{id}/read` | device | Mark read. Marks it received too, if it was not. |
 | `POST /messages/received` | device | `ids`: messages this handset has opened. Ids not addressed to the member are ignored. |
