@@ -86,7 +86,9 @@ class PluginBuilder
         // Build script
             'build.php',
 
-        // Vendor (no production dependencies declared, but exclude defensively)
+        // Working vendor/ holds dev test tooling. Production excludes it
+        // wholesale and ships a freshly staged --no-dev vendor/ instead
+        // (see stageProductionVendor()), which carries the Guardian library.
             'vendor',
 
             // Dev artefacts that must never ship
@@ -291,10 +293,9 @@ class PluginBuilder
         $this->log("Building {$type} archive for version {$this->version}...");
         $this->log("Platform: " . PHP_OS . " (" . ($this->isWindows ? "Windows" : "Unix-like") . ")");
 
-        // Check for vendor directory. Fellowship declares no production
-        // dependencies, so a missing vendor/ is fine for a production
-        // build — only run composer install when building a dev archive
-        // that does want the dev tools available.
+        // Dev builds ship the working vendor/ as-is, so make sure it exists.
+        // Production builds ignore the working vendor/ entirely and stage a
+        // clean --no-dev copy (with Guardian) just before zipping.
         $vendorDir = $this->pluginDir . DIRECTORY_SEPARATOR . 'vendor';
         if ($type === 'dev' && !is_dir($vendorDir)) {
             $this->log("vendor/ not found. Running 'composer install' for dev build...");

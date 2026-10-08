@@ -11,15 +11,20 @@
     "repositories": [
         {
             "type": "vcs",
+            "url": "https://github.com/bleedingdeacons/guardian"
+        },
+        {
+            "type": "vcs",
             "url": "https://github.com/bleedingdeacons/wp-mocks"
         }
     ],
     "require": {
         "php": ">=8.4",
+        "ext-json": "*",
         "ext-mbstring": "*",
         "ext-openssl": "*",
-        "ext-json": "*",
-        "ext-zlib": "*"
+        "ext-zlib": "*",
+        "bleedingdeacons/guardian": "^1.0"
     },
     "autoload": {
         "psr-4": {

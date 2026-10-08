@@ -15,9 +15,10 @@ use Fellowship\Auth\LinkAudience;
 use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
-use Fellowship\Auth\ProviderRegistry;
+use Guardian\ProviderRegistry;
 use Fellowship\Auth\StateStore;
 use Fellowship\Auth\VerifiedIdentity;
+use Guardian\VerifiedIdentity as ProviderIdentity;
 use Fellowship\Core\RateLimiter;
 use Fellowship\Devices\CurrentDevice;
 use Fellowship\Devices\MemberGate;
@@ -108,7 +109,7 @@ test('the registry must be built around Link', function () {
 // ── begin() ───────────────────────────────────────────────────────
 
 test('begin answers a provider URL that returns to Fellowship\'s own callback', function () {
-    $recording = new class implements \Fellowship\Auth\Providers\OAuthProvider {
+    $recording = new class implements \Guardian\Providers\OAuthProvider {
         public string $lastRedirectUri = '';
 
         public function name(): string
@@ -133,12 +134,12 @@ test('begin answers a provider URL that returns to Fellowship\'s own callback', 
             return 'https://accounts.example.org/authorize?state=' . $state;
         }
 
-        public function handleCallback(string $code, string $nonce, string $redirectUri, ?string $codeVerifier = null): ?VerifiedIdentity
+        public function handleCallback(string $code, string $nonce, string $redirectUri, ?string $codeVerifier = null): ?ProviderIdentity
         {
             return null;
         }
 
-        public function verifyIdToken(string $idToken, string $nonce): ?VerifiedIdentity
+        public function verifyIdToken(string $idToken, string $nonce): ?ProviderIdentity
         {
             return null;
         }
@@ -183,7 +184,7 @@ test('begin refuses a provider with no browser leg', function () {
 test('another audience admits somebody who is not a member', function () {
     // A shared tablet account is nobody's membership. Link's rule would
     // refuse it; Freedom's rule is the one that applies.
-    $this->google->identity = new VerifiedIdentity(IDENTITY_BROKER_TABLET, 'google', 'sub-t');
+    $this->google->identity = new ProviderIdentity(IDENTITY_BROKER_TABLET, 'google', 'sub-t');
     $issued = $this->states->issue('google', IDENTITY_BROKER_REDIRECT, null, 'freedom', 'ctx-1');
 
     $location = identityBrokerCallback($issued['state']);
@@ -198,7 +199,7 @@ test('another audience admits somebody who is not a member', function () {
 });
 
 test('another audience\'s refusal reaches the browser in its own words', function () {
-    $this->google->identity = new VerifiedIdentity('stranger@example.org', 'google', 'sub-s');
+    $this->google->identity = new ProviderIdentity('stranger@example.org', 'google', 'sub-s');
     $issued = $this->states->issue('google', IDENTITY_BROKER_REDIRECT, null, 'freedom', '');
 
     expect(identityBrokerCallback($issued['state']))->toBe(IDENTITY_BROKER_REDIRECT . '?error=not_authorised');
@@ -223,7 +224,7 @@ test('a state naming an audience nobody registered is refused', function () {
 });
 
 test('Link still refuses somebody who is not a member', function () {
-    $this->google->identity = new VerifiedIdentity(IDENTITY_BROKER_TABLET, 'google', 'sub-t');
+    $this->google->identity = new ProviderIdentity(IDENTITY_BROKER_TABLET, 'google', 'sub-t');
     $issued = $this->states->issue('google', 'link://auth');
 
     expect(identityBrokerCallback($issued['state']))->toBe('link://auth?error=not_a_member');
@@ -352,7 +353,7 @@ test('a device that does not exist is not live', function () {
 
 // ── Fixtures ──────────────────────────────────────────────────────
 
-function identityBrokerBroker(?\Fellowship\Auth\Providers\OAuthProvider $provider = null): IdentityBroker
+function identityBrokerBroker(?\Guardian\Providers\OAuthProvider $provider = null): IdentityBroker
 {
     $registry = new ProviderRegistry();
     $registry->register($provider ?? test()->google);
@@ -368,7 +369,7 @@ function identityBrokerBroker(?\Fellowship\Auth\Providers\OAuthProvider $provide
     );
 }
 
-function identityBrokerController(?\Fellowship\Auth\Providers\OAuthProvider $provider = null): DeviceAuthController
+function identityBrokerController(?\Guardian\Providers\OAuthProvider $provider = null): DeviceAuthController
 {
     $registry = new ProviderRegistry();
     $registry->register($provider ?? test()->google);

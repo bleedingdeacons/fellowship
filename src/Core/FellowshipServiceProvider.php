@@ -17,18 +17,18 @@ use Fellowship\Auth\DeviceCodeStore;
 use Fellowship\Auth\DeviceRedirectValidator;
 use Fellowship\Auth\DeviceTokenMinter;
 use Fellowship\Auth\IdentityBroker;
-use Fellowship\Auth\JwtVerifier;
 use Fellowship\Auth\LinkAudience;
 use Fellowship\Auth\PasswordAuthenticator;
 use Unity\Auth\Interfaces\PasswordCredentialRepository;
 use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
-use Fellowship\Auth\Providers\AppleProvider;
-use Fellowship\Auth\Providers\FacebookProvider;
-use Fellowship\Auth\Providers\GoogleProvider;
-use Fellowship\Auth\Providers\MicrosoftProvider;
-use Fellowship\Auth\ProviderRegistry;
 use Fellowship\Auth\StateStore;
+use Guardian\Jwt\JwtVerifier;
+use Guardian\ProviderRegistry;
+use Guardian\Providers\AppleProvider;
+use Guardian\Providers\FacebookProvider;
+use Guardian\Providers\GoogleProvider;
+use Guardian\Providers\MicrosoftProvider;
 use Fellowship\Crypto\MessageSealer;
 use Fellowship\Devices\CurrentDevice;
 use Fellowship\Devices\DeviceRepository;
@@ -81,7 +81,9 @@ final class FellowshipServiceProvider
         $container->register(MemberGate::class, fn(ContainerInterface $c) => new MemberGate(
             $c->get(MemberRepository::class),
         ));
-        $container->register(JwtVerifier::class, fn() => new JwtVerifier());
+        // Guardian's verifier, logging to Fellowship's channel and fetching
+        // key sets as Fellowship.
+        $container->register(JwtVerifier::class, fn() => new JwtVerifier(UserAgent::plugin(), 'fellowship'));
         $container->register(StateStore::class, fn() => new StateStore());
         $container->register(DeviceCodeStore::class, fn() => new DeviceCodeStore());
         $container->register(DeviceTokenMinter::class, fn() => new DeviceTokenMinter());
@@ -91,11 +93,14 @@ final class FellowshipServiceProvider
             $registry = new ProviderRegistry();
             // Registration is the permission model — a provider absent
             // from here is unreachable, not merely unconfigured. See
-            // ProviderRegistry.
-            $registry->register(new GoogleProvider($c->get(Settings::class), $c->get(JwtVerifier::class)));
-            $registry->register(new MicrosoftProvider($c->get(Settings::class), $c->get(JwtVerifier::class)));
-            $registry->register(new FacebookProvider($c->get(Settings::class), $c->get(JwtVerifier::class)));
-            $registry->register(new AppleProvider($c->get(Settings::class), $c->get(JwtVerifier::class)));
+            // ProviderRegistry. The providers are Guardian's; Settings is
+            // the CredentialStore they read client ids and secrets from.
+            $settings = $c->get(Settings::class);
+            $verifier = $c->get(JwtVerifier::class);
+            $registry->register(new GoogleProvider($settings, $verifier, UserAgent::plugin()));
+            $registry->register(new MicrosoftProvider($settings, $verifier, UserAgent::plugin()));
+            $registry->register(new FacebookProvider($settings, $verifier, UserAgent::plugin()));
+            $registry->register(new AppleProvider($settings, $verifier));
             return $registry;
         });
 

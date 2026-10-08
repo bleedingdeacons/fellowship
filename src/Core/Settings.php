@@ -8,6 +8,8 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+use Guardian\Credentials\CredentialStore;
+
 /**
  * Fellowship's configuration, split across two option rows.
  *
@@ -22,8 +24,12 @@ if (!defined('ABSPATH')) {
  *
  * Both rows are autoload-false: they are read on REST and admin
  * requests, not on every front-end page view.
+ *
+ * It is the {@see CredentialStore} Guardian's providers read their client
+ * ids and secrets from, and the one the settings page's provider section
+ * writes to.
  */
-final class Settings
+final class Settings implements CredentialStore
 {
     public const OPTION_PUBLIC = 'fellowship_settings';
     public const OPTION_SECRETS = 'fellowship_secrets';

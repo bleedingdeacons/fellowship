@@ -4,15 +4,19 @@ declare(strict_types=1);
 
 namespace Fellowship\Tests\Support;
 
-use Fellowship\Auth\Providers\OAuthProvider;
-use Fellowship\Auth\VerifiedIdentity;
+use Guardian\Providers\OAuthProvider;
+use Guardian\VerifiedIdentity;
 
 /**
  * A provider that verifies whatever it is given.
  *
- * The provider implementations have their own tests; what this controller
- * needs is something that answers a known identity so the tests are about
- * enrolment rather than about JWKS.
+ * The provider implementations have their own tests, in Guardian; what this
+ * controller needs is something that answers a known identity so the tests
+ * are about enrolment rather than about JWKS.
+ *
+ * It answers Guardian's identity, as a real provider does — the controller
+ * converts it to Fellowship's at the callback and at the ID-token exchange.
+ * Freedom's tests build an IdentityBroker around this class too.
  */
 final class StubProvider implements OAuthProvider
 {
