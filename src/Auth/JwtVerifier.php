@@ -47,6 +47,28 @@ final class JwtVerifier
 
     private const JWKS_CACHE_PREFIX = 'fellowship_jwks_';
     private const JWKS_CACHE_TTL = HOUR_IN_SECONDS;
+
+    /**
+     * Floor between two cache-busting refetches of the same key set.
+     *
+     * A miss on `kid` is attacker-triggerable: the exchange route takes any
+     * Apple ID token, and reading its header costs nothing, so a token
+     * carrying a random kid used to drop Apple's key set from cache and force
+     * an outbound fetch on every single request. That holds the cache cold
+     * from outside — a 5-second-timeout HTTPS call on the critical path of
+     * every genuine sign-in — and makes the site an unauthenticated request
+     * amplifier pointed at the provider.
+     *
+     * A minute bounds that to one refetch per key set per minute however many
+     * bogus kids arrive. The cost is that a real key rotation can take up to a
+     * minute longer to be picked up, during which sign-ins with the new key
+     * fail — the failure they had before the rotation was noticed at all.
+     *
+     * Ported from Reach, whose verifier this one was copied from before Reach
+     * gained it.
+     */
+    private const JWKS_REFRESH_FLOOR = MINUTE_IN_SECONDS;
+    private const JWKS_REFRESH_PREFIX = 'fellowship_jwks_refreshed_';
     private const HTTP_TIMEOUT = 5;
 
     /** Tolerance for clock drift between this server and the provider. */
@@ -89,7 +111,7 @@ final class JwtVerifier
         if ($jwk === null) {
             // Cache miss for a freshly rotated key — refetch once with the
             // cache busted before giving up, or every sign-in fails for an
-            // hour after a provider rotates.
+            // hour after a provider rotates. The floor bounds how often.
             $jwk = $this->findKey($jwksUrl, $kid, forceRefresh: true);
             if ($jwk === null) {
                 self::logWarning('JWT: no matching key', ['kid' => $kid, 'jwks' => $jwksUrl]);
@@ -151,7 +173,7 @@ final class JwtVerifier
     private function findKey(string $jwksUrl, string $kid, bool $forceRefresh = false): ?array
     {
         $cacheKey = self::JWKS_CACHE_PREFIX . md5($jwksUrl);
-        if ($forceRefresh) {
+        if ($forceRefresh && $this->mayForceRefresh($jwksUrl)) {
             delete_transient($cacheKey);
         }
 
@@ -176,6 +198,27 @@ final class JwtVerifier
         }
 
         return null;
+    }
+
+    /**
+     * Whether a cache-busting refetch of this key set is allowed right now.
+     *
+     * Claims the slot as it answers, so the first unknown kid in a window
+     * gets the refetch and the rest are served from cache until the floor
+     * expires. Keyed on the JWKS URL, so one provider's misses never deny
+     * another its refetch. See {@see JWKS_REFRESH_FLOOR}.
+     */
+    private function mayForceRefresh(string $jwksUrl): bool
+    {
+        $floorKey = self::JWKS_REFRESH_PREFIX . md5($jwksUrl);
+
+        if (get_transient($floorKey) !== false) {
+            return false;
+        }
+
+        set_transient($floorKey, time(), self::JWKS_REFRESH_FLOOR);
+
+        return true;
     }
 
     /**
