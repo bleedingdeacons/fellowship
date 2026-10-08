@@ -372,9 +372,10 @@ them changes a second plugin:
 - `MemberGate`
 - `MessageSealer` and `DevicePublicKey`, whose envelope Freedom reuses
 - `RateLimiter`
-- `ProviderRegistry` — deprecated, and only for Freedom's tests, which still
-  build the broker with it; it is an empty subclass of Guardian's and goes
-  once they use Guardian's directly.
+
+`IdentityBroker`'s constructor also takes Guardian's `ProviderRegistry`, which
+Freedom's test harness builds. That makes Guardian's major version part of
+this contract too: Fellowship and Freedom's `require-dev` move together.
 
 `VerifiedIdentity` stayed Fellowship's own type when the providers moved to
 Guardian, precisely because it is on this list: a provider's answer is
