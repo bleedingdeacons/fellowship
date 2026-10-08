@@ -15,7 +15,6 @@ use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Auth\PasswordResetResult;
 use Fellowship\Auth\DeviceRedirectValidator;
 use Fellowship\Auth\DeviceTokenMinter;
-use Fellowship\Auth\ProviderRegistry;
 use Fellowship\Auth\StateStore;
 use Fellowship\Auth\VerifiedIdentity;
 use Fellowship\Core\RateLimiter;
@@ -25,6 +24,7 @@ use Fellowship\Devices\Device;
 use Fellowship\Devices\DeviceRepository;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Logger\HasLogger;
+use Guardian\ProviderRegistry;
 use Scrutiny\Audit\Interfaces\AuditLogger;
 use WP_Error;
 use WP_REST_Request;
@@ -370,16 +370,19 @@ final class DeviceAuthController
             return $this->redirectTo($redirect, ['error' => 'provider']);
         }
 
-        $identity = $provider->handleCallback(
+        $proven = $provider->handleCallback(
             (string) $request->get_param('code'),
             $stored['nonce'],
             $this->callbackUrl(),
             $stored['code_verifier'],
         );
 
-        if ($identity === null) {
+        if ($proven === null) {
             return $this->redirectTo($redirect, ['error' => 'verification']);
         }
+
+        // Into Fellowship's own type, which the audience contract carries.
+        $identity = VerifiedIdentity::fromProvider($proven);
 
         // The audience is consulted here as well as at its exchange, so
         // somebody it will not admit is told so in the browser -- where
@@ -927,9 +930,9 @@ final class DeviceAuthController
             return new WP_Error('fellowship_wrong_flow', 'That provider does not accept an ID token.', ['status' => 400]);
         }
 
-        $identity = $provider->verifyIdToken($idToken, $stored['nonce']);
+        $proven = $provider->verifyIdToken($idToken, $stored['nonce']);
 
-        return $identity ?? new WP_Error(
+        return $proven !== null ? VerifiedIdentity::fromProvider($proven) : new WP_Error(
             'fellowship_bad_id_token',
             'That sign-in could not be verified.',
             ['status' => 401],

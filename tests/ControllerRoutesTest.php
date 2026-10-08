@@ -11,9 +11,10 @@ use Fellowship\Auth\DeviceTokenMinter;
 use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
-use Fellowship\Auth\ProviderRegistry;
+use Guardian\ProviderRegistry;
 use Fellowship\Auth\StateStore;
 use Fellowship\Auth\VerifiedIdentity;
+use Guardian\VerifiedIdentity as ProviderIdentity;
 use Fellowship\Core\RateLimiter;
 use Fellowship\Core\Settings;
 use Fellowship\Crypto\MessageSealer;
@@ -202,7 +203,7 @@ test('a verified address that is not a members is told so in the browser', funct
     // in with the wrong Google account finds out where they can read
     // it rather than two steps later inside the app.
     $stranger = new StubProvider('google', serverSide: true);
-    $stranger->identity = new VerifiedIdentity('nobody@example.org', 'google', 'sub-1');
+    $stranger->identity = new ProviderIdentity('nobody@example.org', 'google', 'sub-1');
 
     $issued = $this->states->issue('google', CONTROLLER_ROUTES_CALLBACK);
 

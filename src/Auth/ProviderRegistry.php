@@ -8,35 +8,20 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-use Fellowship\Auth\Providers\OAuthProvider;
+use Guardian\ProviderRegistry as GuardianProviderRegistry;
 
 /**
- * The providers this site will accept a sign-in from.
+ * Fellowship's old name for Guardian's provider registry.
  *
- * Registration is the permission model: a provider that is not in here
- * is not merely unconfigured, it is unreachable — the start route
- * answers 400 for a name it does not hold, and there is no second check
- * downstream. Adding Microsoft or Facebook later means registering them
- * in the service provider, and nothing else.
+ * The registry moved to the Guardian library with the providers. This empty
+ * subclass exists only because Freedom's test harness builds an
+ * IdentityBroker with `new Fellowship\Auth\ProviderRegistry()`, and
+ * IdentityBroker now takes Guardian's — which this still is. Fellowship
+ * itself uses Guardian's directly.
+ *
+ * @deprecated Use {@see GuardianProviderRegistry}. Removed once Freedom's
+ *             tests have moved to it.
  */
-final class ProviderRegistry
+final class ProviderRegistry extends GuardianProviderRegistry
 {
-    /** @var array<string, OAuthProvider> */
-    private array $providers = [];
-
-    public function register(OAuthProvider $provider): void
-    {
-        $this->providers[strtolower($provider->name())] = $provider;
-    }
-
-    public function get(string $name): ?OAuthProvider
-    {
-        return $this->providers[strtolower($name)] ?? null;
-    }
-
-    /** @return list<string> */
-    public function names(): array
-    {
-        return array_keys($this->providers);
-    }
 }

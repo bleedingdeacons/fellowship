@@ -8,31 +8,36 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+use Guardian\State\StateStore as GuardianStateStore;
+
 /**
- * The short-lived state that ties an OAuth redirect back to the request
- * that started it.
+ * Fellowship's view of the single-use OAuth state: what Guardian's
+ * {@see GuardianStateStore} stores, plus what Fellowship needs back after the
+ * provider returns.
  *
- * `state` defeats CSRF on the callback; `nonce` binds the returned ID
- * token to this particular sign-in so a token captured elsewhere cannot
- * be replayed here. Both are single-use: {@see consume()} deletes the
- * record before returning it, so a replayed callback finds nothing.
+ * The state, nonce and PKCE verifier — and their single-use semantics — are
+ * Guardian's. What this adds is where the sign-in goes afterwards:
  *
- * <b>A PKCE `code_verifier` rides along for providers that require one.</b>
- * Facebook does — its token endpoint refuses an exchange whose authorise
- * leg carried a `code_challenge` without a matching verifier — and Google,
- * Microsoft and Apple simply leave it null. The verifier never leaves this
- * server: only its SHA-256 challenge goes out on the authorise leg, which
- * is the whole point of the mechanism.
+ * - `device_redirect`, the app URI the callback bounces back to, validated
+ *   when the flow began and out of the provider's reach ever since.
+ * - The audience the sign-in is for, and that audience's opaque context —
+ *   see {@see SignInAudience}. A record written before audiences existed has
+ *   neither, and reads back as Link's with an empty context.
  *
- * <b>So does the audience the sign-in is for</b>, and that audience's
- * opaque context — see {@see SignInAudience}. A record written before
- * audiences existed has neither, and reads back as Link's with an empty
- * context, so a sign-in in flight across the deploy still finishes.
+ * The key prefix is the one this class always used, and Guardian stores these
+ * fields flat beside its own, exactly as this class used to. So a sign-in in
+ * flight across the upgrade still completes.
  */
 final class StateStore
 {
     private const PREFIX = 'fellowship_oauth_state_';
-    private const TTL_SECONDS = 600; // 10 minutes
+
+    private readonly GuardianStateStore $store;
+
+    public function __construct(?GuardianStateStore $store = null)
+    {
+        $this->store = $store ?? new GuardianStateStore(self::PREFIX);
+    }
 
     /**
      * @return array{state: string, nonce: string, code_verifier: string|null}
@@ -44,23 +49,11 @@ final class StateStore
         string $audience = LinkAudience::NAME,
         string $context = '',
     ): array {
-        $state = bin2hex(random_bytes(16));
-        $nonce = bin2hex(random_bytes(16));
-
-        set_transient(
-            self::PREFIX . $state,
-            [
-                'provider'        => $provider,
-                'nonce'           => $nonce,
-                'device_redirect' => $deviceRedirect,
-                'code_verifier'   => $codeVerifier,
-                'audience'        => $audience,
-                'context'         => $context,
-            ],
-            self::TTL_SECONDS,
-        );
-
-        return ['state' => $state, 'nonce' => $nonce, 'code_verifier' => $codeVerifier];
+        return $this->store->issue($provider, $codeVerifier, [
+            'device_redirect' => $deviceRedirect,
+            'audience'        => $audience,
+            'context'         => $context,
+        ]);
     }
 
     /**
@@ -75,28 +68,23 @@ final class StateStore
      */
     public function consume(string $state): ?array
     {
-        if ($state === '') {
+        $stored = $this->store->consume($state);
+        if ($stored === null) {
             return null;
         }
 
-        $key = self::PREFIX . $state;
-        $stored = get_transient($key);
-        if (!is_array($stored)) {
-            return null;
-        }
-
-        delete_transient($key);
-
-        $verifier = $stored['code_verifier'] ?? null;
-        $audience = (string) ($stored['audience'] ?? '');
+        $extra = $stored['extra'];
+        $redirect = $extra['device_redirect'] ?? '';
+        $audience = $extra['audience'] ?? '';
+        $context = $extra['context'] ?? '';
 
         return [
-            'provider'        => (string) ($stored['provider'] ?? ''),
-            'nonce'           => (string) ($stored['nonce'] ?? ''),
-            'device_redirect' => (string) ($stored['device_redirect'] ?? ''),
-            'code_verifier'   => is_string($verifier) && $verifier !== '' ? $verifier : null,
-            'audience'        => $audience !== '' ? $audience : LinkAudience::NAME,
-            'context'         => (string) ($stored['context'] ?? ''),
+            'provider'        => $stored['provider'],
+            'nonce'           => $stored['nonce'],
+            'device_redirect' => is_string($redirect) ? $redirect : '',
+            'code_verifier'   => $stored['code_verifier'],
+            'audience'        => is_string($audience) && $audience !== '' ? $audience : LinkAudience::NAME,
+            'context'         => is_string($context) ? $context : '',
         ];
     }
 }

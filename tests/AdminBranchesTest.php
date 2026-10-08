@@ -168,7 +168,7 @@ test('a client secret survives the slashes WordPress adds', function () {
     $settings = new Settings();
     $secret = 'a"secret\with-both';
 
-    $_POST['google_client_secret'] = addslashes($secret);
+    $_POST['client_secret_google'] = addslashes($secret);
 
     expect((new SettingsPage($settings))->saveFromRequest())->toBe('saved');
     expect($settings->getClientSecret('google'))->toBe($secret);

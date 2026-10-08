@@ -8,13 +8,11 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-use Fellowship\Auth\Providers\AppleProvider;
-use Fellowship\Auth\Providers\FacebookProvider;
-use Fellowship\Auth\Providers\GoogleProvider;
-use Fellowship\Auth\Providers\MicrosoftProvider;
 use Fellowship\Core\Settings;
 use Fellowship\Push\ServiceAccount;
 use Fellowship\Rest\DeviceAuthController;
+use Guardian\Admin\ProviderCredentialsSection;
+use Guardian\Admin\ProviderField;
 
 use function rest_url;
 
@@ -70,72 +68,14 @@ final class SettingsPage
 
         $this->notice();
 
-        echo '<p>' . esc_html__('The Link app signs in through these providers. The redirect URI to register with each of them is:', 'fellowship') . '</p>';
-        echo '<p><code>' . esc_html(rest_url(DeviceAuthController::NAMESPACE . '/auth/callback')) . '</code></p>';
+        echo '<p>' . esc_html__('The Link app signs in through these providers. Register the redirect URI shown under each one with that provider.', 'fellowship') . '</p>';
 
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         echo '<input type="hidden" name="action" value="' . esc_attr(self::SAVE_ACTION) . '">';
         wp_nonce_field(self::NONCE);
 
-        echo '<h2>' . esc_html__('Sign in with Google', 'fellowship') . '</h2>';
-        echo '<table class="form-table" role="presentation"><tbody>';
-        $this->textRow(
-            'google_client_id',
-            __('Client ID', 'fellowship'),
-            $this->settings->getClientId(GoogleProvider::PROVIDER_NAME),
-        );
-        $this->secretRow(
-            'google_client_secret',
-            __('Client secret', 'fellowship'),
-            $this->settings->getClientSecret(GoogleProvider::PROVIDER_NAME) !== '',
-        );
-        echo '</tbody></table>';
-
-        echo '<h2>' . esc_html__('Sign in with Microsoft', 'fellowship') . '</h2>';
-        echo '<table class="form-table" role="presentation"><tbody>';
-        $this->textRow(
-            'microsoft_client_id',
-            __('Application (client) ID', 'fellowship'),
-            $this->settings->getClientId(MicrosoftProvider::PROVIDER_NAME),
-        );
-        $this->secretRow(
-            'microsoft_client_secret',
-            __('Client secret', 'fellowship'),
-            $this->settings->getClientSecret(MicrosoftProvider::PROVIDER_NAME) !== '',
-        );
-        echo '<tr><td colspan="2"><p class="description">'
-            . esc_html__('Register the app in Entra as "Personal Microsoft accounts only". Work and school accounts are refused on purpose: only the consumer tenant guarantees the address in the token is one Microsoft verified.', 'fellowship')
-            . '</p></td></tr>';
-        echo '</tbody></table>';
-
-        echo '<h2>' . esc_html__('Sign in with Facebook', 'fellowship') . '</h2>';
-        echo '<table class="form-table" role="presentation"><tbody>';
-        $this->textRow(
-            'facebook_client_id',
-            __('App ID', 'fellowship'),
-            $this->settings->getClientId(FacebookProvider::PROVIDER_NAME),
-        );
-        $this->secretRow(
-            'facebook_client_secret',
-            __('App secret', 'fellowship'),
-            $this->settings->getClientSecret(FacebookProvider::PROVIDER_NAME) !== '',
-        );
-        echo '<tr><td colspan="2"><p class="description">'
-            . esc_html__('Facebook Login must have the "openid" and "email" permissions. Nothing else is requested.', 'fellowship')
-            . '</p></td></tr>';
-        echo '</tbody></table>';
-
-        echo '<h2>' . esc_html__('Sign in with Apple', 'fellowship') . '</h2>';
-        echo '<table class="form-table" role="presentation"><tbody>';
-        $this->textRow(
-            'apple_client_id',
-            __('Service ID (audience)', 'fellowship'),
-            $this->settings->getClientId(AppleProvider::PROVIDER_NAME),
-        );
-        echo '<tr><td colspan="2"><p class="description">'
-            . esc_html__('Apple signs in on the handset itself, so no client secret is needed here — only the identifier the ID token is issued for.', 'fellowship')
-            . '</p></td></tr>';
-        echo '</tbody></table>';
+        echo '<h2>' . esc_html__('Sign-in providers', 'fellowship') . '</h2>';
+        $this->providerSection()->render();
 
         echo '<h2>' . esc_html__('Push notifications', 'fellowship') . '</h2>';
         echo '<table class="form-table" role="presentation"><tbody>';
@@ -209,47 +149,10 @@ final class SettingsPage
      */
     public function saveFromRequest(): string
     {
-        $this->settings->setClientId(
-            GoogleProvider::PROVIDER_NAME,
-            sanitize_text_field((string) wp_unslash($_POST['google_client_id'] ?? '')),
-        );
-        $this->settings->setClientId(
-            AppleProvider::PROVIDER_NAME,
-            sanitize_text_field((string) wp_unslash($_POST['apple_client_id'] ?? '')),
-        );
-
-        $this->settings->setClientId(
-            MicrosoftProvider::PROVIDER_NAME,
-            sanitize_text_field((string) wp_unslash($_POST['microsoft_client_id'] ?? '')),
-        );
-        $this->settings->setClientId(
-            FacebookProvider::PROVIDER_NAME,
-            sanitize_text_field((string) wp_unslash($_POST['facebook_client_id'] ?? '')),
-        );
-
-        // An empty secret field means "leave it alone", not "clear it" —
-        // the field is never populated with the stored value, so an empty
-        // submission is the normal case for anyone editing something else
-        // on this screen. Clearing is the checkbox's job.
-        //
-        // Extracted to a loop when the second and third providers arrived:
-        // three copies of the same six lines is where one of them
-        // eventually gets the wrong constant pasted into it.
-        foreach (
-            [
-            GoogleProvider::PROVIDER_NAME    => 'google_client_secret',
-            MicrosoftProvider::PROVIDER_NAME => 'microsoft_client_secret',
-            FacebookProvider::PROVIDER_NAME  => 'facebook_client_secret',
-            ] as $provider => $field
-        ) {
-            $submitted = trim((string) wp_unslash($_POST[$field] ?? ''));
-
-            if (!empty($_POST['clear_' . $field])) {
-                $this->settings->setClientSecret($provider, '');
-            } elseif ($submitted !== '') {
-                $this->settings->setClientSecret($provider, $submitted);
-            }
-        }
+        // Client ids and secrets: Guardian's section unslashes, sanitises
+        // the ids, and treats an empty secret field as "leave it alone" and
+        // only the explicit tick as "clear it".
+        $this->providerSection()->save($_POST);
 
         // wp_unslash, and this is the field that made the omission
         // visible. WordPress runs wp_magic_quotes() over $_POST on every
@@ -287,28 +190,21 @@ final class SettingsPage
         return 'saved';
     }
 
-    private function textRow(string $name, string $label, string $value): void
+    /**
+     * The client id and secret rows for the four providers, from Guardian.
+     * Every provider but Apple comes back to the one callback; Apple signs
+     * in on the handset and has no redirect.
+     */
+    private function providerSection(): ProviderCredentialsSection
     {
-        echo '<tr><th scope="row"><label for="' . esc_attr($name) . '">' . esc_html($label) . '</label></th><td>';
-        echo '<input type="text" name="' . esc_attr($name) . '" id="' . esc_attr($name)
-            . '" class="regular-text" value="' . esc_attr($value) . '">';
-        echo '</td></tr>';
-    }
+        $callbackUrl = rest_url(DeviceAuthController::NAMESPACE . '/auth/callback');
 
-    private function secretRow(string $name, string $label, bool $configured): void
-    {
-        echo '<tr><th scope="row"><label for="' . esc_attr($name) . '">' . esc_html($label) . '</label></th><td>';
-        echo '<input type="password" name="' . esc_attr($name) . '" id="' . esc_attr($name)
-            . '" class="regular-text" autocomplete="new-password" placeholder="'
-            . esc_attr__('Leave blank to keep what is stored', 'fellowship') . '">';
-        echo '<p class="description">' . esc_html(
-            $configured
-                ? __('A secret is stored.', 'fellowship')
-                : __('No secret is stored — Google sign-in will not work.', 'fellowship')
-        ) . '</p>';
-        echo '<label><input type="checkbox" name="clear_' . esc_attr($name) . '" value="1"> '
-            . esc_html__('Clear the stored secret', 'fellowship') . '</label>';
-        echo '</td></tr>';
+        return new ProviderCredentialsSection($this->settings, [
+            ProviderField::google($callbackUrl),
+            ProviderField::microsoft($callbackUrl),
+            ProviderField::facebook($callbackUrl),
+            ProviderField::apple(),
+        ]);
     }
 
     private function fcmStatus(): string

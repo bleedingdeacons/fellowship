@@ -131,9 +131,9 @@ test('naming no device is refused', function () {
 
 test('the provider credentials are saved', function () {
     $settings = new Settings();
-    $_POST['google_client_id'] = 'google-client-id';
-    $_POST['microsoft_client_id'] = 'ms-client-id';
-    $_POST['google_client_secret'] = 'a-secret';
+    $_POST['client_id_google'] = 'google-client-id';
+    $_POST['client_id_microsoft'] = 'ms-client-id';
+    $_POST['client_secret_google'] = 'a-secret';
 
     expect((new SettingsPage($settings))->saveFromRequest())->toBe('saved');
     expect($settings->getClientId('google'))->toBe('google-client-id');
@@ -149,7 +149,7 @@ test('an empty secret field leaves the stored one alone', function () {
     $settings = new Settings();
     $settings->setClientSecret('google', 'a-secret');
 
-    $_POST['google_client_secret'] = '';
+    $_POST['client_secret_google'] = '';
 
     (new SettingsPage($settings))->saveFromRequest();
 
@@ -160,7 +160,7 @@ test('the checkbox is how a secret is cleared', function () {
     $settings = new Settings();
     $settings->setClientSecret('google', 'a-secret');
 
-    $_POST['clear_google_client_secret'] = '1';
+    $_POST['clear_secret_google'] = '1';
 
     (new SettingsPage($settings))->saveFromRequest();
 

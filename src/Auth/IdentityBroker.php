@@ -12,6 +12,7 @@ use Fellowship\Devices\CurrentDevice;
 use Fellowship\Devices\DeviceRepository;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Rest\DeviceAuthController;
+use Guardian\ProviderRegistry;
 use WP_Error;
 
 use function rest_url;

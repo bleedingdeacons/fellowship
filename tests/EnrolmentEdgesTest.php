@@ -11,7 +11,7 @@ use Fellowship\Auth\DeviceTokenMinter;
 use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
-use Fellowship\Auth\ProviderRegistry;
+use Guardian\ProviderRegistry;
 use Fellowship\Auth\StateStore;
 use Fellowship\Auth\VerifiedIdentity;
 use Fellowship\Core\RateLimiter;

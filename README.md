@@ -372,6 +372,14 @@ them changes a second plugin:
 - `MemberGate`
 - `MessageSealer` and `DevicePublicKey`, whose envelope Freedom reuses
 - `RateLimiter`
+- `ProviderRegistry` — deprecated, and only for Freedom's tests, which still
+  build the broker with it; it is an empty subclass of Guardian's and goes
+  once they use Guardian's directly.
+
+`VerifiedIdentity` stayed Fellowship's own type when the providers moved to
+Guardian, precisely because it is on this list: a provider's answer is
+converted at the callback and the ID-token exchange, and nothing an audience
+sees changed.
 
 ## Conventions
 
@@ -379,6 +387,14 @@ them changes a second plugin:
 `FELLOWSHIP_KILL` kill switch, and a `fellowship/loaded` action. It
 registers into Unity's container on `unity/loaded` and has no container
 of its own, like Trumpet and Promises.
+
+The OAuth providers, the ID-token verifier and the sign-in state come from
+the [Guardian](https://github.com/bleedingdeacons/guardian) library, which
+Fellowship requires through Composer and ships in its own `vendor/`. Reach
+bundles it too; whichever plugin loads it first supplies it to both, so the
+two move to a new Guardian major together. What stays here is everything
+Link-specific: the device-code exchange, the audiences, the member gate and
+enrolment.
 
 ## Development
 

@@ -34,6 +34,13 @@ define('FELLOWSHIP_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('FELLOWSHIP_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('FELLOWSHIP_PLUGIN_FILE', __FILE__);
 
+// Load Composer autoloader if present. It supplies the Guardian library, which
+// does the OAuth sign-in; the production build ships it in vendor/.
+$fellowship_autoloader = FELLOWSHIP_PLUGIN_DIR . 'vendor/autoload.php';
+if (file_exists($fellowship_autoloader)) {
+    require_once $fellowship_autoloader;
+}
+
 // Autoloader for the Fellowship namespace.
 spl_autoload_register(function ($class) {
     try {
