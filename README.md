@@ -364,11 +364,27 @@ add_action('fellowship/loaded', function ($container) {
 Sign-ins already in flight when this deploys keep working: a state or a
 code written before audiences existed reads as Link's.
 
+**An audience may bring its own OAuth client.** By default every browser
+sign-in uses the one client in Fellowship's settings, so a Register tablet
+signing in through Freedom was shown Link's Google consent screen. An
+audience that also implements `BringsOwnClient` can name a client of its
+own for a sign-in (`clientFor($provider, $context)`, null for Fellowship's).
+Fellowship then uses it for that sign-in's authorization URL, its code
+exchange and its ID-token audience check. It is asked at the start and
+again at the callback with the same context. The registry is still the
+permission model: a provider Fellowship did not register stays
+unreachable, and anything doubtful falls back to Fellowship's own client.
+Each such client registers Fellowship's callback,
+`/wp-json/fellowship/v1/auth/callback`, as an authorized redirect URI.
+Link brings none, so its sign-in is unchanged.
+
 **Must agree.** Freedom now depends on these classes. Changing any of
 them changes a second plugin:
 
 - `IdentityBroker`, `SignInAudience`, `BrokeredIdentity`, `LinkSession`,
   `VerifiedIdentity`
+- `BringsOwnClient` and `ProviderClient`, through which an audience signs
+  its people in with its own OAuth client (see below)
 - `MemberGate`
 - `MessageSealer` and `DevicePublicKey`, whose envelope Freedom reuses
 - `RateLimiter`

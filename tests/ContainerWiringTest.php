@@ -104,7 +104,21 @@ test('every service can be built', function (string $service) {
     [FcmTransport::class],
     [\Fellowship\Auth\IdentityBroker::class],
     [\Fellowship\Auth\AudienceRegistry::class],
+    [\Fellowship\Auth\AudienceProviders::class],
 ]);
+
+test('an audience\'s own Google client reaches Google as that client', function () {
+    // The real factory and Guardian's real provider: the authorization URL
+    // names the audience's client id, not the one in Fellowship's settings.
+    $provider = $this->container->get(\Fellowship\Auth\AudienceProviders::class)
+        ->for(GoogleProvider::PROVIDER_NAME, new \Fellowship\Tests\Support\StubClientAudience(), 'ctx-1');
+
+    expect($provider)->toBeInstanceOf(GoogleProvider::class);
+    expect($provider)->not->toBe($this->container->get(ProviderRegistry::class)->get(GoogleProvider::PROVIDER_NAME));
+
+    parse_str((string) parse_url($provider->getAuthorizationUrl('s', 'n', 'https://example.org/cb'), PHP_URL_QUERY), $query);
+    expect($query['client_id'])->toBe('register-client.apps.googleusercontent.com');
+});
 
 test('every sign in provider is registered', function () {
     // The list that is easy to extend in half: a provider class with
