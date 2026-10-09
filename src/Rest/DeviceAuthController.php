@@ -8,6 +8,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+use Fellowship\Auth\AudienceProviders;
 use Fellowship\Auth\AudienceRegistry;
 use Fellowship\Auth\DeviceCodeStore;
 use Fellowship\Auth\LinkAudience;
@@ -88,6 +89,9 @@ final class DeviceAuthController
     /** Link's audience, and any another plugin registered. See SignInAudience. */
     private readonly AudienceRegistry $audiences;
 
+    /** The provider for another audience's callback, which may be its own client. See BringsOwnClient. */
+    private readonly AudienceProviders $clients;
+
     public function __construct(
         private readonly DeviceRepository $devices,
         private readonly DeviceTokenMinter $minter,
@@ -101,11 +105,15 @@ final class DeviceAuthController
         private readonly AuditLogger $auditLogger,
         private readonly PasswordAuthenticator $passwords,
         ?AudienceRegistry $audiences = null,
+        ?AudienceProviders $clients = null,
     ) {
         // Defaulted so a caller that predates audiences gets Link's rules
         // and nothing else, which is exactly the behaviour it was written
         // against.
         $this->audiences = $audiences ?? new AudienceRegistry(new LinkAudience($redirects, $gate));
+        // The same, for a caller that predates audiences bringing their own
+        // client: Fellowship's providers only.
+        $this->clients = $clients ?? AudienceProviders::withoutOverrides($providers);
     }
 
     public function register(): void
@@ -365,7 +373,10 @@ final class DeviceAuthController
             return $this->redirectTo($redirect, ['error' => 'declined']);
         }
 
-        $provider = $this->providers->get($stored['provider']);
+        // The same client the sign-in started with: the audience is asked
+        // again, with the context it was asked with then. Link brings none,
+        // so Link's callback gets Fellowship's provider exactly as before.
+        $provider = $this->clients->for($stored['provider'], $audience, $stored['context']);
         if ($provider === null) {
             return $this->redirectTo($redirect, ['error' => 'provider']);
         }

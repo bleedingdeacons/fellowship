@@ -25,10 +25,11 @@ use function rest_url;
  * each carry their own OAuth classes, line for line, because neither
  * could use the other's. A third copy for Freedom would be a third place
  * for a JWT check to drift. So the browser leg stays here, with the one
- * Google client and the one registered redirect URI it already has, and
- * another plugin reaches it through this — registering a
- * {@see SignInAudience} that owns the two rules Link's flow used to
- * hard-code: where a code may be sent, and to whom.
+ * registered redirect URI it already has, and another plugin reaches it
+ * through this — registering a {@see SignInAudience} that owns the two
+ * rules Link's flow used to hard-code: where a code may be sent, and to
+ * whom. An audience may also bring its own OAuth client, so its people see
+ * its own consent screen rather than Link's: see {@see BringsOwnClient}.
  *
  * <b>Two ways in.</b>
  *
@@ -50,15 +51,23 @@ final class IdentityBroker
     /** Enough for an application slug and a PKCE challenge, with room to spare. */
     public const MAX_CONTEXT_BYTES = 512;
 
+    /** Fellowship's provider, or the audience's own client. See BringsOwnClient. */
+    private readonly AudienceProviders $clients;
+
     public function __construct(
         private readonly AudienceRegistry $audiences,
-        private readonly ProviderRegistry $providers,
+        ProviderRegistry $providers,
         private readonly StateStore $stateStore,
         private readonly DeviceCodeStore $codes,
         private readonly CurrentDevice $currentDevice,
         private readonly DeviceRepository $devices,
         private readonly MemberGate $gate,
+        ?AudienceProviders $clients = null,
     ) {
+        // Defaulted, and last, so a caller written before audiences could
+        // bring a client -- Freedom's test harness builds this -- still
+        // compiles, and gets Fellowship's providers only.
+        $this->clients = $clients ?? AudienceProviders::withoutOverrides($providers);
     }
 
     public function registerAudience(SignInAudience $audience): void
@@ -93,7 +102,7 @@ final class IdentityBroker
             return new WP_Error('fellowship_bad_context', 'The sign-in context is too long.', ['status' => 400]);
         }
 
-        $oauth = $this->providers->get($provider);
+        $oauth = $this->clients->for($provider, $target, $context);
         if ($oauth === null) {
             return new WP_Error('fellowship_unknown_provider', 'Unknown sign-in provider.', ['status' => 400]);
         }

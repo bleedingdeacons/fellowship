@@ -12,6 +12,8 @@ use Fellowship\Admin\ComposePage;
 use Fellowship\Admin\DevicesPage;
 use Fellowship\Admin\MessagesPage;
 use Fellowship\Admin\SettingsPage;
+use Closure;
+use Fellowship\Auth\AudienceProviders;
 use Fellowship\Auth\AudienceRegistry;
 use Fellowship\Auth\DeviceCodeStore;
 use Fellowship\Auth\DeviceRedirectValidator;
@@ -23,12 +25,14 @@ use Unity\Auth\Interfaces\PasswordCredentialRepository;
 use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
 use Fellowship\Auth\StateStore;
+use Guardian\Credentials\CredentialStore;
 use Guardian\Jwt\JwtVerifier;
 use Guardian\ProviderRegistry;
 use Guardian\Providers\AppleProvider;
 use Guardian\Providers\FacebookProvider;
 use Guardian\Providers\GoogleProvider;
 use Guardian\Providers\MicrosoftProvider;
+use Guardian\Providers\OAuthProvider;
 use Fellowship\Crypto\MessageSealer;
 use Fellowship\Devices\CurrentDevice;
 use Fellowship\Devices\DeviceRepository;
@@ -70,6 +74,32 @@ use Unity\Positions\Interfaces\PositionRepository;
  */
 final class FellowshipServiceProvider
 {
+    /** Every provider Fellowship registers, by Guardian's name for it. */
+    private const PROVIDERS = [
+        GoogleProvider::PROVIDER_NAME,
+        MicrosoftProvider::PROVIDER_NAME,
+        FacebookProvider::PROVIDER_NAME,
+        AppleProvider::PROVIDER_NAME,
+    ];
+
+    /**
+     * Builds a named provider around a credential store: Settings for the
+     * registry, an audience's own client for {@see AudienceProviders}.
+     * One definition, so the two can never be built differently.
+     *
+     * @return Closure(string, CredentialStore): ?OAuthProvider
+     */
+    private static function providerFactory(JwtVerifier $verifier): Closure
+    {
+        return static fn(string $name, CredentialStore $credentials): ?OAuthProvider => match ($name) {
+            GoogleProvider::PROVIDER_NAME    => new GoogleProvider($credentials, $verifier, UserAgent::plugin()),
+            MicrosoftProvider::PROVIDER_NAME => new MicrosoftProvider($credentials, $verifier, UserAgent::plugin()),
+            FacebookProvider::PROVIDER_NAME  => new FacebookProvider($credentials, $verifier, UserAgent::plugin()),
+            AppleProvider::PROVIDER_NAME     => new AppleProvider($credentials, $verifier),
+            default                          => null,
+        };
+    }
+
     public function register(Container $container): void
     {
         // ── Core ──
@@ -96,13 +126,22 @@ final class FellowshipServiceProvider
             // ProviderRegistry. The providers are Guardian's; Settings is
             // the CredentialStore they read client ids and secrets from.
             $settings = $c->get(Settings::class);
-            $verifier = $c->get(JwtVerifier::class);
-            $registry->register(new GoogleProvider($settings, $verifier, UserAgent::plugin()));
-            $registry->register(new MicrosoftProvider($settings, $verifier, UserAgent::plugin()));
-            $registry->register(new FacebookProvider($settings, $verifier, UserAgent::plugin()));
-            $registry->register(new AppleProvider($settings, $verifier));
+            $build = self::providerFactory($c->get(JwtVerifier::class));
+            foreach (self::PROVIDERS as $name) {
+                $provider = $build($name, $settings);
+                if ($provider !== null) {
+                    $registry->register($provider);
+                }
+            }
             return $registry;
         });
+
+        // The same providers rebuilt around an audience's own client, for
+        // an audience that brings one. See BringsOwnClient.
+        $container->register(AudienceProviders::class, fn(ContainerInterface $c) => new AudienceProviders(
+            $c->get(ProviderRegistry::class),
+            self::providerFactory($c->get(JwtVerifier::class)),
+        ));
 
         // ── Devices ──
         $container->register(DeviceRepository::class, function () {
@@ -131,6 +170,7 @@ final class FellowshipServiceProvider
             $c->get(CurrentDevice::class),
             $c->get(DeviceRepository::class),
             $c->get(MemberGate::class),
+            $c->get(AudienceProviders::class),
         ));
 
         // ── Messages ──
@@ -230,6 +270,7 @@ final class FellowshipServiceProvider
             $c->get(AuditLogger::class),
             $c->get(PasswordAuthenticator::class),
             $c->get(AudienceRegistry::class),
+            $c->get(AudienceProviders::class),
         ));
 
         $container->register(MessageController::class, fn(ContainerInterface $c) => new MessageController(
