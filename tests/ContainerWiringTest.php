@@ -100,7 +100,6 @@ test('every service can be built', function (string $service) {
     [RecipientRepository::class],
     [PasswordCredentialRepository::class],
     [PasswordAuthenticator::class],
-    [ProviderRegistry::class],
     [FcmTransport::class],
     [\Fellowship\Auth\IdentityBroker::class],
     [\Fellowship\Auth\AudienceRegistry::class],
@@ -114,17 +113,39 @@ test('an audience\'s own Google client reaches Google as that client', function 
         ->for(GoogleProvider::PROVIDER_NAME, new \Fellowship\Tests\Support\StubClientAudience(), 'ctx-1');
 
     expect($provider)->toBeInstanceOf(GoogleProvider::class);
-    expect($provider)->not->toBe($this->container->get(ProviderRegistry::class)->get(GoogleProvider::PROVIDER_NAME));
+    expect($provider)->not->toBe($this->container->get(FellowshipServiceProvider::PROVIDER_REGISTRY)->get(GoogleProvider::PROVIDER_NAME));
 
     parse_str((string) parse_url($provider->getAuthorizationUrl('s', 'n', 'https://example.org/cb'), PHP_URL_QUERY), $query);
     expect($query['client_id'])->toBe('register-client.apps.googleusercontent.com');
+});
+
+test('the provider registry and verifier are built under Fellowship\'s own ids', function () {
+    expect($this->container->get(FellowshipServiceProvider::PROVIDER_REGISTRY))->toBeInstanceOf(ProviderRegistry::class);
+    expect($this->container->get(FellowshipServiceProvider::JWT_VERIFIER))->toBeInstanceOf(\Guardian\Jwt\JwtVerifier::class);
+});
+
+test('nothing is registered under a Guardian class name', function () {
+    // Unity's container is shared with every plugin that uses Guardian,
+    // and the last to register a class name wins it. Until 2.8.1 this
+    // registry replaced Reach's, and Reach signed people in with
+    // Fellowship's Google client.
+    foreach ($this->container->registeredIds() as $id) {
+        expect(str_starts_with($id, 'Guardian\\'))->toBeFalse('Fellowship registered ' . $id . ', which another plugin can overwrite.');
+    }
+});
+
+test('another plugin\'s Guardian registry does not reach Fellowship\'s sign in', function () {
+    $this->container->register(ProviderRegistry::class, fn() => new ProviderRegistry());
+
+    expect($this->container->get(FellowshipServiceProvider::PROVIDER_REGISTRY)->get(GoogleProvider::PROVIDER_NAME))
+        ->toBeInstanceOf(GoogleProvider::class);
 });
 
 test('every sign in provider is registered', function () {
     // The list that is easy to extend in half: a provider class with
     // no registration is a server that refuses it while the app
     // offers the button.
-    $registry = $this->container->get(ProviderRegistry::class);
+    $registry = $this->container->get(FellowshipServiceProvider::PROVIDER_REGISTRY);
 
     $expected = [
         GoogleProvider::PROVIDER_NAME,
@@ -139,7 +160,7 @@ test('every sign in provider is registered', function () {
 });
 
 test('an unknown provider is not invented', function () {
-    expect($this->container->get(ProviderRegistry::class)->get('myspace'))->toBeNull();
+    expect($this->container->get(FellowshipServiceProvider::PROVIDER_REGISTRY)->get('myspace'))->toBeNull();
 });
 
 test('the same instance comes back each time', function () {
