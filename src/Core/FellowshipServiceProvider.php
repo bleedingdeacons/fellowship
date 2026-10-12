@@ -71,9 +71,22 @@ use Unity\Positions\Interfaces\PositionRepository;
  * the single answer to "may this person use Link?" and four different
  * things consult it. See that class on why it is one object rather than
  * a rule written out four times.
+ *
+ * <b>Guardian's objects are registered under Fellowship's own ids</b>
+ * ({@see self::PROVIDER_REGISTRY}, {@see self::JWT_VERIFIER}), never under
+ * Guardian's class names. Unity's container is shared with every plugin
+ * that uses Guardian, and the last to register a class name wins it: until
+ * 2.8.1 Fellowship's registry replaced Reach's, and Reach signed people in
+ * with Fellowship's Google client.
  */
 final class FellowshipServiceProvider
 {
+    /** Fellowship's Guardian provider registry, read from Fellowship's Settings. */
+    public const PROVIDER_REGISTRY = 'fellowship.guardian.providers';
+
+    /** Fellowship's Guardian ID-token verifier, logging to Fellowship's channel. */
+    public const JWT_VERIFIER = 'fellowship.guardian.jwt';
+
     /** Every provider Fellowship registers, by Guardian's name for it. */
     private const PROVIDERS = [
         GoogleProvider::PROVIDER_NAME,
@@ -113,20 +126,20 @@ final class FellowshipServiceProvider
         ));
         // Guardian's verifier, logging to Fellowship's channel and fetching
         // key sets as Fellowship.
-        $container->register(JwtVerifier::class, fn() => new JwtVerifier(UserAgent::plugin(), 'fellowship'));
+        $container->register(self::JWT_VERIFIER, fn() => new JwtVerifier(UserAgent::plugin(), 'fellowship'));
         $container->register(StateStore::class, fn() => new StateStore());
         $container->register(DeviceCodeStore::class, fn() => new DeviceCodeStore());
         $container->register(DeviceTokenMinter::class, fn() => new DeviceTokenMinter());
         $container->register(DeviceRedirectValidator::class, fn() => new DeviceRedirectValidator());
 
-        $container->register(ProviderRegistry::class, function (ContainerInterface $c) {
+        $container->register(self::PROVIDER_REGISTRY, function (ContainerInterface $c) {
             $registry = new ProviderRegistry();
             // Registration is the permission model — a provider absent
             // from here is unreachable, not merely unconfigured. See
             // ProviderRegistry. The providers are Guardian's; Settings is
             // the CredentialStore they read client ids and secrets from.
             $settings = $c->get(Settings::class);
-            $build = self::providerFactory($c->get(JwtVerifier::class));
+            $build = self::providerFactory($c->get(self::JWT_VERIFIER));
             foreach (self::PROVIDERS as $name) {
                 $provider = $build($name, $settings);
                 if ($provider !== null) {
@@ -139,8 +152,8 @@ final class FellowshipServiceProvider
         // The same providers rebuilt around an audience's own client, for
         // an audience that brings one. See BringsOwnClient.
         $container->register(AudienceProviders::class, fn(ContainerInterface $c) => new AudienceProviders(
-            $c->get(ProviderRegistry::class),
-            self::providerFactory($c->get(JwtVerifier::class)),
+            $c->get(self::PROVIDER_REGISTRY),
+            self::providerFactory($c->get(self::JWT_VERIFIER)),
         ));
 
         // ── Devices ──
@@ -164,7 +177,7 @@ final class FellowshipServiceProvider
         ));
         $container->register(IdentityBroker::class, fn(ContainerInterface $c) => new IdentityBroker(
             $c->get(AudienceRegistry::class),
-            $c->get(ProviderRegistry::class),
+            $c->get(self::PROVIDER_REGISTRY),
             $c->get(StateStore::class),
             $c->get(DeviceCodeStore::class),
             $c->get(CurrentDevice::class),
@@ -264,7 +277,7 @@ final class FellowshipServiceProvider
             $c->get(DeviceRedirectValidator::class),
             $c->get(MemberGate::class),
             $c->get(CurrentDevice::class),
-            $c->get(ProviderRegistry::class),
+            $c->get(self::PROVIDER_REGISTRY),
             $c->get(StateStore::class),
             $c->get(RateLimiter::class),
             $c->get(AuditLogger::class),
