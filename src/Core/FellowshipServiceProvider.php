@@ -278,7 +278,7 @@ final class FellowshipServiceProvider
             $settings = $c->get(Settings::class);
             return new FirebaseSignIn(
                 new FirebaseIdTokenVerifier($c->get(self::JWT_VERIFIER), 'fellowship'),
-                static fn(): string => ServiceAccount::fromJson($settings->getFcmServiceAccount())?->projectId ?? '',
+                static fn(): string => ServiceAccount::fromJson($settings->getFcmServiceAccount())->projectId ?? '',
             );
         });
 
