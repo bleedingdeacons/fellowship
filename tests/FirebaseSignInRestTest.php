@@ -81,7 +81,7 @@ test('a member is enrolled from a native Google sign-in', function () {
 
     expect($response)->toBeInstanceOf(WP_REST_Response::class);
     expect((string) ((array) $response->get_data())['token'])->not->toBe('');
-    expect($this->devices->devices)->toHaveCount(1);
+    expect($this->devices->rows)->toHaveCount(1);
     expect(FakeWpHttp::sentUrl(0))->toBe(FirebaseIdTokenVerifier::JWKS_URL);
 });
 
@@ -89,7 +89,7 @@ test('a native enrolment still needs a public key', function () {
     $response = firebaseRestController()->exchange(firebaseRestEnrolment(firebaseRestToken(), ['public_key' => 'nonsense']));
 
     expect($response)->toBeInstanceOf(WP_Error::class);
-    expect($this->devices->devices)->toBe([]);
+    expect($this->devices->rows)->toBe([]);
 });
 
 test('a verified Google account that is not a member is refused', function () {
@@ -97,7 +97,7 @@ test('a verified Google account that is not a member is refused', function () {
 
     expect($response)->toBeInstanceOf(WP_Error::class);
     expect($response->get_error_code())->toBe('fellowship_not_a_member');
-    expect($this->devices->devices)->toBe([]);
+    expect($this->devices->rows)->toBe([]);
 });
 
 test('a token from another Firebase project is refused as a bad token', function () {
@@ -118,7 +118,7 @@ test('the same token cannot enrol two handsets', function () {
     $second = firebaseRestController()->exchange(firebaseRestEnrolment($token));
 
     expect($second)->toBeInstanceOf(WP_Error::class);
-    expect($this->devices->devices)->toHaveCount(1);
+    expect($this->devices->rows)->toHaveCount(1);
 });
 
 test('with no push service account it reports itself unavailable', function () {
