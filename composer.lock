@@ -8,16 +8,16 @@
     "packages": [
         {
             "name": "bleedingdeacons/guardian",
-            "version": "v1.0.1",
+            "version": "v1.1.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/bleedingdeacons/guardian.git",
-                "reference": "72bbecb1a32c26ecd0d7383b1b7833622a5978f6"
+                "reference": "61941206743aaf63d2929233b3ad1fc380648b1f"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/bleedingdeacons/guardian/zipball/72bbecb1a32c26ecd0d7383b1b7833622a5978f6",
-                "reference": "72bbecb1a32c26ecd0d7383b1b7833622a5978f6",
+                "url": "https://api.github.com/repos/bleedingdeacons/guardian/zipball/61941206743aaf63d2929233b3ad1fc380648b1f",
+                "reference": "61941206743aaf63d2929233b3ad1fc380648b1f",
                 "shasum": ""
             },
             "require": {
@@ -86,10 +86,10 @@
             ],
             "description": "OAuth sign-in for the Bleeding Deacons suite: the Google, Microsoft, Facebook and Apple providers, ID-token verification, single-use sign-in state and the provider-credentials admin section, shared by Fellowship and Reach. A Composer library, not a WordPress plugin.",
             "support": {
-                "source": "https://github.com/bleedingdeacons/guardian/tree/v1.0.1",
+                "source": "https://github.com/bleedingdeacons/guardian/tree/v1.1.0",
                 "issues": "https://github.com/bleedingdeacons/guardian/issues"
             },
-            "time": "2026-10-08T21:12:25+00:00"
+            "time": "2026-10-20T23:05:18+00:00"
         }
     ],
     "packages-dev": [

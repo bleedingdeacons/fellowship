@@ -281,6 +281,16 @@ used.
 the nonce it was given → `exchange` with the state and the ID token.
 There is no browser leg and no client secret.
 
+**Google, native (Android and iOS).** No `start`. The app shows the
+platform's own account picker (Credential Manager, GoogleSignIn), signs in
+to Firebase Auth with the Google credential, and sends the Firebase ID token
+to `exchange` as `firebase_token` — or to `key`, to prove the member before
+a replacement key. The token must be for the Firebase project named by the
+FCM service account under Settings, signed in with `google.com`, under five
+minutes old, and is accepted once. With no service account the route answers
+503 and Link falls back to the browser leg, which stays for that, for
+Microsoft and Facebook, and for builds older than this.
+
 ## Link's log shipping
 
 Not here any more. Until 2026-09-30 Link's Better Stack endpoint and source
