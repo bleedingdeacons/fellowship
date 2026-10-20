@@ -11,6 +11,7 @@ if (!defined('ABSPATH')) {
 use Fellowship\Auth\AudienceProviders;
 use Fellowship\Auth\AudienceRegistry;
 use Fellowship\Auth\DeviceCodeStore;
+use Fellowship\Auth\FirebaseSignIn;
 use Fellowship\Auth\LinkAudience;
 use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Auth\PasswordResetResult;
@@ -48,6 +49,12 @@ use function rest_url;
  * end at {@see exchange()}, which is where the keypair is registered and
  * the token is minted — so there is one place where a device comes into
  * existence, whatever route it took to get there.
+ *
+ * <b>And a third, with no server leg at all.</b> On Android and iOS Link
+ * can sign in to Google natively — the platform's own account picker,
+ * then Firebase Auth — and send the Firebase ID token as
+ * `firebase_token`. It lands in the same {@see exchange()}, and is
+ * accepted by `/auth/device/key` too; see {@see FirebaseSignIn}.
  *
  * <b>The public key is required at enrolment and is not optional
  * later.</b> A device with no key cannot be sent a sealed message, and a
@@ -106,6 +113,7 @@ final class DeviceAuthController
         private readonly PasswordAuthenticator $passwords,
         ?AudienceRegistry $audiences = null,
         ?AudienceProviders $clients = null,
+        private readonly ?FirebaseSignIn $firebase = null,
     ) {
         // Defaulted so a caller that predates audiences gets Link's rules
         // and nothing else, which is exactly the behaviour it was written
@@ -166,6 +174,10 @@ final class DeviceAuthController
                 // The Apple path sends these instead.
                 'state'    => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
                 'id_token' => ['type' => 'string', 'required' => false],
+                // And native Google sign-in sends this alone. Not
+                // sanitized: a JWT is checked byte for byte against its
+                // signature, so altering it could only break a good one.
+                'firebase_token' => ['type' => 'string', 'required' => false],
                 // Not sanitized as text: base64 survives it, but a future
                 // key format need not, and the value is validated properly
                 // by DevicePublicKey either way.
@@ -241,6 +253,7 @@ final class DeviceAuthController
                 'code'     => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
                 'state'    => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
                 'id_token' => ['type' => 'string', 'required' => false],
+                'firebase_token' => ['type' => 'string', 'required' => false],
                 'email'    => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_email'],
                 // Deliberately not sanitized, as on the password route: a
                 // password is an arbitrary string and sanitising it would
@@ -916,13 +929,18 @@ final class DeviceAuthController
             );
         }
 
+        $firebaseToken = (string) $request->get_param('firebase_token');
+        if ($firebaseToken !== '') {
+            return $this->firebaseIdentity($firebaseToken);
+        }
+
         $idToken = (string) $request->get_param('id_token');
         $state   = (string) $request->get_param('state');
 
         if ($idToken === '' || $state === '') {
             return new WP_Error(
                 'fellowship_no_credential',
-                'Send either a sign-in code, or a state and an ID token.',
+                'Send a sign-in code, a state and an ID token, or a Firebase token.',
                 ['status' => 400],
             );
         }
@@ -944,6 +962,33 @@ final class DeviceAuthController
         $proven = $provider->verifyIdToken($idToken, $stored['nonce']);
 
         return $proven !== null ? VerifiedIdentity::fromProvider($proven) : new WP_Error(
+            'fellowship_bad_id_token',
+            'That sign-in could not be verified.',
+            ['status' => 401],
+        );
+    }
+
+    /**
+     * The identity behind a Firebase ID token from native Google sign-in.
+     *
+     * Its own state and nonce are not needed: Guardian pins the token to
+     * this site's Firebase project, insists the sign-in is minutes old,
+     * and spends the token, which between them do what the state does on
+     * the other paths. Refusals stay apart because Link acts on each: 503
+     * means this intergroup has not set it up and the app should use the
+     * browser instead, 401 means the token was no good.
+     */
+    private function firebaseIdentity(string $firebaseToken): VerifiedIdentity|WP_Error
+    {
+        if ($this->firebase === null || !$this->firebase->isConfigured()) {
+            return new WP_Error(
+                'fellowship_firebase_unavailable',
+                'Google sign-in on this device is not set up for this intergroup.',
+                ['status' => 503],
+            );
+        }
+
+        return $this->firebase->verify($firebaseToken) ?? new WP_Error(
             'fellowship_bad_id_token',
             'That sign-in could not be verified.',
             ['status' => 401],

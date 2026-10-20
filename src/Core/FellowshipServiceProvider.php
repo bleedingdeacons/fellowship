@@ -18,6 +18,7 @@ use Fellowship\Auth\AudienceRegistry;
 use Fellowship\Auth\DeviceCodeStore;
 use Fellowship\Auth\DeviceRedirectValidator;
 use Fellowship\Auth\DeviceTokenMinter;
+use Fellowship\Auth\FirebaseSignIn;
 use Fellowship\Auth\IdentityBroker;
 use Fellowship\Auth\LinkAudience;
 use Fellowship\Auth\PasswordAuthenticator;
@@ -26,6 +27,7 @@ use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
 use Fellowship\Auth\StateStore;
 use Guardian\Credentials\CredentialStore;
+use Guardian\Firebase\FirebaseIdTokenVerifier;
 use Guardian\Jwt\JwtVerifier;
 use Guardian\ProviderRegistry;
 use Guardian\Providers\AppleProvider;
@@ -49,6 +51,7 @@ use Fellowship\Messaging\WpdbMessageRepository;
 use Fellowship\Messaging\WpdbRecipientRepository;
 use Fellowship\Push\FcmClient;
 use Fellowship\Push\FcmTransport;
+use Fellowship\Push\ServiceAccount;
 use Fellowship\Rest\DeviceAuthController;
 use Fellowship\Rest\DirectoryController;
 use Fellowship\Rest\MessageController;
@@ -269,6 +272,16 @@ final class FellowshipServiceProvider
             $c->get(PasswordPolicy::class),
         ));
 
+        // Native Google sign-in, pinned to the project Fellowship already
+        // pushes through. See FirebaseSignIn on why that is the right one.
+        $container->register(FirebaseSignIn::class, function (ContainerInterface $c) {
+            $settings = $c->get(Settings::class);
+            return new FirebaseSignIn(
+                new FirebaseIdTokenVerifier($c->get(self::JWT_VERIFIER), 'fellowship'),
+                static fn(): string => ServiceAccount::fromJson($settings->getFcmServiceAccount())?->projectId ?? '',
+            );
+        });
+
         // ── REST ──
         $container->register(DeviceAuthController::class, fn(ContainerInterface $c) => new DeviceAuthController(
             $c->get(DeviceRepository::class),
@@ -284,6 +297,7 @@ final class FellowshipServiceProvider
             $c->get(PasswordAuthenticator::class),
             $c->get(AudienceRegistry::class),
             $c->get(AudienceProviders::class),
+            $c->get(FirebaseSignIn::class),
         ));
 
         $container->register(MessageController::class, fn(ContainerInterface $c) => new MessageController(
