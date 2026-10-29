@@ -295,18 +295,26 @@ final class DeviceAuthController
             return $limited;
         }
 
-        $provider = $this->providers->get((string) $request->get_param('provider'));
+        $named = (string) $request->get_param('provider');
+
+        $provider = $this->providers->get($named);
         if ($provider === null) {
-            return new WP_Error('fellowship_unknown_provider', 'Unknown sign-in provider.', ['status' => 400]);
+            return $this->refused(
+                new WP_Error('fellowship_unknown_provider', 'Unknown sign-in provider.', ['status' => 400]),
+                'start',
+                $named,
+                $request,
+            );
         }
 
         if ($provider->isServerSide()) {
             $redirectUri = (string) $request->get_param('redirect_uri');
             if (!$this->redirects->isAllowed($redirectUri)) {
-                return new WP_Error(
-                    'fellowship_bad_redirect',
-                    'That redirect target is not allowed.',
-                    ['status' => 400],
+                return $this->refused(
+                    new WP_Error('fellowship_bad_redirect', 'That redirect target is not allowed.', ['status' => 400]),
+                    'start',
+                    $named,
+                    $request,
                 );
             }
 
@@ -364,7 +372,12 @@ final class DeviceAuthController
         $stored = $this->stateStore->consume($state);
         if ($stored === null) {
             // Includes a replayed callback, since consume() is one-shot.
-            return new WP_Error('fellowship_bad_state', 'That sign-in has expired. Please try again.', ['status' => 400]);
+            return $this->refused(
+                new WP_Error('fellowship_bad_state', 'That sign-in has expired. Please try again.', ['status' => 400]),
+                'callback',
+                '',
+                $request,
+            );
         }
 
         // Whoever started this sign-in decides where its code may go and
@@ -372,18 +385,28 @@ final class DeviceAuthController
         // audience with the IdentityBroker. See SignInAudience.
         $audience = $this->audiences->get($stored['audience']);
         if ($audience === null) {
-            return new WP_Error('fellowship_bad_state', 'That sign-in has expired. Please try again.', ['status' => 400]);
+            return $this->refused(
+                new WP_Error('fellowship_bad_state', 'That sign-in has expired. Please try again.', ['status' => 400]),
+                'callback',
+                $stored['provider'],
+                $request,
+            );
         }
 
         $redirect = $stored['device_redirect'];
         if (!$audience->allowsRedirect($redirect, $stored['context'])) {
-            return new WP_Error('fellowship_bad_redirect', 'That redirect target is not allowed.', ['status' => 400]);
+            return $this->refused(
+                new WP_Error('fellowship_bad_redirect', 'That redirect target is not allowed.', ['status' => 400]),
+                'callback',
+                $stored['provider'],
+                $request,
+            );
         }
 
         // The user declined at the provider, or the provider refused.
         $error = (string) $request->get_param('error');
         if ($error !== '') {
-            return $this->redirectTo($redirect, ['error' => 'declined']);
+            return $this->refusedInBrowser($redirect, 'declined', $stored['provider'], ['provider_error' => $error]);
         }
 
         // The same client the sign-in started with: the audience is asked
@@ -391,7 +414,7 @@ final class DeviceAuthController
         // so Link's callback gets Fellowship's provider exactly as before.
         $provider = $this->clients->for($stored['provider'], $audience, $stored['context']);
         if ($provider === null) {
-            return $this->redirectTo($redirect, ['error' => 'provider']);
+            return $this->refusedInBrowser($redirect, 'provider', $stored['provider']);
         }
 
         $proven = $provider->handleCallback(
@@ -402,7 +425,7 @@ final class DeviceAuthController
         );
 
         if ($proven === null) {
-            return $this->redirectTo($redirect, ['error' => 'verification']);
+            return $this->refusedInBrowser($redirect, 'verification', $stored['provider']);
         }
 
         // Into Fellowship's own type, which the audience contract carries.
@@ -414,7 +437,7 @@ final class DeviceAuthController
         // later inside the app. For Link that is the member gate.
         $refusal = $audience->refusalFor($identity, $stored['context']);
         if ($refusal !== null) {
-            return $this->redirectTo($redirect, ['error' => $refusal]);
+            return $this->refusedInBrowser($redirect, $refusal, $stored['provider'], ['address' => $identity->email]);
         }
 
         return $this->redirectTo($redirect, [
@@ -429,8 +452,10 @@ final class DeviceAuthController
      */
     public function exchange(WP_REST_Request $request): WP_REST_Response|WP_Error
     {
+        $flow = $this->exchangeFlow($request);
+
         if ($insecure = $this->insecureTransport()) {
-            return $insecure;
+            return $this->refused($insecure, 'exchange', $flow, $request);
         }
 
         if ($limited = $this->rateLimited('exchange')) {
@@ -439,10 +464,14 @@ final class DeviceAuthController
 
         $identity = $this->identityFor($request);
         if ($identity instanceof WP_Error) {
-            return $identity;
+            return $this->refused($identity, 'exchange', $flow, $request);
         }
 
-        return $this->enrolVerified($request, $identity);
+        $enrolled = $this->enrolVerified($request, $identity);
+
+        return $enrolled instanceof WP_Error
+            ? $this->refused($enrolled, 'exchange', $flow, $request, $identity->email)
+            : $enrolled;
     }
 
     /**
@@ -571,8 +600,10 @@ final class DeviceAuthController
      */
     public function password(WP_REST_Request $request): WP_REST_Response|WP_Error
     {
+        $email = (string) $request->get_param('email');
+
         if ($insecure = $this->insecureTransport()) {
-            return $insecure;
+            return $this->refused($insecure, 'password', 'password', $request);
         }
 
         if ($limited = $this->rateLimited('exchange')) {
@@ -580,7 +611,7 @@ final class DeviceAuthController
         }
 
         $identity = $this->passwords->attemptLogin(
-            (string) $request->get_param('email'),
+            $email,
             (string) $request->get_param('password'),
             time(),
         );
@@ -590,14 +621,20 @@ final class DeviceAuthController
             // password, a wrong password and a locked account. Telling
             // them apart would say which addresses belong to members,
             // which is the thing the whole flow is careful about.
-            return new WP_Error(
-                'fellowship_bad_credentials',
-                'Email or password is incorrect.',
-                ['status' => 401],
+            return $this->refused(
+                new WP_Error('fellowship_bad_credentials', 'Email or password is incorrect.', ['status' => 401]),
+                'password',
+                'password',
+                $request,
+                $email,
             );
         }
 
-        return $this->enrolVerified($request, $identity);
+        $enrolled = $this->enrolVerified($request, $identity);
+
+        return $enrolled instanceof WP_Error
+            ? $this->refused($enrolled, 'password', 'password', $request, $identity->email)
+            : $enrolled;
     }
 
     /**
@@ -1024,6 +1061,97 @@ final class DeviceAuthController
             'Too many sign-in attempts. Please wait a few minutes and try again.',
             ['status' => 429],
         );
+    }
+
+    /**
+     * Which credential an exchange carries, in the order
+     * {@see identityFor()} looks for them.
+     */
+    private function exchangeFlow(WP_REST_Request $request): string
+    {
+        return match (true) {
+            (string) $request->get_param('code') !== ''           => 'browser',
+            (string) $request->get_param('firebase_token') !== '' => 'firebase',
+            (string) $request->get_param('id_token') !== ''       => 'id_token',
+            default                                               => 'none',
+        };
+    }
+
+    /**
+     * Log a refused sign-in, and answer the refusal unchanged.
+     *
+     * <b>Why a refusal is logged at all.</b> The audit log records a
+     * handset once it is enrolled, so one that is never let in leaves
+     * nothing behind. Nor can it say for itself: Link is only told where
+     * to ship its logs once it has signed in. This line is the one record
+     * of why a handset was turned away.
+     *
+     * Rate-limited requests are the exception, and pass by without
+     * coming through here: they are the flood, and a line each would
+     * let a flood fill the log as well.
+     */
+    private function refused(
+        WP_Error $refusal,
+        string $step,
+        string $flow,
+        WP_REST_Request $request,
+        string $address = '',
+    ): WP_Error {
+        $data = $refusal->get_error_data();
+
+        self::logRefusal([
+            'step'     => $step,
+            'flow'     => $flow,
+            'refusal'  => $refusal->get_error_code(),
+            'status'   => is_array($data) ? (int) ($data['status'] ?? 0) : 0,
+            'platform' => (string) $request->get_param('platform'),
+            'address'  => $address,
+        ]);
+
+        return $refusal;
+    }
+
+    /**
+     * The callback's own refusals, which go back to the app as an error
+     * on its redirect rather than as a REST error.
+     *
+     * @param array<string, string> $context
+     */
+    private function refusedInBrowser(string $redirect, string $refusal, string $flow, array $context = []): WP_REST_Response
+    {
+        self::logRefusal(['step' => 'callback', 'flow' => $flow, 'refusal' => $refusal] + $context);
+
+        return $this->redirectTo($redirect, ['error' => $refusal]);
+    }
+
+    /**
+     * The address goes in masked: enough for an administrator to see
+     * which account was offered — most often a Google address other than
+     * the one the intergroup holds — without the log becoming a list of
+     * who tried.
+     *
+     * @param array<string, string|int> $context
+     */
+    private static function logRefusal(array $context): void
+    {
+        if (isset($context['address'])) {
+            $context['address'] = self::maskAddress((string) $context['address']);
+        }
+
+        self::logWarning('A sign-in was refused', array_filter($context, static fn($value): bool => $value !== ''));
+    }
+
+    /** `member@example.org` becomes `m***@example.org`. */
+    private static function maskAddress(string $address): string
+    {
+        $address = trim($address);
+        $at      = strrpos($address, '@');
+
+        if ($address === '' || $at === false || $at === 0) {
+            return $address === '' ? '' : '***';
+        }
+
+        return mb_substr($address, 0, 1) . '***' . substr($address, $at);
     }
 
     /** @param array<string, string> $params */
