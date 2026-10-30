@@ -453,7 +453,103 @@ test('an invented token is refused', function () {
     expect($response)->toBeInstanceOf(WP_Error::class);
 });
 
+// ── Logging refusals ──────────────────────────────────────────────
+
+test('a refused exchange is logged with the address masked', function () {
+    // The audit log only hears of a handset once it is in, and the
+    // handset cannot ship its own logs until then, so this line is the
+    // only record of why it was turned away.
+    $code = $this->codes->issue(new VerifiedIdentity('nobody@example.org', 'google', 'sub-1'));
+
+    deviceAuthControllerController()->exchange(deviceAuthControllerRequest([
+        'code' => $code,
+        'public_key' => deviceAuthControllerPublicKey(),
+        'platform' => 'android',
+    ]));
+
+    expect(deviceAuthControllerRefusals())->toBe([[
+        'step'     => 'exchange',
+        'flow'     => 'browser',
+        'refusal'  => 'fellowship_not_a_member',
+        'status'   => 403,
+        'platform' => 'android',
+        'address'  => 'n***@example.org',
+    ]]);
+});
+
+test('a spent code is logged without an address', function () {
+    deviceAuthControllerController()->exchange(exchangeRequest(['code' => 'never-issued']));
+
+    $logged = deviceAuthControllerRefusals();
+
+    expect($logged)->toHaveCount(1);
+    expect($logged[0]['refusal'])->toBe('fellowship_bad_code');
+    expect($logged[0])->not->toHaveKey('address');
+});
+
+test('a wrong password is logged against the address typed', function () {
+    deviceAuthControllerGivenPassword('correct horse battery staple');
+
+    deviceAuthControllerController()->password(deviceAuthControllerRequest([
+        'email' => DEVICE_AUTH_CONTROLLER_MEMBER,
+        'password' => 'wrong',
+        'public_key' => deviceAuthControllerPublicKey(),
+        'platform' => 'ios',
+    ]));
+
+    $logged = deviceAuthControllerRefusals();
+
+    expect($logged)->toHaveCount(1);
+    expect($logged[0])->toMatchArray([
+        'step'     => 'password',
+        'refusal'  => 'fellowship_bad_credentials',
+        'platform' => 'ios',
+        'address'  => 'm***@example.org',
+    ]);
+});
+
+test('a non member turned away in the browser is logged', function () {
+    // Google's browser leg refuses a non-member at the callback, before
+    // the app ever reaches the exchange.
+    $this->google->identity = new \Guardian\VerifiedIdentity('nobody@example.org', 'google', 'sub-9');
+    $issued = $this->states->issue('google', DEVICE_AUTH_CONTROLLER_CALLBACK);
+
+    deviceAuthControllerController()->callback(deviceAuthControllerRequest([
+        'state' => $issued['state'],
+        'code' => 'provider-code',
+    ]));
+
+    expect(deviceAuthControllerRefusals())->toBe([[
+        'step'    => 'callback',
+        'flow'    => 'google',
+        'refusal' => 'not_a_member',
+        'address' => 'n***@example.org',
+    ]]);
+});
+
+test('a sign in that succeeds logs no refusal', function () {
+    deviceAuthControllerController()->exchange(exchangeRequest());
+
+    expect(deviceAuthControllerRefusals())->toBe([]);
+});
+
 // ── Fixtures ──────────────────────────────────────────────────────
+
+/**
+ * The context of every refusal logged so far.
+ *
+ * @return array<int, array<string, mixed>>
+ */
+function deviceAuthControllerRefusals(): array
+{
+    return array_values(array_map(
+        static fn(array $entry): array => $entry[3],
+        array_filter(
+            \BleedingDeacons\WpMocks\WpState::$logs,
+            static fn(array $entry): bool => $entry[2] === 'A sign-in was refused',
+        ),
+    ));
+}
 
 /**
  * The device cap, read from the controller rather than restated.
