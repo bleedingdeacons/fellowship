@@ -16,6 +16,7 @@ use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
 use Fellowship\Core\Settings;
 use Fellowship\Devices\MemberGate;
+use Fellowship\Directory\DirectoryPresenter;
 use Fellowship\Crypto\MessageSealer;
 use Fellowship\Messaging\MessageApi;
 use Fellowship\Messaging\MessageDispatcher;
@@ -265,6 +266,7 @@ function adminScreensComposePage(): ComposePage
         ),
         new InMemoryCommitteeRepository(),
         $gate,
+        new DirectoryPresenter(test()->members, new InMemoryCommitteeRepository(), $gate, test()->devices),
     );
 }
 

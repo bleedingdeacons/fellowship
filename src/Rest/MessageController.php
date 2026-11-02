@@ -23,7 +23,6 @@ use Fellowship\Messaging\MessageRequest;
 use Fellowship\Messaging\RecipientRepository;
 use Fellowship\Messaging\RecipientResolver;
 use Scrutiny\Audit\Interfaces\AuditLogger;
-use Unity\Members\Interfaces\MemberRepository;
 use WP_Error;
 use WP_REST_Request;
 use WP_REST_Response;
@@ -83,7 +82,6 @@ final class MessageController
         private readonly MessageDispatcher $dispatcher,
         private readonly RecipientResolver $resolver,
         private readonly MessageSealer $sealer,
-        private readonly MemberRepository $members,
         private readonly Settings $settings,
         private readonly RateLimiter $rateLimiter,
         private readonly AuditLogger $auditLogger,
@@ -298,7 +296,10 @@ final class MessageController
             'committee'     => $committee,
             'committees'    => $committees,
             'gsrs'          => $gsrs,
-            'member_emails' => $this->emailsForIds($request->get_param('member_ids')),
+            // Ids from the directory, resolved to addresses here, the
+            // same way the admin compose screen's are. The empty-
+            // recipients check below refuses a send none of them reach.
+            'member_emails' => $this->resolver->emailsForIds($request->get_param('member_ids')),
             'reply_to'      => $replyTo,
         ]);
 
@@ -521,39 +522,6 @@ final class MessageController
         }
 
         return false;
-    }
-
-    /**
-     * Turn the opaque member ids the app holds into addresses.
-     *
-     * An id that does not resolve is dropped rather than refused: a
-     * directory the handset cached last week can name somebody who has
-     * since been removed, and failing the whole send for one stale entry
-     * would be a poor answer to an ordinary situation. The send is still
-     * refused if nothing resolves, by the empty-recipients check.
-     *
-     * @return list<string>
-     */
-    private function emailsForIds(mixed $ids): array
-    {
-        if (!is_array($ids)) {
-            return [];
-        }
-
-        $emails = [];
-        foreach ($ids as $id) {
-            $member = $this->members->findById((int) $id);
-            if ($member === null) {
-                continue;
-            }
-
-            $email = strtolower(trim($member->getPersonalEmail()));
-            if ($email !== '') {
-                $emails[] = $email;
-            }
-        }
-
-        return $emails;
     }
 
     /**

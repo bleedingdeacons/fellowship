@@ -260,7 +260,6 @@ function messageSendController(): MessageController
         ),
         new RecipientResolver(test()->members, new InMemoryCommitteeRepository(), $gate),
         $sealer,
-        test()->members,
         test()->settings,
         new RateLimiter(),
         new SpyAuditLogger(),

@@ -320,8 +320,12 @@ if (function_exists('fellowship_send_message')) {
 }
 ```
 
-Address with `committee` (slug or id), `member_emails`, or neither for
-everyone. Returns the message id or a `WP_Error`. There is an action form
+Address with `committee` (slug or id), `member_ids` (the opaque ids the
+directory hands Link), `member_emails`, or none of them for everyone.
+`member_ids` that resolve to nobody are refused with
+`fellowship_no_recipients` rather than dropped, since a request naming
+nobody would be a send to everyone. Returns the message id or a
+`WP_Error`. There is an action form
 too, `fellowship/send_message`, for callers that would rather not depend
 on a function existing.
 

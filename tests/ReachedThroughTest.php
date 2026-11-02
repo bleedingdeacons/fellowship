@@ -68,6 +68,44 @@ beforeEach(function () {
 
 // ── The send API ──────────────────────────────────────────────────
 
+test('members can be named by directory id rather than by address', function () {
+    // How the admin compose screen names one, and how a handset does.
+    $id = reachedThroughApi()->send([
+        'subject'    => 'Your rota',
+        'body'       => 'Can you take Tuesday?',
+        'member_ids' => [7],
+    ]);
+
+    expect($id)->toBeInt();
+    expect(test()->messages->findById((int) $id)?->audienceType)->toBe(Message::AUDIENCE_MEMBERS);
+    expect(array_values(test()->recipients->rows)[0]->memberEmail)->toBe('dave@example.org');
+});
+
+test('ids that name nobody are refused rather than sent to everyone', function () {
+    // Dropped, they would leave a request naming nobody — the broadcast.
+    $result = reachedThroughApi()->send([
+        'subject'    => 'Your rota',
+        'body'       => 'Can you take Tuesday?',
+        'member_ids' => [99],
+    ]);
+
+    expect($result)->toBeInstanceOf(WP_Error::class);
+    expect($result->get_error_code())->toBe('fellowship_no_recipients');
+    expect(test()->messages->rows)->toBe([]);
+});
+
+test('ids and a string of addresses together reach each member once', function () {
+    $id = reachedThroughApi()->send([
+        'subject'       => 'Your rota',
+        'body'          => 'Can you take Tuesday?',
+        'member_ids'    => [7],
+        'member_emails' => 'dave@example.org, nobody@example.org',
+    ]);
+
+    expect($id)->toBeInt();
+    expect(test()->recipients->rows)->toHaveCount(1);
+});
+
 test('a message sent through the API is stored and audited', function () {
     $audit = new SpyAuditLogger();
 

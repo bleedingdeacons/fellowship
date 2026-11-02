@@ -87,6 +87,46 @@ final class RecipientResolver
     }
 
     /**
+     * Turn opaque member ids — the ones the directory hands out — into
+     * addresses.
+     *
+     * <b>Both senders that name individuals come through here</b>: a
+     * handset, with ids from the address book it was given, and the admin
+     * compose screen, with ids from the same address book. Neither ever
+     * handles an address, which is why the conversion is the resolver's
+     * and not theirs.
+     *
+     * An id that does not resolve is dropped rather than refused: a
+     * directory the handset cached last week can name somebody who has
+     * since been removed, and failing the whole send for one stale entry
+     * would be a poor answer to an ordinary situation. A send that then
+     * names nobody is refused by whoever sent it, when nothing resolves.
+     *
+     * @return list<string>
+     */
+    public function emailsForIds(mixed $ids): array
+    {
+        if (!is_array($ids)) {
+            return [];
+        }
+
+        $emails = [];
+        foreach ($ids as $id) {
+            $member = $this->members->findById((int) $id);
+            if ($member === null) {
+                continue;
+            }
+
+            $email = strtolower(trim($member->getPersonalEmail()));
+            if ($email !== '') {
+                $emails[] = $email;
+            }
+        }
+
+        return $emails;
+    }
+
+    /**
      * Every member of every committee named, concatenated.
      *
      * Duplicates are left in: {@see resolve()} keys by email and has had

@@ -307,7 +307,6 @@ final class FellowshipServiceProvider
             $c->get(MessageDispatcher::class),
             $c->get(RecipientResolver::class),
             $c->get(MessageSealer::class),
-            $c->get(MemberRepository::class),
             $c->get(Settings::class),
             $c->get(RateLimiter::class),
             $c->get(AuditLogger::class),
@@ -329,6 +328,9 @@ final class FellowshipServiceProvider
             $c->get(MessageApi::class),
             $c->get(CommitteeRepository::class),
             $c->get(MemberGate::class),
+            // The address book Link is given, so an admin choosing one
+            // member chooses from exactly the list a member would.
+            $c->get(DirectoryPresenter::class),
         ));
         $container->register(DevicesPage::class, fn(ContainerInterface $c) => new DevicesPage(
             $c->get(DeviceRepository::class),
