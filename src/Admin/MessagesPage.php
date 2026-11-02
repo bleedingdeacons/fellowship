@@ -14,8 +14,8 @@ use Fellowship\Messaging\RecipientRepository;
 use Scrutiny\Privacy\PersonalDataPolicy;
 
 /**
- * The message log — what was sent, to whom, and how much of it has been
- * read.
+ * The message log — what was sent, to whom, and how far it has got:
+ * sent, delivered to a handset, read.
  *
  * <b>Guarded by Scrutiny's view capability, not by Fellowship's own.</b>
  * Message bodies are fellowship business held against named members;
@@ -97,13 +97,17 @@ final class MessagesPage
         echo '<th scope="col">' . esc_html__('From', 'fellowship') . '</th>';
         echo '<th scope="col">' . esc_html__('Subject', 'fellowship') . '</th>';
         echo '<th scope="col">' . esc_html__('Audience', 'fellowship') . '</th>';
-        echo '<th scope="col">' . esc_html__('Read', 'fellowship') . '</th>';
+        echo '<th scope="col">' . esc_html__('Delivery', 'fellowship') . '</th>';
         echo '</tr></thead><tbody>';
 
-        foreach ($rows as $message) {
-            $sent = $this->recipients->countForMessage($message->id);
-            $read = $this->recipients->countReadForMessage($message->id);
+        // One grouped query for the page, the one Link's ticks are drawn
+        // from, rather than two counts per row.
+        $receipts = $this->recipients->receiptsFor(array_map(
+            static fn($message): int => $message->id,
+            $rows,
+        ));
 
+        foreach ($rows as $message) {
             echo '<tr>';
             echo '<td>' . esc_html($this->when($message->createdAt)) . '</td>';
             echo '<td>' . esc_html($message->senderName !== '' ? $message->senderName : __('Intergroup', 'fellowship'));
@@ -115,15 +119,58 @@ final class MessagesPage
             echo '<div class="row-actions"><span>' . esc_html($this->excerpt($message->body)) . '</span></div>';
             echo '</td>';
             echo '<td>' . esc_html($this->audience($message->audienceType, $message->audienceRef)) . '</td>';
-            echo '<td>' . esc_html(sprintf('%d / %d', $read, $sent)) . '</td>';
+            echo '<td>' . esc_html($this->delivery($receipts[$message->id] ?? null)) . '</td>';
             echo '</tr>';
         }
 
         echo '</tbody></table>';
 
+        echo '<p class="description">'
+            . esc_html__('Delivered means one of the member\'s handsets has opened the message; read means they have read it in Link. A push Google accepted but no handset has yet opened is still only sent.', 'fellowship')
+            . '</p>';
+
         $this->pagination($page, $total);
 
         echo '</div>';
+    }
+
+    /**
+     * How far a message has got, in the terms of Link's ticks: sent,
+     * delivered, read.
+     *
+     * <b>Delivered is a handset's word, never FCM's.</b> It comes from
+     * the receipt a handset sends once it has the message open, counting
+     * a read as one — see {@see \Fellowship\Messaging\Recipient::isReceived()}.
+     * FCM accepting a push is not shown at all: it says nothing about
+     * whether a handset got it, and this column is looked at precisely
+     * when somebody says a message did not arrive.
+     *
+     * One recipient is said in a word; more are counted, because "read"
+     * of a committee message would otherwise mean "read by somebody".
+     *
+     * @param array{recipients: int, received: int, read: int}|null $counts
+     */
+    private function delivery(?array $counts): string
+    {
+        if ($counts === null || $counts['recipients'] === 0) {
+            return __('Reached nobody', 'fellowship');
+        }
+
+        if ($counts['recipients'] === 1) {
+            return match (true) {
+                $counts['read'] > 0     => __('Read', 'fellowship'),
+                $counts['received'] > 0 => __('Delivered', 'fellowship'),
+                default                 => __('Sent', 'fellowship'),
+            };
+        }
+
+        return sprintf(
+            /* translators: 1: recipients, 2: how many have it on a handset, 3: how many have read it */
+            __('%1$d recipients: %2$d delivered, %3$d read', 'fellowship'),
+            $counts['recipients'],
+            $counts['received'],
+            $counts['read'],
+        );
     }
 
     private function audience(string $type, string $ref): string

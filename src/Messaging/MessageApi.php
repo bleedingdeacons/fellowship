@@ -34,6 +34,13 @@ use function add_action;
  * message from the site's name cannot be. A send from a handset goes
  * through {@see \Fellowship\Rest\MessageController} instead.
  *
+ * <b>Members are named by id, as the app names them.</b> `member_ids`
+ * takes the opaque ids the directory hands out and is resolved here
+ * through {@see RecipientResolver::emailsForIds()}, the same conversion a
+ * handset's send goes through, so the admin compose screen never handles
+ * an address. `member_emails` is still accepted for callers that already
+ * hold them.
+ *
  * The author is a typed argument rather than an input key on purpose.
  * The input array is what other plugins hand in, and a key there would
  * let any of them put a member's name on a message that member never
@@ -70,6 +77,11 @@ final class MessageApi
      */
     public function send(array $input, ?Member $author = null): int|WP_Error
     {
+        $input = $this->withNamedMembers($input);
+        if ($input instanceof WP_Error) {
+            return $input;
+        }
+
         $request = MessageRequest::fromArray($input);
         if ($request instanceof WP_Error) {
             return $request;
@@ -141,6 +153,49 @@ final class MessageApi
                 'reason' => $result->get_error_message(),
             ]);
         }
+    }
+
+    /**
+     * Resolve `member_ids` — opaque ids from the directory — into the
+     * addresses {@see MessageRequest} addresses by.
+     *
+     * <b>Ids that resolve to nobody are refused here, not passed on.</b>
+     * A request that names nobody is a request to everyone, so dropping
+     * the ids and carrying on would turn a message meant for one member
+     * whose record has gone into a broadcast. Refusing before the request
+     * is built is the only place that cannot happen.
+     *
+     * @param array<string, mixed> $input
+     * @return array<string, mixed>|WP_Error
+     */
+    private function withNamedMembers(array $input): array|WP_Error
+    {
+        $ids = $input['member_ids'] ?? [];
+        unset($input['member_ids']);
+
+        if ($ids === [] || $ids === '') {
+            return $input;
+        }
+
+        $named = $this->resolver->emailsForIds(is_array($ids) ? $ids : [$ids]);
+        if ($named === []) {
+            return new WP_Error(
+                'fellowship_no_recipients',
+                'That message would not reach anybody.',
+                ['status' => 400],
+            );
+        }
+
+        // A string is split the way MessageRequest splits one, so adding
+        // the named members to it does not turn a list into one address.
+        $emails = $input['member_emails'] ?? [];
+        if (is_string($emails)) {
+            $emails = preg_split('/[\s,;]+/', $emails) ?: [];
+        }
+
+        $input['member_emails'] = array_merge(is_array($emails) ? $emails : [], $named);
+
+        return $input;
     }
 
     private function siteName(): string

@@ -667,7 +667,6 @@ function messageControllerController(?Settings $settings = null, ?InMemoryMessag
         ),
         new RecipientResolver(test()->members, new InMemoryCommitteeRepository(), $gate),
         $sealer,
-        test()->members,
         $settings,
         new RateLimiter(),
         test()->audit,

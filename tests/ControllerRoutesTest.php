@@ -280,7 +280,6 @@ function routesMessageController(): MessageController
         ),
         new RecipientResolver(test()->members, new InMemoryCommitteeRepository(), $gate),
         $sealer,
-        test()->members,
         $settings,
         new RateLimiter(),
         new SpyAuditLogger(),

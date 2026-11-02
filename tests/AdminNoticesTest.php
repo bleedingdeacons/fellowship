@@ -17,6 +17,7 @@ use Fellowship\Auth\PasswordResetMailer;
 use Fellowship\Core\Settings;
 use Fellowship\Crypto\MessageSealer;
 use Fellowship\Devices\MemberGate;
+use Fellowship\Directory\DirectoryPresenter;
 use Fellowship\Messaging\MessageApi;
 use Fellowship\Messaging\MessageDispatcher;
 use Fellowship\Messaging\RecipientResolver;
@@ -219,7 +220,14 @@ function adminNoticesDevicesPage(): DevicesPage
 
 function adminNoticesComposePage(): ComposePage
 {
-    return new ComposePage(adminNoticesApi(), new InMemoryCommitteeRepository(), new MemberGate(test()->members));
+    $gate = new MemberGate(test()->members);
+
+    return new ComposePage(
+        adminNoticesApi(),
+        new InMemoryCommitteeRepository(),
+        $gate,
+        new DirectoryPresenter(test()->members, new InMemoryCommitteeRepository(), $gate, test()->devices),
+    );
 }
 
 function adminNoticesApi(): MessageApi

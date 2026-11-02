@@ -18,6 +18,7 @@ use Fellowship\Core\Settings;
 use Fellowship\Crypto\MessageSealer;
 use Fellowship\Devices\Device;
 use Fellowship\Devices\MemberGate;
+use Fellowship\Directory\DirectoryPresenter;
 use Fellowship\Messaging\MessageApi;
 use Fellowship\Messaging\MessageDispatcher;
 use Fellowship\Messaging\RecipientResolver;
@@ -260,6 +261,7 @@ function coreUnitsComposePage(): ComposePage
         ),
         new InMemoryCommitteeRepository(),
         $gate,
+        new DirectoryPresenter($members, new InMemoryCommitteeRepository(), $gate, new InMemoryDeviceRepository()),
     );
 }
 

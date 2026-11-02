@@ -81,17 +81,87 @@ test('a message with no sender reads as the intergroup', function () {
     expect(messageLogRender())->toContain('Intergroup');
 });
 
-test('the log shows how many read it', function () {
+test('the log counts delivery and reading for a message to several', function () {
     // The half of the screen that makes "this went nowhere" visible.
+    // Counted, because "read" of a committee message would otherwise
+    // mean "read by somebody".
     $id = messageLogGive('members', '', 'Dave P');
 
     $this->recipients->addMany($id, [
         ['email' => MESSAGE_LOG_MEMBER, 'member_id' => 7],
         ['email' => 'sue@example.org', 'member_id' => 8],
+        ['email' => 'jo@example.org', 'member_id' => 9],
     ], 1788000000);
+    $this->recipients->markReceived([$id], 'sue@example.org', 1788000050);
     $this->recipients->markRead($id, MESSAGE_LOG_MEMBER, 1788000100);
 
-    expect(messageLogRender())->toContain('1 / 2');
+    // A read counts as delivered, as it does for Link's ticks.
+    expect(messageLogRender())->toContain('3 recipients: 2 delivered, 1 read');
+});
+
+test('a message to one member is said in a word, as Link ticks it', function (?string $state, string $expected) {
+    $id = messageLogGive('members', '', 'Dave P');
+    $this->recipients->addMany($id, [['email' => 'sue@example.org', 'member_id' => 8]], 1788000000);
+
+    if ($state === 'received' || $state === 'read+received') {
+        $this->recipients->markReceived([$id], 'sue@example.org', 1788000050);
+    }
+
+    if ($state === 'read' || $state === 'read+received') {
+        $this->recipients->markRead($id, 'sue@example.org', 1788000100);
+    }
+
+    expect(messageLogRender())->toContain('<td>' . $expected . '</td>');
+})->with([
+    'not yet on a handset' => [null, 'Sent'],
+    'opened on a handset'  => ['received', 'Delivered'],
+    'read'                 => ['read+received', 'Read'],
+    'read with the receipt lost on the way back' => ['read', 'Read'],
+]);
+
+test('a push Google accepted is not shown as delivered', function () {
+    // FCM taking a push says nothing about a handset having it, and this
+    // column is looked at exactly when somebody says it never arrived.
+    $id = messageLogGive('members', '', 'Dave P');
+    $this->recipients->addMany($id, [['email' => 'sue@example.org', 'member_id' => 8]], 1788000000);
+    $this->recipients->markPushed($id, 'sue@example.org', 1788000010);
+
+    expect(messageLogRender())->toContain('<td>Sent</td>');
+});
+
+test('a message that reached nobody says so', function () {
+    messageLogGive('members', '', 'Dave P');
+
+    expect(messageLogRender())->toContain('Reached nobody');
+});
+
+test('the log asks for every row\'s receipts at once', function () {
+    // One grouped query for the page rather than counts per row.
+    $first = messageLogGive('members', '', 'Dave P');
+    $second = messageLogGive('members', '', 'Dave P');
+    $this->recipients->addMany($first, [['email' => 'sue@example.org', 'member_id' => 8]], 1788000000);
+    $this->recipients->addMany($second, [['email' => 'sue@example.org', 'member_id' => 8]], 1788000000);
+
+    $spy = new class ($this->recipients) extends \Fellowship\Tests\Support\InMemoryRecipientRepository {
+        /** @var list<list<int>> */
+        public array $asked = [];
+
+        public function __construct(private readonly \Fellowship\Tests\Support\InMemoryRecipientRepository $inner)
+        {
+        }
+
+        public function receiptsFor(array $messageIds): array
+        {
+            $this->asked[] = $messageIds;
+
+            return $this->inner->receiptsFor($messageIds);
+        }
+    };
+
+    captureOutput(fn() => (new MessagesPage(test()->messages, $spy))->render());
+
+    expect($spy->asked)->toHaveCount(1);
+    expect($spy->asked[0])->toEqualCanonicalizing([$first, $second]);
 });
 
 test('each audience is named in words', function () {

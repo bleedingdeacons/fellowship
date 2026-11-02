@@ -10,6 +10,7 @@ if (!defined('ABSPATH')) {
 
 use Fellowship\Core\Capabilities;
 use Fellowship\Devices\MemberGate;
+use Fellowship\Directory\DirectoryPresenter;
 use Fellowship\Messaging\Message;
 use Fellowship\Messaging\MessageApi;
 use Fellowship\Messaging\MessageRequest;
@@ -18,15 +19,30 @@ use Unity\Members\Interfaces\Member;
 use WP_Error;
 
 /**
- * Compose a message to a committee or to the whole fellowship.
+ * Compose a message to the whole fellowship, a committee, or one member.
  *
  * <b>No free-text recipient field, deliberately.</b> Naming individuals
- * from here would mean typing email addresses into a form, which is both
- * a way to send fellowship business to a typo and a reason for somebody
- * to have the address list open beside them. Individual messages are what
- * the app is for, where recipients are chosen from a list and addressed
- * by id. This screen does the thing the app cannot: reach a committee, or
- * everybody.
+ * by typing email addresses into a form would be both a way to send
+ * fellowship business to a typo and a reason for somebody to have the
+ * address list open beside them. So one member is chosen the way the app
+ * chooses one: from the address book Link is given
+ * ({@see DirectoryPresenter}), by anonymous name, and addressed by opaque
+ * member id. The id is turned into an address on the far side of
+ * {@see MessageApi}, by the same resolver a handset's send goes through,
+ * and this screen never sees one.
+ *
+ * Choosing from that list carries its rules with it. A member who has
+ * opted out of directories is not offered — they can still be reached
+ * through a committee — and a member with no Link device is shown but
+ * cannot be chosen, as in the app, because a message to them would wait
+ * unread with nothing to say so. The signed-in member is left out: they
+ * would be excluded from their own message and it would reach nobody.
+ *
+ * <b>One field, and a value it does not recognise is refused.</b> Every
+ * audience travels in `audience` as `everyone`, `committee:<slug>` or
+ * `member:<id>`. Anything else is an error, never a fall-back to
+ * everyone: the broadcast is the one send that must only ever happen on
+ * purpose.
  *
  * The confirmation step is not politeness. "Everyone" on a live
  * intergroup is several hundred handsets and there is no unsend, so the
@@ -47,6 +63,11 @@ final class ComposePage
 
     private const CAPABILITY = Capabilities::SEND_MESSAGES;
     private const NONCE = 'fellowship_compose';
+
+    /** The `audience` values. See the class comment. */
+    private const EVERYONE = 'everyone';
+    private const COMMITTEE_PREFIX = 'committee:';
+    private const MEMBER_PREFIX = 'member:';
 
     /**
      * Where a refused send's reason waits between the redirect and the
@@ -71,6 +92,7 @@ final class ComposePage
         private readonly MessageApi $api,
         private readonly CommitteeRepository $committees,
         private readonly MemberGate $gate,
+        private readonly DirectoryPresenter $directory,
     ) {
     }
 
@@ -117,16 +139,39 @@ final class ComposePage
         echo '<table class="form-table" role="presentation"><tbody>';
 
         echo '<tr><th scope="row"><label for="fellowship-audience">' . esc_html__('Send to', 'fellowship') . '</label></th><td>';
-        echo '<select name="committee" id="fellowship-audience">';
-        echo '<option value="">' . esc_html__('Everyone with a device', 'fellowship') . '</option>';
-        foreach ($this->committees->findAll() as $committee) {
-            echo '<option value="' . esc_attr($committee->getSlug()) . '">'
-                . esc_html($committee->getName())
-                . '</option>';
+        echo '<select name="audience" id="fellowship-audience">';
+        echo '<option value="' . esc_attr(self::EVERYONE) . '">' . esc_html__('Everyone with a device', 'fellowship') . '</option>';
+
+        $committees = $this->committees->findAll();
+        if ($committees !== []) {
+            echo '<optgroup label="' . esc_attr__('Committees', 'fellowship') . '">';
+            foreach ($committees as $committee) {
+                echo '<option value="' . esc_attr(self::COMMITTEE_PREFIX . $committee->getSlug()) . '">'
+                    . esc_html($committee->getName())
+                    . '</option>';
+            }
+            echo '</optgroup>';
         }
+
+        $members = $this->members();
+        if ($members !== []) {
+            echo '<optgroup label="' . esc_attr__('Members', 'fellowship') . '">';
+            foreach ($members as $member) {
+                // Disabled rather than left out, as the app does: the
+                // admin can see the member exists and why they cannot be
+                // written to, rather than wondering where they went.
+                echo '<option value="' . esc_attr(self::MEMBER_PREFIX . $member['id']) . '"'
+                    . ($member['hasDevice'] ? '' : ' disabled')
+                    . '>'
+                    . esc_html($this->memberLabel($member))
+                    . '</option>';
+            }
+            echo '</optgroup>';
+        }
+
         echo '</select>';
         echo '<p class="description">'
-            . esc_html__('A committee includes its sub-committees.', 'fellowship')
+            . esc_html__('A committee includes its sub-committees. A member can be chosen once they have Link on a handset; members who have opted out of directories are reached through their committees.', 'fellowship')
             . '</p>';
         echo '</td></tr>';
 
@@ -188,14 +233,20 @@ final class ComposePage
      */
     public function sendFromRequest(): string
     {
+        $audience = $this->audienceFromRequest();
+
         // Passed through the same API another plugin would call, rather
         // than reaching for the dispatcher directly. One path in means
-        // one place where validation, audit and the send actually happen.
-        $result = $this->api->send([
-            'subject'   => (string) ($_POST['subject'] ?? ''),
-            'body'      => (string) ($_POST['body'] ?? ''),
-            'committee' => sanitize_text_field((string) ($_POST['committee'] ?? '')),
-        ], $this->author());
+        // one place where validation, audit and the send actually happen
+        // — and behind it the same resolver, dispatcher, sealer and FCM
+        // transport a handset's send uses, so a member reached from here
+        // receives exactly what the app would have sent them.
+        $result = $audience instanceof WP_Error
+            ? $audience
+            : $this->api->send([
+                'subject' => (string) ($_POST['subject'] ?? ''),
+                'body'    => (string) ($_POST['body'] ?? ''),
+            ] + $audience, $this->author());
 
         if ($result instanceof WP_Error) {
             // The reason waits in a one-shot per-user transient rather
@@ -211,6 +262,84 @@ final class ComposePage
         }
 
         return 'sent';
+    }
+
+    /**
+     * The posted `audience`, as the input keys {@see MessageApi} takes.
+     *
+     * An empty input array is the broadcast, so it is returned only for
+     * the one value that asks for it. Everything else that is not a
+     * committee or a positive member id is refused.
+     *
+     * @return array<string, mixed>|WP_Error
+     */
+    private function audienceFromRequest(): array|WP_Error
+    {
+        $audience = sanitize_text_field((string) ($_POST['audience'] ?? ''));
+
+        if ($audience === self::EVERYONE) {
+            return [];
+        }
+
+        if (str_starts_with($audience, self::COMMITTEE_PREFIX)) {
+            $slug = substr($audience, strlen(self::COMMITTEE_PREFIX));
+            if ($slug !== '') {
+                return ['committee' => $slug];
+            }
+        }
+
+        if (str_starts_with($audience, self::MEMBER_PREFIX)) {
+            $id = substr($audience, strlen(self::MEMBER_PREFIX));
+            if (ctype_digit($id) && (int) $id > 0) {
+                return ['member_ids' => [(int) $id]];
+            }
+        }
+
+        return new WP_Error('fellowship_no_audience', __('Choose who this message is for.', 'fellowship'));
+    }
+
+    /**
+     * Members who may be chosen from here: the app's address book, less
+     * the signed-in member.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function members(): array
+    {
+        $author = $this->author();
+        $authorId = $author?->getId() ?? 0;
+
+        return array_values(array_filter(
+            $this->directory->forApp(false)['members'],
+            static fn(array $member): bool => (int) ($member['id'] ?? 0) !== $authorId,
+        ));
+    }
+
+    /**
+     * "Dave P — Bristol Tuesday, GSR, Secretary", and a reason when they
+     * cannot be chosen. What the app shows beside a name, and nothing a
+     * person could be contacted by.
+     *
+     * @param array<string, mixed> $member
+     */
+    private function memberLabel(array $member): string
+    {
+        $details = array_filter([
+            (string) ($member['group'] ?? ''),
+            !empty($member['gsr']) ? __('GSR', 'fellowship') : '',
+            (string) ($member['position'] ?? ''),
+        ], static fn(string $part): bool => $part !== '');
+
+        $label = (string) ($member['name'] ?? '');
+        if ($details !== []) {
+            $label .= ' — ' . implode(', ', $details);
+        }
+
+        if (empty($member['hasDevice'])) {
+            $label .= ' ' . __('(no Link device)', 'fellowship');
+        }
+
+        return $label;
     }
 
     /**
