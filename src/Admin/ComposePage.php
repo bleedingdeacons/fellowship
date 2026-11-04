@@ -31,12 +31,11 @@ use WP_Error;
  * {@see MessageApi}, by the same resolver a handset's send goes through,
  * and this screen never sees one.
  *
- * Choosing from that list carries its rules with it. A member who has
- * opted out of directories is not offered — they can still be reached
- * through a committee — and a member with no Link device is shown but
- * cannot be chosen, as in the app, because a message to them would wait
- * unread with nothing to say so. The signed-in member is left out: they
- * would be excluded from their own message and it would reach nobody.
+ * Choosing from that list carries its rules with it. A member with no Link
+ * device is shown but cannot be chosen, as in the app, because a message
+ * to them would wait unread with nothing to say so. The signed-in member
+ * is left out: they would be excluded from their own message and it would
+ * reach nobody.
  *
  * <b>One field, and a value it does not recognise is refused.</b> Every
  * audience travels in `audience` as `everyone`, `committee:<slug>` or
@@ -171,7 +170,7 @@ final class ComposePage
 
         echo '</select>';
         echo '<p class="description">'
-            . esc_html__('A committee includes its sub-committees. A member can be chosen once they have Link on a handset; members who have opted out of directories are reached through their committees.', 'fellowship')
+            . esc_html__('A committee includes its sub-committees. A member can be chosen once they have Link on a handset.', 'fellowship')
             . '</p>';
         echo '</td></tr>';
 

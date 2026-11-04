@@ -215,9 +215,8 @@ test('all gsrs reaches every gsr and nobody else', function () {
     expect(array_column($resolved, 'member_id'))->toBe([7, 10]);
 });
 
-test('a gsr who is not listed in directories is still reached', function () {
-    // Being contactable by the intergroup is not the same as being
-    // browsable by everyone — the line committees already draw.
+test('a gsr with their profile hidden is still reached', function () {
+    // showMemberProfile plays no part in messaging.
     $this->members = new InMemoryMemberRepository([
         new MemberStub(id: 7, anonymousName: 'Dave P', showMemberProfile: false, personalEmail: 'dave@example.org', isGSR: true),
     ]);

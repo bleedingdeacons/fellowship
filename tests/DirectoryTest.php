@@ -90,14 +90,13 @@ test('members are listed by name', function () {
     expect(array_column($directory['members'], 'name'))->toBe(['Dave P', 'Sue M']);
 });
 
-test('a member who is not listed is left out', function () {
-    // showMemberProfile is the member's own choice about appearing in
-    // a directory at all.
+test('a member with their profile hidden is still listed', function () {
+    // showMemberProfile plays no part in messaging.
     $this->members = new InMemoryMemberRepository([
         new MemberStub(id: 7, anonymousName: 'Dave P', showMemberProfile: false, personalEmail: DIRECTORY_MEMBER),
     ]);
 
-    expect(directoryPresenter()->forApp(false)['members'])->toBe([]);
+    expect(array_column(directoryPresenter()->forApp(false)['members'], 'name'))->toBe(['Dave P']);
 });
 
 test('a member with no anonymous name is left out', function () {
@@ -129,7 +128,7 @@ test('the gsr count includes gsrs who are not listed', function () {
     // The send reaches them, so the count the sender is shown must too.
     $this->members = new InMemoryMemberRepository([
         new MemberStub(id: 7, anonymousName: 'Dave P', showMemberProfile: true, personalEmail: DIRECTORY_MEMBER, isGSR: true),
-        new MemberStub(id: 8, anonymousName: 'Sue M', showMemberProfile: false, personalEmail: 'sue@example.org', isGSR: true),
+        new MemberStub(id: 8, anonymousName: '', showMemberProfile: true, personalEmail: 'sue@example.org', isGSR: true),
         new MemberStub(id: 9, anonymousName: 'Jo B', showMemberProfile: true, personalEmail: 'jo@example.org'),
         new MemberStub(id: 10, anonymousName: 'No Address', showMemberProfile: true, personalEmail: '', isGSR: true),
     ]);

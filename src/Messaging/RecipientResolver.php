@@ -157,11 +157,8 @@ final class RecipientResolver
      *
      * Asked of Unity at send time, like a committee's membership, rather
      * than taken from whatever the sender's address book showed: a GSR
-     * who has opted out of being listed in directories is still a GSR,
-     * and is still reached — being contactable by the intergroup is not
-     * the same as being browsable by everyone, the same line
-     * {@see \Fellowship\Directory\DirectoryPresenter} draws for
-     * committees.
+     * the address book leaves out, for want of an anonymous name, is
+     * still a GSR, and is still reached.
      *
      * @return list<Member>
      */
