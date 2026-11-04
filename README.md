@@ -201,9 +201,8 @@ change shape as people came and went, and would quietly make somebody
 unreachable for the ordinary reason that they had not got round to
 installing anything.
 
-Members who have turned off `showMemberProfile()` in Unity are not
-listed. They can still receive a committee message: being contactable by
-the intergroup is not the same as being browsable by everyone.
+`showMemberProfile()` plays no part in messaging: a member is listed
+whatever it says.
 
 `MemberGate` is the single answer to "may this person use Link?",
 consulted at enrolment, on every authenticated request, when resolving an

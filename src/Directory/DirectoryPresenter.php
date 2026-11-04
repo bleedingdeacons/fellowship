@@ -28,13 +28,11 @@ use Unity\Positions\Interfaces\PositionRepository;
  * {@see \Fellowship\Rest\MessageController}, which resolves ids to
  * addresses server-side.
  *
- * <b>Members who have opted out of being listed are not here.</b> Unity's
- * `showMemberProfile()` is a member's own decision about appearing in
- * directories, and a messaging app is a directory whatever else it is.
- * They can still receive a committee message — being contactable by the
- * intergroup is not the same as being browsable by everyone.
+ * <b>`showMemberProfile()` plays no part in messaging.</b> Whether a
+ * member appears here does not depend on it, so a member can be written to
+ * whatever it says.
  *
- * <b>Everybody else is listed, and each member says whether they have a
+ * <b>Everybody is listed, and each member says whether they have a
  * device.</b> The listing test is still only
  * {@see MemberGate::isAuthorised()}, a usable email address, so the
  * address book does not change shape as people enrol and drop off. What
@@ -157,14 +155,11 @@ final class DirectoryPresenter
                 continue;
             }
 
-            // Before the listing test, not after it: an unlisted GSR is
-            // still reached by a send to all of them.
+            // Before the name test, not after it: a GSR with no anonymous
+            // name is not listed and is still reached by a send to all of
+            // them.
             if ($member->isGSR()) {
                 $this->gsrCount++;
-            }
-
-            if (!$member->showMemberProfile()) {
-                continue;
             }
 
             $name = trim($member->getAnonymousName());

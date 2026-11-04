@@ -309,10 +309,11 @@ test('a member with no Link device is shown but cannot be chosen', function () {
     expect($markup)->not->toContain('value="member:8" disabled');
 });
 
-test('a member who has opted out of directories is not offered', function () {
+test('a member with their profile hidden is still offered', function () {
+    // showMemberProfile plays no part in messaging.
     composeSendListedMembers();
 
-    expect(captureOutput(fn() => composeSendPage()->render()))->not->toContain('Hidden H');
+    expect(captureOutput(fn() => composeSendPage()->render()))->toContain('Hidden H');
 });
 
 test('the signed-in member is not offered to themselves', function () {
@@ -354,7 +355,7 @@ function composeSendPublicKey(string $pem): string
 
 /**
  * Members as the directory lists them: Sue with a handset, Dave without,
- * and one who has opted out of being listed. Optionally the signed-in
+ * and one with their profile hidden. Optionally the signed-in
  * user as a listed member too.
  */
 function composeSendListedMembers(bool $withAuthor = false): void
