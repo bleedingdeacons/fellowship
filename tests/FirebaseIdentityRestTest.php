@@ -146,7 +146,7 @@ test('too many attempts from one address are refused, right password or not', fu
 test('the route is registered, for POST only', function () {
     $routes = [];
     when('register_rest_route')->alias(
-        static function (string $namespace, string $route, array $args) use (&$routes): bool {
+        function (string $namespace, string $route, array $args) use (&$routes): bool {
             $routes[$namespace . $route] = $args['methods'];
 
             return true;

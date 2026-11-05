@@ -383,7 +383,7 @@ test('an audience needs no subject or body', function () {
 test('both routes are registered, for POST only', function () {
     $routes = [];
     when('register_rest_route')->alias(
-        static function (string $namespace, string $route, array $args) use (&$routes): bool {
+        function (string $namespace, string $route, array $args) use (&$routes): bool {
             $routes[$namespace . $route] = $args['methods'];
 
             return true;
