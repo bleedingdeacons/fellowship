@@ -5,7 +5,7 @@
 [![Coverage Status](https://coveralls.io/repos/github/bleedingdeacons/fellowship/badge.svg?branch=main)](https://coveralls.io/github/bleedingdeacons/fellowship?branch=main)
 ![PHPStan](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbleedingdeacons%2Ffellowship%2Fmain%2Fphpstan.neon.dist&query=%24.parameters.level&label=PHPStan&prefix=level%20&color=brightgreen)
 ![PHPCS](https://img.shields.io/badge/dynamic/xml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbleedingdeacons%2Ffellowship%2Fmain%2F.phpcs.xml.dist&query=%2Fruleset%2Frule%5B1%5D%2F%40ref&label=PHPCS&color=brightgreen)
-![Version](https://img.shields.io/badge/version-2.11.1-blue)
+![Version](https://img.shields.io/badge/version-1.11.0-blue)
 ![PHP](https://img.shields.io/badge/php-8.1%2B-777bb4)
 ![Licence](https://img.shields.io/badge/licence-MIT%20(Modified)-green)
 
@@ -425,6 +425,21 @@ bundles it too; whichever plugin loads it first supplies it to both, so the
 two move to a new Guardian major together. What stays here is everything
 Link-specific: the device-code exchange, the audiences, the member gate and
 enrolment.
+
+## Version numbers
+
+Releases went from 1.0.0 to 1.10.0, then 2.0.0 to 2.11.1, and on 2026-11-05
+went back to the 1.x line at **1.11.0**. The system is still being evolved, so
+changes ship as features rather than major versions. So:
+
+- **The v2.x tags and releases are history, and older than v1.11.0.** A note
+  elsewhere saying "Fellowship 2.8.0" means that release, not a version above
+  the current one.
+- **Do not use `feat!` or `BREAKING CHANGE`.** Either would produce 2.0.0, which
+  already exists.
+- **WordPress sees 1.11.0 as older than 2.11.1**, so a site on 2.x has to be
+  moved on purpose. `/deploy` does this, once the 2.x zips are out of
+  `C:\Data\Plugins`, because it installs the highest version it finds there.
 
 ## Development
 
