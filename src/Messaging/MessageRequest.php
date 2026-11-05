@@ -175,6 +175,22 @@ final class MessageRequest
     }
 
     /**
+     * Build just the "who", for a caller that never holds the message.
+     *
+     * With end-to-end encryption a server resolves who a message reaches and
+     * does not see what it says. The audience rules and caps are the same as a
+     * send's, which is why this goes through {@see fromArray()} rather than
+     * round it. The subject and body it fills in are never read, because all
+     * this result is used for is {@see RecipientResolver::resolve()}.
+     *
+     * @param array<string, mixed> $input
+     */
+    public static function forAudience(array $input): self|WP_Error
+    {
+        return self::fromArray(['subject' => '-', 'body' => '-'] + $input);
+    }
+
+    /**
      * Normalise whatever a caller offered as committees into a list of
      * slugs: a single string, a comma-separated string, or an array.
      *

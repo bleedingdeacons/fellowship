@@ -26,7 +26,9 @@ use Fellowship\Messaging\RecipientRepository;
 use Fellowship\Push\FcmTransport;
 use Fellowship\Rest\DeviceAuthController;
 use Fellowship\Rest\DirectoryController;
+use Fellowship\Rest\FirebaseIdentityController;
 use Fellowship\Rest\MessageController;
+use Fellowship\Rest\ServiceController;
 use Fellowship\Tests\Support\RecordingWpdb;
 use Unity\Testing\Doubles\FakeContainer;
 use Unity\Testing\Doubles\InMemoryCommitteeRepository;
@@ -90,6 +92,8 @@ test('every service can be built', function (string $service) {
     [DeviceAuthController::class],
     [MessageController::class],
     [DirectoryController::class],
+    [FirebaseIdentityController::class],
+    [ServiceController::class],
     [MessageApi::class],
     [SettingsPage::class],
     [MessagesPage::class],

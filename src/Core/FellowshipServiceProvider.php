@@ -18,6 +18,7 @@ use Fellowship\Auth\AudienceRegistry;
 use Fellowship\Auth\DeviceCodeStore;
 use Fellowship\Auth\DeviceRedirectValidator;
 use Fellowship\Auth\DeviceTokenMinter;
+use Fellowship\Auth\FirebaseCustomTokenMinter;
 use Fellowship\Auth\FirebaseSignIn;
 use Fellowship\Auth\IdentityBroker;
 use Fellowship\Auth\LinkAudience;
@@ -25,6 +26,7 @@ use Fellowship\Auth\PasswordAuthenticator;
 use Unity\Auth\Interfaces\PasswordCredentialRepository;
 use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
+use Fellowship\Auth\ServiceCaller;
 use Fellowship\Auth\StateStore;
 use Guardian\Credentials\CredentialStore;
 use Guardian\Firebase\FirebaseIdTokenVerifier;
@@ -54,7 +56,9 @@ use Fellowship\Push\FcmTransport;
 use Fellowship\Push\ServiceAccount;
 use Fellowship\Rest\DeviceAuthController;
 use Fellowship\Rest\DirectoryController;
+use Fellowship\Rest\FirebaseIdentityController;
 use Fellowship\Rest\MessageController;
+use Fellowship\Rest\ServiceController;
 use Psr\Container\ContainerInterface;
 use Scrutiny\Audit\Interfaces\AuditLogger;
 use Unity\Committees\Interfaces\CommitteeRepository;
@@ -282,6 +286,24 @@ final class FellowshipServiceProvider
             );
         });
 
+        // The service account pushes through, again: it signs the custom
+        // tokens a Unity password becomes, and it is who the Functions run as.
+        $container->register(FirebaseCustomTokenMinter::class, function (ContainerInterface $c) {
+            $settings = $c->get(Settings::class);
+            return new FirebaseCustomTokenMinter(
+                static fn(): ?ServiceAccount => ServiceAccount::fromJson($settings->getFcmServiceAccount()),
+            );
+        });
+
+        $container->register(ServiceCaller::class, function (ContainerInterface $c) {
+            $settings = $c->get(Settings::class);
+            return new ServiceCaller(
+                $c->get(self::JWT_VERIFIER),
+                static fn(): string => ServiceAccount::fromJson($settings->getFcmServiceAccount())->clientEmail ?? '',
+                static fn(): string => rest_url(ServiceController::SERVICE_PATH),
+            );
+        });
+
         // ── REST ──
         $container->register(DeviceAuthController::class, fn(ContainerInterface $c) => new DeviceAuthController(
             $c->get(DeviceRepository::class),
@@ -315,6 +337,22 @@ final class FellowshipServiceProvider
         $container->register(DirectoryController::class, fn(ContainerInterface $c) => new DirectoryController(
             $c->get(CurrentDevice::class),
             $c->get(DirectoryPresenter::class),
+            $c->get(Settings::class),
+            $c->get(AuditLogger::class),
+        ));
+
+        $container->register(FirebaseIdentityController::class, fn(ContainerInterface $c) => new FirebaseIdentityController(
+            $c->get(PasswordAuthenticator::class),
+            $c->get(MemberGate::class),
+            $c->get(FirebaseCustomTokenMinter::class),
+            $c->get(RateLimiter::class),
+        ));
+
+        $container->register(ServiceController::class, fn(ContainerInterface $c) => new ServiceController(
+            $c->get(ServiceCaller::class),
+            $c->get(MemberRepository::class),
+            $c->get(MemberGate::class),
+            $c->get(RecipientResolver::class),
             $c->get(Settings::class),
             $c->get(AuditLogger::class),
         ));
