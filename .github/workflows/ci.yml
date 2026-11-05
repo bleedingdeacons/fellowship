@@ -398,7 +398,11 @@ jobs:
               return subprocess.run(['git', *args], capture_output=True,
                                     text=True, check=True).stdout
 
-          tags = git('tag', '--list', 'v[0-9]*', '--sort=-v:refname').split()
+          # Only the v1 line. Numbering went back to 1.11.0 after v2.11.1, so
+          # those v2.x tags are history and still sort highest. Reading them
+          # would leave `last` on v2.11.1 for good, and every release would
+          # be judged against everything since then.
+          tags = git('tag', '--list', 'v1.*', '--sort=-v:refname').split()
           last = tags[0] if tags else ''
 
           # The header is read before anything is decided, because which of
@@ -597,6 +601,10 @@ jobs:
         # --target pins the tag to the commit just pushed rather than to
         # whatever main points at by now. The zip is the only asset; the notes
         # are generated from the PRs since the last tag.
+        #
+        # --latest is stated because GitHub's automatic choice goes by version
+        # number, which would leave v2.11.1 as Latest, and Latest is what /deploy
+        # fetches.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -609,6 +617,7 @@ jobs:
             "build/fellowship-production-$VERSION.zip" \
             --title "v$VERSION" \
             --target "${{ steps.commit.outputs.sha }}" \
+            --latest \
             --generate-notes
 
       - name: Summary
