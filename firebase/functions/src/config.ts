@@ -15,6 +15,9 @@ export const SERVICE_ACCOUNT = 'firebase-adminsdk-fbsvc@fellowship-510917.iam.gs
  */
 export const KILL_SWITCH_ACCOUNT = 'budget-kill-switch@fellowship-510917.iam.gserviceaccount.com';
 
+/** The billing account the kill switch's readiness check asks about. */
+export const BILLING_ACCOUNT = 'billingAccounts/0119D8-80D310-ABF3B3';
+
 /** Matches MAX_DEVICES_PER_MEMBER in Fellowship's DeviceAuthController. */
 export const MAX_DEVICES_PER_MEMBER = 5;
 
