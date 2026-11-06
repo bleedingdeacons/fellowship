@@ -49,13 +49,13 @@ export async function adminRevokeMember(deps: Deps, data: Data) {
 }
 
 export async function adminResolve(deps: Deps, data: Data) {
-  return summary(await reachOf(deps, adminAudience(data)));
+  return summary(deps, await reachOf(deps, adminAudience(data)));
 }
 
 export async function adminSend(deps: Deps, data: Data) {
   const senderMemberId = Number.isInteger(data.senderMemberId) ? (data.senderMemberId as number) : 0;
 
-  return deliver(deps, adminAudience(data), senderMemberId, data.envelopes);
+  return deliver(deps, adminAudience(data), senderMemberId, data.id, data.envelopes);
 }
 
 function adminAudience(data: Data): AudienceQuery {

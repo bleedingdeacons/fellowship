@@ -6,7 +6,19 @@ import {
   initializeTestEnvironment,
   RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { collection, doc, getDoc, getDocs, query, setDoc, updateDoc, where } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  documentId,
+  getDoc,
+  getDocs,
+  limit,
+  orderBy,
+  query,
+  setDoc,
+  updateDoc,
+  where,
+} from 'firebase/firestore';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { PROJECT } from './support';
 
@@ -148,6 +160,30 @@ describe('messages and receipts', () => {
     await assertSucceeds(getDocs(query(collection(as('d_sue', 8), 'messages'), where('senderMemberId', '==', 8))));
     await assertFails(getDoc(doc(as('d_dave', 7), 'messages/m1')));
     await assertFails(getDocs(collection(as('d_sue', 8), 'messages')));
+  });
+
+  test("the queries Link's poll makes are allowed", async () => {
+    await assertSucceeds(
+      getDocs(query(collection(as('d_dave', 7), 'devices/d_dave/inbox'), where('seq', '>', 0), orderBy('seq'), limit(200))),
+    );
+
+    const sentSince = (device: string, memberId: number, asked: number) =>
+      getDocs(
+        query(
+          collection(as(device, memberId), 'messages'),
+          where('senderMemberId', '==', asked),
+          where(documentId(), '>=', 'm1'),
+          orderBy(documentId()),
+          limit(400),
+        ),
+      );
+
+    await assertSucceeds(sentSince('d_sue', 8, 8));
+    await assertFails(sentSince('d_dave', 7, 8));
+  });
+
+  test('a receipt for a message already swept is refused', async () => {
+    await assertFails(setDoc(doc(as('d_dave', 7), 'messages/swept/receipts/7'), { receivedAt: NOW }));
   });
 
   test('a recipient writes their own receipt', async () => {

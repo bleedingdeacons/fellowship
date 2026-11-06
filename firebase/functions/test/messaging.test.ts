@@ -5,7 +5,7 @@ import { countReceipt, pushInboxEntry, sweep } from '../src/background';
 import type { Deps } from '../src/deps';
 import { enrol } from '../src/devices';
 import { overBudget } from '../src/killSwitch';
-import { resolveAudience, sendMessage } from '../src/messaging';
+import { newMessageId, resolveAudience, sendMessage } from '../src/messaging';
 import { auth, db, deviceCaller, fake, googleCaller, newPublicKey, passwordCaller, reasonOf, resetEmulators } from './support';
 
 beforeEach(resetEmulators);
@@ -96,16 +96,85 @@ describe('sending', () => {
     const sender = await deviceFor(deps, 7);
     const sue = await deviceFor(deps, 8);
 
-    const { id } = await sendMessage(deps, deviceCaller(sender, 7), { memberIds: [8], envelopes: [envelope(sue)] });
+    const { id } = await sendMessage(deps, deviceCaller(sender, 7), { id: newMessageId(Date.now()), memberIds: [8], envelopes: [envelope(sue)] });
 
-    const entry = await db.collection('devices').doc(sue).collection('inbox').doc(id).get();
+    const entry = await db.collection('devices').doc(sue).collection('inbox').doc(String(id)).get();
     expect(entry.get('k')).toBe('wrapped-key');
     expect(entry.get('p')).toBe('sealed-payload');
     expect(entry.get('senderMemberId')).toBe(7);
 
-    const message = await db.collection('messages').doc(id).get();
+    const message = await db.collection('messages').doc(String(id)).get();
     expect(message.get('recipientMemberIds')).toEqual([8]);
     expect(message.get('receivedCount')).toBe(0);
+  });
+
+  test('an id is a growing number, in the shape Link already uses', async () => {
+    const { deps } = fake();
+    const sender = await deviceFor(deps, 7);
+    const sue = await deviceFor(deps, 8);
+
+    const first = await sendMessage(deps, deviceCaller(sender, 7), { id: newMessageId(Date.now()), memberIds: [8], envelopes: [envelope(sue)] });
+    const entry = await db.collection('devices').doc(sue).collection('inbox').doc(String(first.id)).get();
+
+    expect(Number.isSafeInteger(first.id)).toBe(true);
+    expect(entry.get('seq')).toBe(first.id);
+    expect(first.createdAt).toBeGreaterThan(0);
+
+    // Well above anything Fellowship ever issued, so existing poll marks carry across.
+    expect(first.id).toBeGreaterThan(1e12);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const second = await sendMessage(deps, deviceCaller(sender, 7), { id: newMessageId(Date.now()), memberIds: [8], envelopes: [envelope(sue)] });
+
+    expect(second.id).toBeGreaterThan(first.id);
+  });
+
+  test('resolving an audience issues the id to seal in', async () => {
+    const { deps } = fake();
+    const sender = await deviceFor(deps, 7);
+    const sue = await deviceFor(deps, 8);
+
+    const answer = await resolveAudience(deps, deviceCaller(sender, 7), { memberIds: [8] });
+    const { id } = await sendMessage(deps, deviceCaller(sender, 7), {
+      id: answer.id,
+      memberIds: [8],
+      envelopes: [envelope(sue)],
+    });
+
+    expect(id).toBe(answer.id);
+  });
+
+  test.each([
+    ['missing', undefined],
+    ['not a number', '123'],
+    ['from long ago', Date.UTC(2020, 0, 1) * 1024],
+    ['from the future', (Date.now() + 86400000) * 1024],
+    ['not whole', 1.5],
+  ])('an id that is %s is refused', async (_name, id) => {
+    const { deps } = fake();
+    const sender = await deviceFor(deps, 7);
+    const sue = await deviceFor(deps, 8);
+
+    expect(await reasonOf(sendMessage(deps, deviceCaller(sender, 7), { id, memberIds: [8], envelopes: [envelope(sue)] })))
+      .toBe('fellowship_bad_message_id');
+    expect((await db.collection('messages').get()).size).toBe(0);
+  });
+
+  test('an id already taken means sealing again', async () => {
+    const { deps } = fake();
+    const sender = await deviceFor(deps, 7);
+    const sue = await deviceFor(deps, 8);
+    const id = newMessageId(Date.now());
+
+    await sendMessage(deps, deviceCaller(sender, 7), { id, memberIds: [8], envelopes: [envelope(sue)] });
+
+    expect(await reasonOf(sendMessage(deps, deviceCaller(sender, 7), { id, memberIds: [8], envelopes: [envelope(sue)] })))
+      .toBe('fellowship_stale_audience');
+  });
+
+  test('ids stay safe for a very long time', () => {
+    expect(Number.isSafeInteger(newMessageId(Date.UTC(2200, 0, 1)))).toBe(true);
   });
 
   test('a client cannot claim to be somebody else', async () => {
@@ -113,13 +182,13 @@ describe('sending', () => {
     const sender = await deviceFor(deps, 7);
     const sue = await deviceFor(deps, 8);
 
-    const { id } = await sendMessage(deps, deviceCaller(sender, 7), {
+    const { id } = await sendMessage(deps, deviceCaller(sender, 7), { id: newMessageId(Date.now()),
       senderMemberId: 10,
       memberIds: [8],
       envelopes: [envelope(sue)],
     });
 
-    expect((await db.collection('messages').doc(id).get()).get('senderMemberId')).toBe(7);
+    expect((await db.collection('messages').doc(String(id)).get()).get('senderMemberId')).toBe(7);
   });
 
   test.each([
@@ -132,7 +201,7 @@ describe('sending', () => {
     const sue = await deviceFor(deps, 8);
     const other = await deviceFor(deps, 8);
 
-    expect(await reasonOf(sendMessage(deps, deviceCaller(sender, 7), {
+    expect(await reasonOf(sendMessage(deps, deviceCaller(sender, 7), { id: newMessageId(Date.now()),
       memberIds: [8],
       envelopes: envelopes(sue, other),
     }))).toBe('fellowship_stale_audience');
@@ -143,7 +212,7 @@ describe('sending', () => {
     const { deps } = fake();
     const sender = await deviceFor(deps, 7);
 
-    expect(await reasonOf(sendMessage(deps, deviceCaller(sender, 7), { memberIds: [8], envelopes: [envelope('d_x')] })))
+    expect(await reasonOf(sendMessage(deps, deviceCaller(sender, 7), { id: newMessageId(Date.now()), memberIds: [8], envelopes: [envelope('d_x')] })))
       .toBe('fellowship_no_reachable_members');
   });
 
@@ -158,7 +227,7 @@ describe('sending', () => {
     const sender = await deviceFor(deps, 7);
     await deviceFor(deps, 8);
 
-    expect(await reasonOf(sendMessage(deps, deviceCaller(sender, 7), { memberIds: [8], envelopes })))
+    expect(await reasonOf(sendMessage(deps, deviceCaller(sender, 7), { id: newMessageId(Date.now()), memberIds: [8], envelopes })))
       .toBe('fellowship_bad_envelope');
   });
 
@@ -167,7 +236,7 @@ describe('sending', () => {
     const sender = await deviceFor(deps, 7);
     await adminRevoke(deps, { deviceId: sender });
 
-    expect(await reasonOf(sendMessage(deps, deviceCaller(sender, 7), { memberIds: [8], envelopes: [] })))
+    expect(await reasonOf(sendMessage(deps, deviceCaller(sender, 7), { id: newMessageId(Date.now()), memberIds: [8], envelopes: [] })))
       .toBe('fellowship_unauthenticated');
   });
 
@@ -178,10 +247,10 @@ describe('sending', () => {
     const caller = deviceCaller(sender, 7);
 
     for (let i = 0; i < 20; i++) {
-      await sendMessage(deps, caller, { memberIds: [8], envelopes: [envelope(sue)] });
+      await sendMessage(deps, caller, { id: newMessageId(Date.now()), memberIds: [8], envelopes: [envelope(sue)] });
     }
 
-    expect(await reasonOf(sendMessage(deps, caller, { memberIds: [8], envelopes: [envelope(sue)] })))
+    expect(await reasonOf(sendMessage(deps, caller, { id: newMessageId(Date.now()), memberIds: [8], envelopes: [envelope(sue)] })))
       .toBe('fellowship_rate_limited');
   });
 
@@ -191,7 +260,7 @@ describe('sending', () => {
     const google = await googleCaller('sue@example.org', {});
     const { deviceId: sue } = await enrol(deps, google, { publicKey: newPublicKey(), platform: 'android', label: 'Pixel' });
 
-    await sendMessage(deps, deviceCaller(sender, 7), {
+    await sendMessage(deps, deviceCaller(sender, 7), { id: newMessageId(Date.now()),
       memberIds: [8],
       committees: ['public-information'],
       envelopes: [envelope(sue)],
@@ -223,8 +292,8 @@ describe('the admin screens', () => {
     expect(audiences[0].origin).toBe('admin');
     expect(answer.reachable).toBe(2);
 
-    const { id } = await adminSend(deps, { everyone: true, envelopes: [envelope(dave), envelope(sue)] });
-    const message = await db.collection('messages').doc(id).get();
+    const { id } = await adminSend(deps, { id: newMessageId(Date.now()), everyone: true, envelopes: [envelope(dave), envelope(sue)] });
+    const message = await db.collection('messages').doc(String(id)).get();
     expect(message.get('senderMemberId')).toBe(0);
     expect(message.get('audience')).toBe('everyone');
   });

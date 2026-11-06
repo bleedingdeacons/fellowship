@@ -39,6 +39,9 @@ final class Settings implements CredentialStore
     /** Default days a message is kept before the sweep removes it. */
     public const DEFAULT_RETENTION_DAYS = 180;
 
+    public const LINK_BACKEND_FELLOWSHIP = 'fellowship';
+    public const LINK_BACKEND_FIREBASE = 'firebase';
+
     private readonly Cipher $cipher;
 
     public function __construct(?Cipher $cipher = null)
@@ -110,6 +113,29 @@ final class Settings implements CredentialStore
     public function setRetentionDays(int $days): void
     {
         $this->writePublic('retention_days', (string) max(0, $days));
+    }
+
+    /**
+     * Which back end Link should use on this site.
+     *
+     * Anything but an exact `firebase` reads as Fellowship, so a damaged option
+     * leaves phones on the back end they already work with.
+     */
+    public function getLinkBackend(): string
+    {
+        $all = get_option(self::OPTION_PUBLIC, []);
+
+        return is_array($all) && ($all['link_backend'] ?? '') === self::LINK_BACKEND_FIREBASE
+            ? self::LINK_BACKEND_FIREBASE
+            : self::LINK_BACKEND_FELLOWSHIP;
+    }
+
+    public function setLinkBackend(string $backend): void
+    {
+        $this->writePublic(
+            'link_backend',
+            $backend === self::LINK_BACKEND_FIREBASE ? self::LINK_BACKEND_FIREBASE : self::LINK_BACKEND_FELLOWSHIP,
+        );
     }
 
     /**

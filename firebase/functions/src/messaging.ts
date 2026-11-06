@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import { FieldValue } from 'firebase-admin/firestore';
 import { HttpsError } from 'firebase-functions/v2/https';
 import { ENVELOPE_MAX_LENGTH, IN_QUERY_LIMIT, SEND_MAX, SEND_WINDOW_SECONDS } from './config';
@@ -17,6 +18,27 @@ import type { AudienceQuery } from './fellowship';
  * which committees, because a committee's slug says what it is.
  */
 
+/**
+ * A message id: a number that grows with time, in the shape Link already uses.
+ *
+ * Link's history, conversations, receipts and backups all key on a number, and
+ * poll for anything above the highest they hold. Keeping that shape means none of
+ * it has to change, and these ids sort above every id Fellowship ever issued, so
+ * a phone's existing history and poll mark carry straight across.
+ *
+ * Milliseconds times 1024 stays within JavaScript's safe integers until the year
+ * 2242, and the low bits keep two sends in the same millisecond apart.
+ *
+ * It is issued when the audience is resolved, because the phone seals it inside
+ * the message: pushes and the opening code read the id from the payload.
+ */
+export function newMessageId(nowMilliseconds: number): number {
+  return nowMilliseconds * 1024 + randomInt(1024);
+}
+
+/** How far an id may be from now when a send presents it. */
+const ID_WINDOW_MILLISECONDS = 10 * 60 * 1000;
+
 export interface Reach {
   devices: { deviceId: string; memberId: number; publicKey: string }[];
   memberIds: number[];
@@ -34,7 +56,7 @@ export async function resolveAudience(deps: Deps, caller: Caller | undefined, da
   const device = await requireLiveDevice(deps, caller);
   const reach = await reachOf(deps, memberAudience(device.memberId, data));
 
-  return summary(reach);
+  return summary(deps, reach);
 }
 
 export async function sendMessage(deps: Deps, caller: Caller | undefined, data: Data) {
@@ -44,7 +66,7 @@ export async function sendMessage(deps: Deps, caller: Caller | undefined, data: 
 
   const query = memberAudience(device.memberId, data);
 
-  return deliver(deps, query, device.memberId, data.envelopes);
+  return deliver(deps, query, device.memberId, data.id, data.envelopes);
 }
 
 export async function reachOf(deps: Deps, query: AudienceQuery): Promise<Reach> {
@@ -64,10 +86,11 @@ export async function reachOf(deps: Deps, query: AudienceQuery): Promise<Reach> 
   return { devices, memberIds };
 }
 
-export function summary(reach: Reach) {
+export function summary(deps: Deps, reach: Reach) {
   const reached = new Set(reach.devices.map((device) => device.memberId));
 
   return {
+    id: newMessageId(deps.now()),
     devices: reach.devices,
     members: reach.memberIds.length,
     reachable: reached.size,
@@ -78,8 +101,15 @@ export function summary(reach: Reach) {
  * Re-resolves and compares, then writes. Used by a handset and, with an admin
  * audience, by the Compose screen.
  */
-export async function deliver(deps: Deps, query: AudienceQuery, senderMemberId: number, envelopes: unknown) {
+export async function deliver(
+  deps: Deps,
+  query: AudienceQuery,
+  senderMemberId: number,
+  messageId: unknown,
+  envelopes: unknown,
+) {
   const sealed = requireEnvelopes(envelopes);
+  const id = requireMessageId(deps, messageId);
   const reach = await reachOf(deps, query);
 
   if (reach.devices.length === 0) {
@@ -96,18 +126,14 @@ export async function deliver(deps: Deps, query: AudienceQuery, senderMemberId: 
     || expected.size !== offered.size
     || [...expected].some((deviceId) => !offered.has(deviceId))
   ) {
-    throw new HttpsError('failed-precondition', 'Who this message reaches has changed.', {
-      reason: 'fellowship_stale_audience',
-    });
+    throw staleAudience();
   }
 
   const recipientMemberIds = [...new Set(reach.devices.map((device) => device.memberId))];
-  const message = deps.db.collection('messages').doc();
-  const writer = deps.db.bulkWriter();
 
   // The message first: a receipt is checked against it, and an inbox entry that
   // arrives first could be acknowledged before there is anything to count.
-  await message.create({
+  await createMessage(deps, id, {
     senderMemberId,
     audience: audienceKind(query),
     recipientMemberIds,
@@ -117,10 +143,13 @@ export async function deliver(deps: Deps, query: AudienceQuery, senderMemberId: 
     createdAt: FieldValue.serverTimestamp(),
   });
 
+  const writer = deps.db.bulkWriter();
+
   for (const envelope of sealed) {
-    writer.create(deps.db.collection('devices').doc(envelope.deviceId).collection('inbox').doc(message.id), {
+    writer.create(deps.db.collection('devices').doc(envelope.deviceId).collection('inbox').doc(String(id)), {
       k: envelope.k,
       p: envelope.p,
+      seq: id,
       senderMemberId,
       createdAt: FieldValue.serverTimestamp(),
     });
@@ -129,10 +158,45 @@ export async function deliver(deps: Deps, query: AudienceQuery, senderMemberId: 
   await writer.close();
 
   return {
-    id: message.id,
+    id,
+    createdAt: nowSeconds(deps),
     members: reach.memberIds.length,
     reachable: recipientMemberIds.length,
   };
+}
+
+/** A sealed id can't be changed, so one already taken means sealing again. */
+async function createMessage(deps: Deps, id: number, fields: Record<string, unknown>): Promise<void> {
+  try {
+    await deps.db.collection('messages').doc(String(id)).create(fields);
+  } catch (error) {
+    if ((error as { code?: number }).code === 6) {
+      throw staleAudience();
+    }
+
+    throw error;
+  }
+}
+
+function staleAudience(): HttpsError {
+  return new HttpsError('failed-precondition', 'Who this message reaches has changed.', {
+    reason: 'fellowship_stale_audience',
+  });
+}
+
+/** One this server issued recently, as far as anybody can tell without storing them. */
+function requireMessageId(deps: Deps, value: unknown): number {
+  if (
+    typeof value !== 'number'
+    || !Number.isSafeInteger(value)
+    || Math.abs(value / 1024 - deps.now()) > ID_WINDOW_MILLISECONDS
+  ) {
+    throw new HttpsError('invalid-argument', 'That message could not be read.', {
+      reason: 'fellowship_bad_message_id',
+    });
+  }
+
+  return value;
 }
 
 function memberAudience(senderMemberId: number, data: Data): AudienceQuery {

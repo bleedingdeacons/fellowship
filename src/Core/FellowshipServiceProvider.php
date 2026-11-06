@@ -346,6 +346,7 @@ final class FellowshipServiceProvider
             $c->get(MemberGate::class),
             $c->get(FirebaseCustomTokenMinter::class),
             $c->get(RateLimiter::class),
+            $c->get(Settings::class),
         ));
 
         $container->register(ServiceController::class, fn(ContainerInterface $c) => new ServiceController(
