@@ -1,3 +1,4 @@
+import * as logger from 'firebase-functions/logger';
 import { HttpsError } from 'firebase-functions/v2/https';
 import { GoogleAuth } from 'google-auth-library';
 
@@ -48,7 +49,10 @@ export function httpFellowship(
   serviceUrl: string,
   idToken: (audience: string) => Promise<string> = googleIdToken,
 ): Fellowship {
-  async function post(route: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async function post(
+    route: string,
+    body: Record<string, unknown>,
+  ): Promise<{ answer: Record<string, unknown>; response: Response }> {
     let response: Response;
     try {
       response = await fetch(`${serviceUrl}/${route}`, {
@@ -66,32 +70,41 @@ export function httpFellowship(
       });
     }
 
-    const answer = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    const text = await response.text().catch(() => '');
+    const answer = jsonObject(text);
 
     if (!response.ok) {
       // Fellowship's own refusal goes back to the app unchanged, so it can say
       // the same thing it says today. Anything else is an outage.
       const code = STATUS_TO_CODE[response.status] ?? 'unavailable';
-      throw new HttpsError(code, String(answer.message ?? 'The intergroup site refused.'), {
-        reason: String(answer.code ?? 'fellowship_refused'),
+      throw new HttpsError(code, String(answer?.message ?? 'The intergroup site refused.'), {
+        reason: String(answer?.code ?? 'fellowship_refused'),
       });
     }
 
-    return answer;
+    if (answer === null) {
+      throw unreadable(route, response, text);
+    }
+
+    return { answer, response };
   }
 
   return {
     async member(query) {
-      const answer = await post('member', {
+      const { answer, response } = await post('member', {
         email: query.email,
         member_id: query.memberId,
       });
 
-      return { memberId: Number(answer.member_id ?? 0), admitted: answer.admitted === true };
+      if (typeof answer.admitted !== 'boolean') {
+        throw unreadable('member', response, '');
+      }
+
+      return { memberId: Number(answer.member_id ?? 0), admitted: answer.admitted };
     },
 
     async audience(query) {
-      const answer = await post('audience', {
+      const { answer, response } = await post('audience', {
         origin: query.origin,
         sender_member_id: query.senderMemberId,
         member_ids: query.memberIds,
@@ -102,9 +115,49 @@ export function httpFellowship(
 
       const ids = answer.member_ids;
 
-      return Array.isArray(ids) ? ids.map(Number) : [];
+      if (!Array.isArray(ids)) {
+        throw unreadable('audience', response, '');
+      }
+
+      return ids.map(Number);
     },
   };
+}
+
+function jsonObject(text: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
+
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A success that isn't Fellowship's answer, such as a page from something in front
+ * of the site. Reading it as "nobody" would tell a member they aren't one, so it
+ * is an outage.
+ *
+ * @param text The body when it wasn't JSON. A JSON body from Fellowship's route
+ *             holds member ids, so it is never logged.
+ */
+function unreadable(route: string, response: Response, text: string): HttpsError {
+  logger.error('Fellowship answered something that could not be read', {
+    route,
+    status: response.status,
+    url: response.url,
+    redirected: response.redirected,
+    contentType: response.headers.get('content-type'),
+    server: response.headers.get('server'),
+    start: text.slice(0, 200),
+  });
+
+  return new HttpsError('unavailable', 'The intergroup site could not be reached.', {
+    reason: 'fellowship_unreadable_answer',
+  });
 }
 
 async function googleIdToken(audience: string): Promise<string> {
