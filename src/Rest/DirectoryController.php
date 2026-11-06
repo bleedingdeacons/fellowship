@@ -11,6 +11,8 @@ if (!defined('ABSPATH')) {
 use Fellowship\Core\Settings;
 use Fellowship\Devices\CurrentDevice;
 use Fellowship\Devices\DeviceResolution;
+use Fellowship\Devices\FirebaseDeviceResolution;
+use Fellowship\Devices\FirebaseDevices;
 use Fellowship\Directory\DirectoryPresenter;
 use Scrutiny\Audit\Interfaces\AuditLogger;
 use WP_Error;
@@ -46,6 +48,7 @@ final class DirectoryController
         private readonly DirectoryPresenter $presenter,
         private readonly Settings $settings,
         private readonly AuditLogger $auditLogger,
+        private readonly ?FirebaseDevices $firebaseDevices = null,
     ) {
     }
 
@@ -69,6 +72,11 @@ final class DirectoryController
             return $insecure;
         }
 
+        $firebase = $this->firebaseResolution($request);
+        if ($firebase !== null) {
+            return $this->firebaseIndex($firebase);
+        }
+
         $resolved = $this->currentDevice->resolve($request);
         $device = $resolved->device;
         if ($device === null) {
@@ -81,6 +89,56 @@ final class DirectoryController
                     ['status' => 403],
                 )
                 : new WP_Error('fellowship_unauthenticated', 'This device is not signed in.', ['status' => 401]);
+        }
+
+        $directory = $this->presenter->forApp($this->settings->allowsCommitteeSendFromApp());
+
+        $this->auditLogger->log(
+            AuditLogger::ACTION_VIEW,
+            AuditLogger::ENTITY_MEMBER,
+            $device->memberId,
+            'directory',
+            'Link directory read;members:' . count($directory['members'])
+                . ';committees:' . count($directory['committees'])
+                . ';device:' . $device->id,
+        );
+
+        return new WP_REST_Response($directory, 200);
+    }
+
+    /** The outcome when this request carries a Firebase ID token, or null when it doesn't. */
+    private function firebaseResolution(WP_REST_Request $request): ?FirebaseDeviceResolution
+    {
+        if ($this->firebaseDevices === null) {
+            return null;
+        }
+
+        if (!preg_match('/^\s*Bearer\s+(\S+)\s*$/i', (string) $request->get_header('authorization'), $matches)) {
+            return null;
+        }
+
+        return FirebaseDevices::looksLikeIdToken($matches[1])
+            ? $this->firebaseDevices->resolve($matches[1])
+            : null;
+    }
+
+    private function firebaseIndex(FirebaseDeviceResolution $resolved): WP_REST_Response|WP_Error
+    {
+        $device = $resolved->device;
+        if ($device === null) {
+            return match ($resolved->refusal) {
+                FirebaseDeviceResolution::UNAVAILABLE => new WP_Error(
+                    'fellowship_unavailable',
+                    'The address book could not be read just now. Please try again.',
+                    ['status' => 503],
+                ),
+                DeviceResolution::NOT_A_MEMBER => new WP_Error(
+                    'fellowship_not_a_member',
+                    'That address no longer matches a member record.',
+                    ['status' => 403],
+                ),
+                default => new WP_Error('fellowship_unauthenticated', 'This device is not signed in.', ['status' => 401]),
+            };
         }
 
         $directory = $this->presenter->forApp($this->settings->allowsCommitteeSendFromApp());

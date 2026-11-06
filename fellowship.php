@@ -234,4 +234,5 @@ register_deactivation_hook(__FILE__, function () {
     // Stop the retention sweep once Fellowship is inactive. Enrolled
     // handsets are left alone, for the reason the kill switch gives.
     wp_clear_scheduled_hook(\Fellowship\Plugin::PURGE_CRON_HOOK);
+    wp_clear_scheduled_hook(\Fellowship\Sync\MemberWatch::CRON_HOOK);
 });

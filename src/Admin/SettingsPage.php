@@ -11,6 +11,7 @@ if (!defined('ABSPATH')) {
 use Fellowship\Core\Settings;
 use Fellowship\Push\ServiceAccount;
 use Fellowship\Rest\DeviceAuthController;
+use Fellowship\Sync\RetentionSync;
 use Guardian\Admin\ProviderCredentialsSection;
 use Guardian\Admin\ProviderField;
 
@@ -35,8 +36,10 @@ final class SettingsPage
     private const CAPABILITY = 'manage_options';
     private const NONCE = 'fellowship_settings';
 
-    public function __construct(private readonly Settings $settings)
-    {
+    public function __construct(
+        private readonly Settings $settings,
+        private readonly ?RetentionSync $retention = null,
+    ) {
     }
 
     public function register(): void
@@ -186,6 +189,9 @@ final class SettingsPage
 
         $this->settings->setCommitteeSendFromApp(!empty($_POST['app_committee_send']));
         $this->settings->setRetentionDays((int) ($_POST['retention_days'] ?? Settings::DEFAULT_RETENTION_DAYS));
+
+        // After the service account above, so a new one is used straight away.
+        $this->retention?->push();
 
         return 'saved';
     }

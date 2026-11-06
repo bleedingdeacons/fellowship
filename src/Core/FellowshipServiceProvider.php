@@ -23,6 +23,14 @@ use Fellowship\Auth\FirebaseSignIn;
 use Fellowship\Auth\IdentityBroker;
 use Fellowship\Auth\LinkAudience;
 use Fellowship\Auth\PasswordAuthenticator;
+use Fellowship\Devices\FirebaseDevices;
+use Fellowship\Firebase\AdminFunctions;
+use Fellowship\Firebase\FirestoreClient;
+use Fellowship\Firebase\GoogleTokens;
+use Fellowship\Firebase\LiveMembers;
+use Fellowship\Sync\MemberWatch;
+use Fellowship\Sync\RetentionSync;
+use Guardian\Firebase\FirebaseDeviceTokenVerifier;
 use Unity\Auth\Interfaces\PasswordCredentialRepository;
 use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
@@ -191,6 +199,7 @@ final class FellowshipServiceProvider
             $c->get(DeviceRepository::class),
             $c->get(MemberGate::class),
             $c->get(AudienceProviders::class),
+            $c->get(FirebaseDevices::class),
         ));
 
         // ── Messages ──
@@ -249,6 +258,8 @@ final class FellowshipServiceProvider
             $c->has(GroupRepository::class) ? $c->get(GroupRepository::class) : null,
             // The same, for intergroup service positions.
             $c->has(PositionRepository::class) ? $c->get(PositionRepository::class) : null,
+            // Who has a device on Firebase, on top of the table above.
+            $c->get(LiveMembers::class),
         ));
 
         // ── Password sign-in ──
@@ -304,6 +315,49 @@ final class FellowshipServiceProvider
             );
         });
 
+        // ── Firebase ──
+        //
+        // The same service account again, for Firestore and the admin Functions.
+        $container->register(GoogleTokens::class, fn() => new GoogleTokens());
+        $container->register(FirestoreClient::class, function (ContainerInterface $c) {
+            $settings = $c->get(Settings::class);
+            return new FirestoreClient(
+                static fn(): ?ServiceAccount => ServiceAccount::fromJson($settings->getFcmServiceAccount()),
+                $c->get(GoogleTokens::class),
+            );
+        });
+        $container->register(AdminFunctions::class, function (ContainerInterface $c) {
+            $settings = $c->get(Settings::class);
+            return new AdminFunctions(
+                static fn(): ?ServiceAccount => ServiceAccount::fromJson($settings->getFcmServiceAccount()),
+                $c->get(GoogleTokens::class),
+            );
+        });
+        $container->register(LiveMembers::class, fn(ContainerInterface $c) => new LiveMembers(
+            $c->get(FirestoreClient::class),
+        ));
+        $container->register(FirebaseDevices::class, function (ContainerInterface $c) {
+            $settings = $c->get(Settings::class);
+            return new FirebaseDevices(
+                new FirebaseDeviceTokenVerifier($c->get(self::JWT_VERIFIER)),
+                static fn(): string => ServiceAccount::fromJson($settings->getFcmServiceAccount())->projectId ?? '',
+                $c->get(FirestoreClient::class),
+                $c->get(MemberRepository::class),
+                $c->get(MemberGate::class),
+            );
+        });
+        $container->register(RetentionSync::class, fn(ContainerInterface $c) => new RetentionSync(
+            $c->get(Settings::class),
+            $c->get(FirestoreClient::class),
+        ));
+        $container->register(MemberWatch::class, fn(ContainerInterface $c) => new MemberWatch(
+            $c->get(MemberRepository::class),
+            $c->get(MemberGate::class),
+            $c->get(FirestoreClient::class),
+            $c->get(AdminFunctions::class),
+            $c->get(RetentionSync::class),
+        ));
+
         // ── REST ──
         $container->register(DeviceAuthController::class, fn(ContainerInterface $c) => new DeviceAuthController(
             $c->get(DeviceRepository::class),
@@ -339,6 +393,7 @@ final class FellowshipServiceProvider
             $c->get(DirectoryPresenter::class),
             $c->get(Settings::class),
             $c->get(AuditLogger::class),
+            $c->get(FirebaseDevices::class),
         ));
 
         $container->register(FirebaseIdentityController::class, fn(ContainerInterface $c) => new FirebaseIdentityController(
@@ -380,6 +435,7 @@ final class FellowshipServiceProvider
         ));
         $container->register(SettingsPage::class, fn(ContainerInterface $c) => new SettingsPage(
             $c->get(Settings::class),
+            $c->get(RetentionSync::class),
         ));
     }
 }

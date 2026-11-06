@@ -42,6 +42,7 @@ pest()->extend(TestCase::class)->in(
     'EnrolmentEdgesTest.php',
     'FcmTokenTest.php',
     'FirebaseCustomTokenMinterTest.php',
+    'FirebaseDevicesTest.php',
     'FirebaseIdentityRestTest.php',
     'IdentityBrokerTest.php',
     'InsecureAndLimitedTest.php',

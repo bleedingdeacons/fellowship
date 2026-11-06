@@ -20,6 +20,7 @@ use Fellowship\Core\Settings;
 use Fellowship\Devices\DeviceRepository;
 use Fellowship\Logger\HasLogger;
 use Fellowship\Messaging\MessageApi;
+use Fellowship\Sync\MemberWatch;
 use Fellowship\Messaging\MessageRepository;
 use Fellowship\Messaging\RecipientRepository;
 use Fellowship\Rest\DeviceAuthController;
@@ -132,6 +133,7 @@ final class Plugin
         }, 10, 3);
 
         self::registerErasure();
+        $container->get(MemberWatch::class)->register();
 
         if (is_admin()) {
             // Order matters: MessagesPage registers the top-level
