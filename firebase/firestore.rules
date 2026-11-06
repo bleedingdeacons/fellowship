@@ -1,0 +1,60 @@
+rules_version = '2';
+
+// Only a live device reads anything, and it reads only its own.
+//
+// Everything else goes through Cloud Functions, which bypass these rules. That
+// is deliberate: addressing a message needs the member list, which stays in
+// WordPress, so no rule here could check it. What a device may write directly
+// is limited to its own housekeeping and its own receipts.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function device() {
+      return get(/databases/$(database)/documents/devices/$(request.auth.uid)).data;
+    }
+
+    // tokensValidAfter is what makes a takeover immediate. An ID token lasts up
+    // to an hour and Firestore does not check revocation, so without this the
+    // old phone would keep reading until its token expired.
+    function isLiveDevice() {
+      return request.auth != null
+        && request.auth.token.kind == 'device'
+        && device().status == 'live'
+        && request.auth.token.auth_time >= device().tokensValidAfter;
+    }
+
+    function isThisDevice(deviceId) {
+      return isLiveDevice() && request.auth.uid == deviceId;
+    }
+
+    match /devices/{deviceId} {
+      allow get: if isThisDevice(deviceId);
+
+      allow update: if isThisDevice(deviceId)
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['pushToken', 'keyFault', 'lastSeenAt']);
+
+      match /inbox/{messageId} {
+        allow get, list: if isThisDevice(deviceId);
+      }
+    }
+
+    match /messages/{messageId} {
+      // A sender reads their own, for the counts behind the ticks.
+      allow get, list: if isLiveDevice()
+        && resource.data.senderMemberId == request.auth.token.memberId;
+
+      match /receipts/{memberId} {
+        allow create, update: if isLiveDevice()
+          && memberId == string(request.auth.token.memberId)
+          && request.auth.token.memberId in
+               get(/databases/$(database)/documents/messages/$(messageId)).data.recipientMemberIds
+          && request.resource.data.keys().hasOnly(['receivedAt', 'readAt']);
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

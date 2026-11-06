@@ -440,6 +440,13 @@ two move to a new Guardian major together. What stays here is everything
 Link-specific: the device-code exchange, the audiences, the member gate and
 enrolment.
 
+## Link on Firebase
+
+Link's back end is moving to Firebase, while the member list stays here. The
+Firestore rules and Cloud Functions are in [`firebase/`](firebase/README.md),
+in this repo because they and the `/service/*` routes have to agree. They are
+not in the plugin zip.
+
 ## Version numbers
 
 Releases went from 1.0.0 to 1.10.0, then 2.0.0 to 2.11.1, and on 2026-11-05

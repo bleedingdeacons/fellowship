@@ -25,3 +25,9 @@
 # composer.lock is COMMITTED, deliberately - do not add it here. An ignored
 # lock file makes CI resolve dependencies afresh on every run, so the tool
 # versions a build used are whatever had been published that morning.
+
+# Link's Cloud Functions: dependencies and compiled output.
+/firebase/functions/node_modules/
+/firebase/functions/lib/
+/firebase/*.log
+/firebase/.firebase/
