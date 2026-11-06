@@ -11,6 +11,7 @@ if (!defined('ABSPATH')) {
 use Fellowship\Auth\FirebaseCustomTokenMinter;
 use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Core\RateLimiter;
+use Fellowship\Core\Settings;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Logger\HasLogger;
 use WP_Error;
@@ -55,6 +56,7 @@ final class FirebaseIdentityController
         private readonly MemberGate $gate,
         private readonly FirebaseCustomTokenMinter $minter,
         private readonly RateLimiter $rateLimiter,
+        private readonly Settings $settings,
     ) {
     }
 
@@ -70,6 +72,27 @@ final class FirebaseIdentityController
             'callback'            => [$this, 'password'],
             'permission_callback' => '__return_true',
         ]);
+
+        register_rest_route(self::NAMESPACE, '/backend', [
+            'methods'             => WP_REST_Server::READABLE,
+            'callback'            => [$this, 'backend'],
+            'permission_callback' => '__return_true',
+        ]);
+    }
+
+    /**
+     * Which back end Link should use, asked before anybody has signed in.
+     *
+     * Open on purpose: a phone needs the answer to know how to sign in, and
+     * which of two back ends a site uses tells nobody anything about a member.
+     */
+    public function backend(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        if ($insecure = $this->insecureTransport()) {
+            return $insecure;
+        }
+
+        return new WP_REST_Response(['backend' => $this->settings->getLinkBackend()], 200);
     }
 
     public function password(WP_REST_Request $request): WP_REST_Response|WP_Error

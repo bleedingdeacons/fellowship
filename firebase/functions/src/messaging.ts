@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import { FieldValue } from 'firebase-admin/firestore';
 import { HttpsError } from 'firebase-functions/v2/https';
 import { ENVELOPE_MAX_LENGTH, IN_QUERY_LIMIT, SEND_MAX, SEND_WINDOW_SECONDS } from './config';
@@ -16,6 +17,23 @@ import type { AudienceQuery } from './fellowship';
  * Nothing readable is stored. A message records the kind of audience rather than
  * which committees, because a committee's slug says what it is.
  */
+
+/**
+ * A message id: a number that grows with time, in the shape Link already uses.
+ *
+ * Link's history, conversations, receipts and backups all key on a number, and
+ * poll for anything above the highest they hold. Keeping that shape means none of
+ * it has to change, and these ids sort above every id Fellowship ever issued, so
+ * a phone's existing history and poll mark carry straight across.
+ *
+ * Milliseconds times 1024 stays within JavaScript's safe integers until the year
+ * 2242, and the low bits keep two sends in the same millisecond apart.
+ */
+export function newMessageId(nowMilliseconds: number): number {
+  return nowMilliseconds * 1024 + randomInt(1024);
+}
+
+const ID_ATTEMPTS = 3;
 
 export interface Reach {
   devices: { deviceId: string; memberId: number; publicKey: string }[];
@@ -102,12 +120,10 @@ export async function deliver(deps: Deps, query: AudienceQuery, senderMemberId: 
   }
 
   const recipientMemberIds = [...new Set(reach.devices.map((device) => device.memberId))];
-  const message = deps.db.collection('messages').doc();
-  const writer = deps.db.bulkWriter();
 
   // The message first: a receipt is checked against it, and an inbox entry that
   // arrives first could be acknowledged before there is anything to count.
-  await message.create({
+  const id = await createMessage(deps, {
     senderMemberId,
     audience: audienceKind(query),
     recipientMemberIds,
@@ -117,10 +133,13 @@ export async function deliver(deps: Deps, query: AudienceQuery, senderMemberId: 
     createdAt: FieldValue.serverTimestamp(),
   });
 
+  const writer = deps.db.bulkWriter();
+
   for (const envelope of sealed) {
-    writer.create(deps.db.collection('devices').doc(envelope.deviceId).collection('inbox').doc(message.id), {
+    writer.create(deps.db.collection('devices').doc(envelope.deviceId).collection('inbox').doc(String(id)), {
       k: envelope.k,
       p: envelope.p,
+      seq: id,
       senderMemberId,
       createdAt: FieldValue.serverTimestamp(),
     });
@@ -129,10 +148,28 @@ export async function deliver(deps: Deps, query: AudienceQuery, senderMemberId: 
   await writer.close();
 
   return {
-    id: message.id,
+    id,
+    createdAt: nowSeconds(deps),
     members: reach.memberIds.length,
     reachable: recipientMemberIds.length,
   };
+}
+
+/** Takes a new id, trying again in the rare case one is already taken. */
+async function createMessage(deps: Deps, fields: Record<string, unknown>): Promise<number> {
+  for (let attempt = 1; ; attempt++) {
+    const id = newMessageId(deps.now());
+
+    try {
+      await deps.db.collection('messages').doc(String(id)).create(fields);
+
+      return id;
+    } catch (error) {
+      if ((error as { code?: number }).code !== 6 || attempt >= ID_ATTEMPTS) {
+        throw error;
+      }
+    }
+  }
 }
 
 function memberAudience(senderMemberId: number, data: Data): AudienceQuery {

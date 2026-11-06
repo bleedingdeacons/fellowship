@@ -5,7 +5,7 @@ import { countReceipt, pushInboxEntry, sweep } from '../src/background';
 import type { Deps } from '../src/deps';
 import { enrol } from '../src/devices';
 import { overBudget } from '../src/killSwitch';
-import { resolveAudience, sendMessage } from '../src/messaging';
+import { newMessageId, resolveAudience, sendMessage } from '../src/messaging';
 import { auth, db, deviceCaller, fake, googleCaller, newPublicKey, passwordCaller, reasonOf, resetEmulators } from './support';
 
 beforeEach(resetEmulators);
@@ -98,14 +98,40 @@ describe('sending', () => {
 
     const { id } = await sendMessage(deps, deviceCaller(sender, 7), { memberIds: [8], envelopes: [envelope(sue)] });
 
-    const entry = await db.collection('devices').doc(sue).collection('inbox').doc(id).get();
+    const entry = await db.collection('devices').doc(sue).collection('inbox').doc(String(id)).get();
     expect(entry.get('k')).toBe('wrapped-key');
     expect(entry.get('p')).toBe('sealed-payload');
     expect(entry.get('senderMemberId')).toBe(7);
 
-    const message = await db.collection('messages').doc(id).get();
+    const message = await db.collection('messages').doc(String(id)).get();
     expect(message.get('recipientMemberIds')).toEqual([8]);
     expect(message.get('receivedCount')).toBe(0);
+  });
+
+  test('an id is a growing number, in the shape Link already uses', async () => {
+    const { deps } = fake();
+    const sender = await deviceFor(deps, 7);
+    const sue = await deviceFor(deps, 8);
+
+    const first = await sendMessage(deps, deviceCaller(sender, 7), { memberIds: [8], envelopes: [envelope(sue)] });
+    const entry = await db.collection('devices').doc(sue).collection('inbox').doc(String(first.id)).get();
+
+    expect(Number.isSafeInteger(first.id)).toBe(true);
+    expect(entry.get('seq')).toBe(first.id);
+    expect(first.createdAt).toBeGreaterThan(0);
+
+    // Well above anything Fellowship ever issued, so existing poll marks carry across.
+    expect(first.id).toBeGreaterThan(1e12);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const second = await sendMessage(deps, deviceCaller(sender, 7), { memberIds: [8], envelopes: [envelope(sue)] });
+
+    expect(second.id).toBeGreaterThan(first.id);
+  });
+
+  test('ids stay safe for a very long time', () => {
+    expect(Number.isSafeInteger(newMessageId(Date.UTC(2200, 0, 1)))).toBe(true);
   });
 
   test('a client cannot claim to be somebody else', async () => {
@@ -119,7 +145,7 @@ describe('sending', () => {
       envelopes: [envelope(sue)],
     });
 
-    expect((await db.collection('messages').doc(id).get()).get('senderMemberId')).toBe(7);
+    expect((await db.collection('messages').doc(String(id)).get()).get('senderMemberId')).toBe(7);
   });
 
   test.each([
@@ -224,7 +250,7 @@ describe('the admin screens', () => {
     expect(answer.reachable).toBe(2);
 
     const { id } = await adminSend(deps, { everyone: true, envelopes: [envelope(dave), envelope(sue)] });
-    const message = await db.collection('messages').doc(id).get();
+    const message = await db.collection('messages').doc(String(id)).get();
     expect(message.get('senderMemberId')).toBe(0);
     expect(message.get('audience')).toBe('everyone');
   });
