@@ -102,6 +102,10 @@ as the service account with `{"everyone": true}`, proves the whole path to
 Fellowship: the answer's `members` count comes from the real site, through a
 Google-signed token.
 
+If something in front of the site answers `200` with its own page, the Functions
+refuse with `fellowship_unreadable_answer` and log the status, address and the start
+of the page as `Fellowship answered something that could not be read`.
+
 ### The kill switch
 
 A budget only sends emails. `budgetAlert` is what stops the spending: it detaches
