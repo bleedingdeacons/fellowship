@@ -78,9 +78,11 @@ service accounts broad roles, so these two have to be granted by hand:
 | --- | --- | --- |
 | `<project number>-compute@developer.gserviceaccount.com` | Cloud Build Service Account | Every function fails to build. |
 | `firebase-adminsdk-fbsvc@<project>.iam.gserviceaccount.com` | Eventarc Event Receiver | The Firestore triggers fail with `eventarc.events.receiveEvent` denied. |
+| `firebase-adminsdk-fbsvc@<project>.iam.gserviceaccount.com` | Cloud Run Invoker | **Deploys cleanly, then every event is refused with a 403.** No pushes, no tick counts and no sweep, with nothing to say so except the function's request log. |
 
-The CLI gives the compute account Eventarc Event Receiver by itself, which is easy
-to mistake for the second grant. It isn't, because the Functions don't run as it.
+The CLI gives the compute account Eventarc Event Receiver and Cloud Run Invoker by
+itself, which is easy to mistake for these grants. It isn't, because the Functions
+don't run as that account.
 
 **A deploy that fails leaves empty placeholder functions behind**, and they cause
 two confusing failures on the next attempt:
@@ -119,12 +121,27 @@ server. The account has no key, so nothing outside Google can act as it.
 It needs setting up by hand, in this order:
 
 1. Create the `budget-kill-switch` service account. It must exist before a deploy.
-2. Grant it **Billing Account Administrator** on the billing account, and
-   **Eventarc Event Receiver** on the project.
+2. Grant it **Billing Account Administrator** on the billing account, and on the
+   project **Project Billing Manager**, **Eventarc Event Receiver** and **Cloud Run
+   Invoker**. The billing account role doesn't reach the project, so it needs both.
 3. Deploy.
-4. Scope the budget to this project, and connect it to the `budget-alerts` topic.
+4. Publish the check below, and don't go on until it says `ready`.
+5. Create a budget scoped to this project alone, and connect it to the
+   `budget-alerts` topic. This is `Fellowship kill switch`, at £5 a month.
+
+**Don't connect the `£5 Monthly Budget Alert` budget.** Register shares this billing
+account and that budget covers both, so Register's spending could detach billing
+from Fellowship. It stays as an email alert for both projects.
+
+**Credits are subtracted before the budget compares**, which is the default. So
+while the free trial's credit is covering costs, spend stays at £0 and this won't
+fire. It starts protecting real money once costs aren't covered by credit.
 
 Without all of these the budget still emails, but nothing stops the spending.
 
 **To test it without firing it**, publish `{"check": true}` to `budget-alerts`. The
-function logs `Kill switch readiness check`, with `ready` and anything `missing`.
+function logs `Kill switch readiness check`, with `ready`, what's missing on the
+project and the billing account, and any call that was refused.
+
+**The check asks Google whether the permissions are held. It can't prove the detach
+itself works**, because the only way to do that is to fire it.

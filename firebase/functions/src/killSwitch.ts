@@ -1,5 +1,6 @@
 import * as logger from 'firebase-functions/logger';
 import { GoogleAuth } from 'google-auth-library';
+import { BILLING_ACCOUNT } from './config';
 
 /**
  * Detaches billing when spending passes the budget.
@@ -30,56 +31,62 @@ export function overBudget(alert: BudgetAlert): boolean {
 const BILLING_SCOPE = 'https://www.googleapis.com/auth/cloud-billing';
 
 /** What this function needs in order to detach billing. */
-const NEEDED_ON_BILLING_ACCOUNT = ['billing.resourceAssociations.delete'];
 const NEEDED_ON_PROJECT = ['resourcemanager.projects.deleteBillingAssignment'];
+const NEEDED_ON_BILLING_ACCOUNT = ['billing.resourceAssociations.delete'];
 
 /**
  * Says whether detaching would work, without detaching.
  *
  * Firing this for real can cost data, so it can't be tested by firing it. Publish
- * `{"check": true}` to the topic and read the function's log.
+ * `{"check": true}` to the topic and read the function's log. Each question is
+ * answered separately, so one refusal doesn't hide the others.
  */
 export async function checkReadiness(projectId: string): Promise<void> {
   const client = await new GoogleAuth({ scopes: [BILLING_SCOPE, 'https://www.googleapis.com/auth/cloud-platform'] }).getClient();
+  const refusals: string[] = [];
 
-  const info = await client.request<{ billingAccountName?: string; billingEnabled?: boolean }>({
-    url: `https://cloudbilling.googleapis.com/v1/projects/${projectId}/billingInfo`,
-  });
+  const missing = async (url: string, permissions: string[]): Promise<string[]> => {
+    try {
+      const answer = await client.request<{ permissions?: string[] }>({ url, method: 'POST', data: { permissions } });
 
-  const held = async (url: string, permissions: string[]): Promise<string[]> => {
-    const answer = await client.request<{ permissions?: string[] }>({ url, method: 'POST', data: { permissions } });
+      return permissions.filter((permission) => !(answer.data.permissions ?? []).includes(permission));
+    } catch (error) {
+      refusals.push(`${url}: ${String(error)}`);
 
-    return permissions.filter((permission) => !(answer.data.permissions ?? []).includes(permission));
+      return permissions;
+    }
   };
 
-  const missing = [
-    ...(await held(
-      `https://cloudbilling.googleapis.com/v1/${info.data.billingAccountName}:testIamPermissions`,
-      NEEDED_ON_BILLING_ACCOUNT,
-    )),
-    ...(await held(
-      `https://cloudresourcemanager.googleapis.com/v1/projects/${projectId}:testIamPermissions`,
-      NEEDED_ON_PROJECT,
-    )),
-  ];
+  const missingOnProject = await missing(
+    `https://cloudresourcemanager.googleapis.com/v1/projects/${projectId}:testIamPermissions`,
+    NEEDED_ON_PROJECT,
+  );
+
+  const missingOnAccount = await missing(
+    `https://cloudbilling.googleapis.com/v1/${BILLING_ACCOUNT}:testIamPermissions`,
+    NEEDED_ON_BILLING_ACCOUNT,
+  );
 
   logger.info('Kill switch readiness check', {
-    billingEnabled: info.data.billingEnabled === true,
-    ready: missing.length === 0,
-    missing,
+    ready: missingOnProject.length === 0 && missingOnAccount.length === 0,
+    missingOnProject,
+    missingOnAccount,
+    refusals,
   });
 }
 
+/**
+ * Goes straight to the detach. Asking first would make firing depend on a
+ * permission it doesn't otherwise need, and detaching twice is harmless.
+ */
 export async function detachBilling(projectId: string): Promise<void> {
   const client = await new GoogleAuth({ scopes: [BILLING_SCOPE] }).getClient();
-  const url = `https://cloudbilling.googleapis.com/v1/projects/${projectId}/billingInfo`;
 
-  const current = await client.request<{ billingEnabled?: boolean }>({ url });
-  if (current.data.billingEnabled !== true) {
-    return;
-  }
-
-  await client.request({ url, method: 'PUT', data: { billingAccountName: '' } });
+  await client.request({
+    url: `https://cloudbilling.googleapis.com/v1/projects/${projectId}/billingInfo`,
+    method: 'PUT',
+    data: { billingAccountName: '' },
+  });
 
   logger.error('Spending passed the budget, so billing was detached from the project');
 }
