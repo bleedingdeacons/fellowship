@@ -39,8 +39,7 @@ final class SettingsPage
     public function __construct(
         private readonly Settings $settings,
         private readonly ?RetentionSync $retention = null,
-    )
-    {
+    ) {
     }
 
     public function register(): void
