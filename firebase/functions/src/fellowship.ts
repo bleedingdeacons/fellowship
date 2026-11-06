@@ -36,6 +36,9 @@ export interface Fellowship {
 
 const TIMEOUT_MS = 15000;
 
+/** A role address, the same one the rest of the suite gives. */
+const CONTACT = 'rest@aa-bristol.org';
+
 const STATUS_TO_CODE: Record<number, 'invalid-argument' | 'permission-denied' | 'unavailable'> = {
   400: 'invalid-argument',
   403: 'permission-denied',
@@ -60,6 +63,8 @@ export function httpFellowship(
         headers: {
           Authorization: `Bearer ${await idToken(serviceUrl)}`,
           'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'User-Agent': userAgent(serviceUrl),
         },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -122,6 +127,21 @@ export function httpFellowship(
       return ids.map(Number);
     },
   };
+}
+
+/**
+ * The shape every client of the site introduces itself with: what it is, a human
+ * to contact and which deployment it belongs to. See `src/Core/UserAgent.php`.
+ * There is no version, because nothing keeps one for the Functions, and the
+ * convention is to leave it out rather than invent one.
+ */
+export function userAgent(serviceUrl: string): string {
+  const deployment = serviceUrl
+    .split('/wp-json')[0]
+    .replace(/[\r\n\t();]/g, '')
+    .replace(/\/+$/, '');
+
+  return `Fellowship-Functions (${CONTACT}; ${deployment || 'unknown'})`;
 }
 
 function jsonObject(text: string): Record<string, unknown> | null {
