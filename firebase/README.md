@@ -63,9 +63,27 @@ only caller its service routes accept. See `SERVICE_ACCOUNT` in `src/config.ts`.
 
 A budget only sends emails. `budgetAlert` is what stops the spending: it detaches
 billing when actual spend reaches the budget, which puts the project back on Spark
-and stops the Functions. It needs two things set up by hand after the first deploy:
+and stops the Functions.
 
-1. Connect the budget to the `budget-alerts` Pub/Sub topic.
-2. Give the service account permission to change the project's billing.
+**Firing it has real costs.** Google warns that disabling billing can irretrievably
+delete resources and that re-enabling it is manual, with no guarantee of recovery.
+Notifications also lag behind spending, so some charges can still land after it
+fires. It acts only on actual spend, never on a forecast.
 
-Without both, the budget still emails, but nothing stops the spending.
+**It runs as its own account**, `budget-kill-switch@`, which needs Billing Account
+Administrator on the whole billing account. That role reaches beyond this project,
+so it is kept away from `firebase-adminsdk-fbsvc@`, whose key is on the WordPress
+server. The account has no key, so nothing outside Google can act as it.
+
+It needs setting up by hand, in this order:
+
+1. Create the `budget-kill-switch` service account. It must exist before a deploy.
+2. Grant it **Billing Account Administrator** on the billing account, and
+   **Eventarc Event Receiver** on the project.
+3. Deploy.
+4. Scope the budget to this project, and connect it to the `budget-alerts` topic.
+
+Without all of these the budget still emails, but nothing stops the spending.
+
+**To test it without firing it**, publish `{"check": true}` to `budget-alerts`. The
+function logs `Kill switch readiness check`, with `ready` and anything `missing`.
