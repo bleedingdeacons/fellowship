@@ -3,7 +3,7 @@ Contributors: thebleedingdeacons
 Requires at least: 6.1
 Tested up to: 7.1.1
 Requires PHP: 8.4
-Stable tag: 2.11.1
+Stable tag: 1.11.0
 Build date: 2026/11/04 01:30:58
 License: MIT (Modified)
 
