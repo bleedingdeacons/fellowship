@@ -94,6 +94,20 @@ two confusing failures on the next attempt:
   `invoker` doesn't help, because the CLI doesn't apply it to a callable on update.
   Delete it and deploy again.
 
+### What WordPress checks
+
+Fellowship reads Firestore and calls the admin Functions as the same service account.
+A device's ID token is checked by `Devices/FirebaseDevices`, which makes the same
+checks as the rules (a device's token, a live device, not from before it was cut off)
+and then re-runs the member gate, which only WordPress can do. Firebase being
+unreachable is never treated as a refusal.
+
+`Sync/MemberWatch` cuts off devices whose member has gone. Deleting a member from
+Unity removes their devices at once. A daily check revokes anyone else the gate now
+refuses, unless that's more than three members and more than a quarter of those with
+devices. **Then it does nothing and logs an error**, because revoking is final and a
+bad member list shouldn't be able to cut off the fellowship.
+
 ### Checking it
 
 A phone function with no token should answer 401 with `fellowship_unauthenticated`,

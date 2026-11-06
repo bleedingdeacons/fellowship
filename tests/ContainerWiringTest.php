@@ -108,6 +108,13 @@ test('every service can be built', function (string $service) {
     [\Fellowship\Auth\IdentityBroker::class],
     [\Fellowship\Auth\AudienceRegistry::class],
     [\Fellowship\Auth\AudienceProviders::class],
+    [\Fellowship\Firebase\GoogleTokens::class],
+    [\Fellowship\Firebase\FirestoreClient::class],
+    [\Fellowship\Firebase\AdminFunctions::class],
+    [\Fellowship\Firebase\LiveMembers::class],
+    [\Fellowship\Devices\FirebaseDevices::class],
+    [\Fellowship\Sync\RetentionSync::class],
+    [\Fellowship\Sync\MemberWatch::class],
 ]);
 
 test('an audience\'s own Google client reaches Google as that client', function () {

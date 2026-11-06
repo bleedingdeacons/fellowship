@@ -24,7 +24,7 @@
         "ext-mbstring": "*",
         "ext-openssl": "*",
         "ext-zlib": "*",
-        "bleedingdeacons/guardian": "^1.0"
+        "bleedingdeacons/guardian": "^1.2"
     },
     "autoload": {
         "psr-4": {

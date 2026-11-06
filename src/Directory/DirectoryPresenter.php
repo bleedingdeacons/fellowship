@@ -10,6 +10,7 @@ if (!defined('ABSPATH')) {
 
 use Fellowship\Devices\DeviceRepository;
 use Fellowship\Devices\MemberGate;
+use Fellowship\Firebase\LiveMembers;
 use Unity\Committees\Interfaces\CommitteeRepository;
 use Unity\Groups\Interfaces\GroupRepository;
 use Unity\Members\Interfaces\Member;
@@ -97,6 +98,7 @@ final class DirectoryPresenter
      *     list is built without home groups rather than not at all.
      * @param PositionRepository|null $positions The same, for intergroup
      *     service positions.
+     * @param LiveMembers|null        $firebaseMembers Who has a device on Firebase.
      */
     public function __construct(
         private readonly MemberRepository $members,
@@ -105,6 +107,7 @@ final class DirectoryPresenter
         private readonly DeviceRepository $devices,
         private readonly ?GroupRepository $groups = null,
         private readonly ?PositionRepository $positions = null,
+        private readonly ?LiveMembers $firebaseMembers = null,
     ) {
     }
 
@@ -204,6 +207,17 @@ final class DirectoryPresenter
      */
     private function hasDevice(Member $member): bool
     {
+        if ($this->firebaseMembers !== null) {
+            $onFirebase = $this->firebaseMembers->memberIds();
+
+            // Unknown isn't nobody. Selectable is what the app already assumes when
+            // it isn't told, and a send still reports who it couldn't reach, whereas
+            // greying out the whole address book would stop anyone trying.
+            if ($onFirebase === null || isset($onFirebase[$member->getId()])) {
+                return true;
+            }
+        }
+
         if ($this->enrolledIds === null || $this->enrolledEmails === null) {
             $this->enrolledIds = [];
             $this->enrolledEmails = [];

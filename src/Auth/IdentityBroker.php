@@ -10,6 +10,7 @@ if (!defined('ABSPATH')) {
 
 use Fellowship\Devices\CurrentDevice;
 use Fellowship\Devices\DeviceRepository;
+use Fellowship\Devices\FirebaseDevices;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Rest\DeviceAuthController;
 use Guardian\ProviderRegistry;
@@ -38,7 +39,8 @@ use function rest_url;
  *   spends the code; this only guarantees the code it gets back was
  *   issued for it.
  * - {@see sessionFor()}: a handset already signed in to Link presents its
- *   Link device token instead of signing in again. That token was minted
+ *   Link device token, or its Firebase ID token, instead of signing in again.
+ *   That token was minted
  *   after a Google sign-in and the member gate is re-run on it here, so
  *   it proves exactly what a second trip through the browser would have,
  *   without putting the member through one.
@@ -63,6 +65,7 @@ final class IdentityBroker
         private readonly DeviceRepository $devices,
         private readonly MemberGate $gate,
         ?AudienceProviders $clients = null,
+        private readonly ?FirebaseDevices $firebaseDevices = null,
     ) {
         // Defaulted, and last, so a caller written before audiences could
         // bring a client -- Freedom's test harness builds this -- still
@@ -152,6 +155,14 @@ final class IdentityBroker
      */
     public function sessionFor(string $deviceToken): ?LinkSession
     {
+        if ($this->firebaseDevices !== null && FirebaseDevices::looksLikeIdToken($deviceToken)) {
+            $device = $this->firebaseDevices->resolve($deviceToken)->device;
+
+            return $device === null
+                ? null
+                : new LinkSession($device->id, $device->email, $device->memberId, $device->platform);
+        }
+
         $device = $this->currentDevice->resolveToken($deviceToken)->device;
         if ($device === null) {
             return null;
@@ -171,8 +182,15 @@ final class IdentityBroker
      * admitted. For a plugin that accepted {@see sessionFor()} once and
      * must stop when Link's enrolment stops.
      */
-    public function isLive(int $deviceId): bool
+    public function isLive(int|string $deviceId): bool
     {
+        // A string id that isn't a number is a device on Firebase. A column that
+        // stores both hands back a numeric string for one of Fellowship's own.
+        if (is_string($deviceId) && !ctype_digit($deviceId)) {
+            return $this->firebaseDevices?->isLive($deviceId) ?? false;
+        }
+
+        $deviceId = (int) $deviceId;
         if ($deviceId <= 0) {
             return false;
         }

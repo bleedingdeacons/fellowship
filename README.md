@@ -264,7 +264,7 @@ Everything is under `fellowship/v1` and everything requires HTTPS.
 | `POST /messages/{id}/read` | device | Mark read. Marks it received too, if it was not. |
 | `POST /messages/received` | device | `ids`: messages this handset has opened. Ids not addressed to the member are ignored. |
 | `GET /messages/receipts` | device | `ids`: the member's own sent messages. Answers recipients, received and read counts for each; ids they did not send are left out. |
-| `GET /directory` | device | Address book. |
+| `GET /directory` | device, or a device's Firebase ID token | Address book. |
 
 Four more routes arrive ahead of the move to Firebase. Nothing calls them yet:
 
