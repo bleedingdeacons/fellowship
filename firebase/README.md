@@ -52,12 +52,53 @@ firebase emulators:exec --project demo-fellowship --only auth,firestore "npm --p
 
 ## Deploying
 
-Nothing deploys automatically yet. It needs `FELLOWSHIP_SERVICE_URL`, the full
-address of Fellowship's `/wp-json/fellowship/v1/service`, which has to match what
+Nothing deploys automatically yet. From this directory, signed in to the Firebase
+CLI as an owner of the project:
+
+```bash
+npx firebase-tools@15 deploy --only firestore,functions --project fellowship-510917 --non-interactive --force
+```
+
+`--force` also keeps the cleanup policy on old container images, so they don't
+build up storage charges.
+
+`functions/.env.fellowship-510917` holds `FELLOWSHIP_SERVICE_URL`, the full address
+of Fellowship's `/wp-json/fellowship/v1/service` on `/amber`. It has to match what
 Fellowship's `rest_url()` produces exactly, because it's also the token's audience.
 
 The Functions run as the service account Fellowship holds, because that's the
 only caller its service routes accept. See `SERVICE_ACCOUNT` in `src/config.ts`.
+
+### What a new project needs first
+
+Learned from the first deploy, on 2026-11-06. New Google organisations don't give
+service accounts broad roles, so these two have to be granted by hand:
+
+| Account | Role | Without it |
+| --- | --- | --- |
+| `<project number>-compute@developer.gserviceaccount.com` | Cloud Build Service Account | Every function fails to build. |
+| `firebase-adminsdk-fbsvc@<project>.iam.gserviceaccount.com` | Eventarc Event Receiver | The Firestore triggers fail with `eventarc.events.receiveEvent` denied. |
+
+The CLI gives the compute account Eventarc Event Receiver by itself, which is easy
+to mistake for the second grant. It isn't, because the Functions don't run as it.
+
+**A deploy that fails leaves empty placeholder functions behind**, and they cause
+two confusing failures on the next attempt:
+
+- A placeholder for a trigger reads as an HTTPS function, and changing the type is
+  refused. Delete it and deploy again.
+- A phone function is made public only when it is created, so one updated from a
+  placeholder stays private and answers 403 before reaching any code. Setting
+  `invoker` doesn't help, because the CLI doesn't apply it to a callable on update.
+  Delete it and deploy again.
+
+### Checking it
+
+A phone function with no token should answer 401 with `fellowship_unauthenticated`,
+and an admin function with no token should answer a bare 403. `adminResolve`, called
+as the service account with `{"everyone": true}`, proves the whole path to
+Fellowship: the answer's `members` count comes from the real site, through a
+Google-signed token.
 
 ### The kill switch
 
