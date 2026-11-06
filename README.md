@@ -266,6 +266,20 @@ Everything is under `fellowship/v1` and everything requires HTTPS.
 | `GET /messages/receipts` | device | `ids`: the member's own sent messages. Answers recipients, received and read counts for each; ids they did not send are left out. |
 | `GET /directory` | device | Address book. |
 
+Three more routes arrive ahead of the move to Firebase. Nothing calls them yet:
+
+| Route | Auth | What |
+| --- | --- | --- |
+| `POST /auth/identity/password` | none | Check a Unity password and answer a five-minute Firebase custom token, uid `pw_<member id>`. Enrols nothing. |
+| `POST /service/member` | service | `email` or `member_id`: answers `member_id` and whether `MemberGate` admits them. |
+| `POST /service/audience` | service | `member_ids`, `committees`, `gsrs` or `everyone`, with `origin` and `sender_member_id`: answers `member_ids`, sender left out. |
+
+**The member list stays in WordPress**, so Link's Cloud Functions ask these
+instead of holding a copy. *Service* means a Google-signed OIDC token whose
+audience is this site's `/wp-json/fellowship/v1/service` and whose verified
+email is the service account under Settings, which the Functions run as. On
+Google's metadata server that needs `format=full`, or the token has no email.
+
 Two sign-in flows meet at one exchange:
 
 **Google (server-side).** `start` → browser → `callback` exchanges the
