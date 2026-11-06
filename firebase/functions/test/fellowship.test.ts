@@ -1,6 +1,6 @@
 import * as logger from 'firebase-functions/logger';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { httpFellowship } from '../src/fellowship';
+import { httpFellowship, userAgent } from '../src/fellowship';
 
 vi.mock('firebase-functions/logger', () => ({ error: vi.fn() }));
 
@@ -39,6 +39,26 @@ describe('asking Fellowship', () => {
     const [url, init] = fetched.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(`${SERVICE}/audience`);
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer id-token');
+  });
+
+  test('every request says what it is and what it wants back', async () => {
+    const fetched = answers(200, '{"member_id":7,"admitted":true}');
+
+    await client().member({ email: 'a@example.org' });
+
+    const headers = (fetched.mock.calls[0] as unknown as [string, RequestInit])[1].headers as Record<string, string>;
+    expect(headers['User-Agent']).toBe('Fellowship-Functions (rest@aa-bristol.org; https://example.org)');
+    expect(headers.Accept).toBe('application/json');
+  });
+
+  test.each([
+    ['/amber', 'https://aa-bristol.org/amber/wp-json/fellowship/v1/service', 'https://aa-bristol.org/amber'],
+    ['live', 'https://aa-bristol.org/wp-json/fellowship/v1/service', 'https://aa-bristol.org'],
+    ['a trailing slash', 'https://aa-bristol.org//wp-json/x', 'https://aa-bristol.org'],
+    ['characters that would break the header', 'https://a.org/x(y);\r\nz/wp-json/x', 'https://a.org/xyz'],
+    ['nothing', '', 'unknown'],
+  ])('the deployment is named for %s', (_name, url, expected) => {
+    expect(userAgent(url)).toBe(`Fellowship-Functions (rest@aa-bristol.org; ${expected})`);
   });
 
   test('a member comes back with whether they are admitted', async () => {
