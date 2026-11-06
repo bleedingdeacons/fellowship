@@ -102,9 +102,26 @@ as the service account with `{"everyone": true}`, proves the whole path to
 Fellowship: the answer's `members` count comes from the real site, through a
 Google-signed token.
 
-If something in front of the site answers `200` with its own page, the Functions
+If something in front of the site answers a success with its own page, the Functions
 refuse with `fellowship_unreadable_answer` and log the status, address and the start
 of the page as `Fellowship answered something that could not be read`.
+
+### SiteGround's anti-bot challenge
+
+The site's host challenges requests it can't identify, with a `202` page redirecting
+to `/.well-known/sgcaptcha/`, which a server can't complete. So the Functions send
+what every other client of the site sends: a `User-Agent` in the suite's shape
+(what it is, a contact and the deployment) and `Accept: application/json`.
+
+Without them the Functions were challenged on every call, while the same request
+from a PC got through, so **a check from outside Google doesn't prove this path.**
+Use `adminResolve` as above.
+
+### Deploying everything at once
+
+All 15 functions rolling out together can fail some of them with `Quota exceeded for
+total allowable CPU per project per region`. The failed ones keep serving their old
+version. Deploy those again in groups of three.
 
 ### The kill switch
 
