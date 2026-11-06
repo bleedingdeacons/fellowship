@@ -304,11 +304,72 @@ jobs:
   # code and publishes it as a GitHub Release. /deploy pulls the asset from
   # there. Nothing is bumped or built by hand — and this plugin must therefore
   # be in bump.ps1's $ciReleased list, or a second version gets raised on top.
+  firebase:
+    name: Firebase rules & functions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # This repo is private, so minutes count, and most changes here are PHP.
+      # A manual run always tests, so there is a way to run it on demand.
+      - name: Did anything under firebase/ change?
+        id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BASE" HEAD -- firebase; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node
+        if: steps.changes.outputs.run == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: firebase/functions/package-lock.json
+
+      # The Firestore emulator is a Java program.
+      - name: Setup Java
+        if: steps.changes.outputs.run == 'true'
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install dependencies
+        if: steps.changes.outputs.run == 'true'
+        run: npm --prefix firebase/functions ci
+
+      - name: Compile
+        if: steps.changes.outputs.run == 'true'
+        run: npm --prefix firebase/functions run build
+
+      # A demo- project never touches a real one and needs no credentials.
+      - name: Rules and functions, on the emulators
+        if: steps.changes.outputs.run == 'true'
+        working-directory: firebase
+        run: >-
+          npx --yes firebase-tools@15 emulators:exec
+          --project demo-fellowship
+          --only auth,firestore
+          "npm --prefix functions test"
+
   release:
     name: Release
     # Every gate must pass first: needs: ci makes the whole release conditional
     # on a green run, so a failing test can never publish a zip.
-    needs: ci
+    needs: [ci, firebase]
     # main only. PRs run the gates and stop; a push to develop does too.
     # workflow_dispatch releases as well — a manual trigger that ran the gates
     # and then declined to publish would be useless for the case it exists for.

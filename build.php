@@ -45,6 +45,7 @@ class PluginBuilder
 
         // Build artifacts
             'build',
+            'firebase',
 
         // Tests
             'tests',
@@ -108,6 +109,7 @@ class PluginBuilder
 
         // Build artifacts
             'build',
+            'firebase',
 
         // OS files
             'node_modules',
