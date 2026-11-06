@@ -10,11 +10,11 @@ import { onMessagePublished } from 'firebase-functions/v2/pubsub';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import * as admin from './admin';
 import { countReceipt, pushInboxEntry, sweep as runSweep } from './background';
-import { REGION, SERVICE_ACCOUNT } from './config';
+import { KILL_SWITCH_ACCOUNT, REGION, SERVICE_ACCOUNT } from './config';
 import { Deps } from './deps';
 import * as devices from './devices';
 import { httpFellowship } from './fellowship';
-import { BudgetAlert, detachBilling, overBudget } from './killSwitch';
+import { BudgetAlert, checkReadiness, detachBilling, overBudget } from './killSwitch';
 import * as messaging from './messaging';
 
 /** Fellowship's `/wp-json/fellowship/v1/service`, set at deploy. */
@@ -119,10 +119,15 @@ export const sweep = onSchedule(
 
 // The budget publishes to this topic once it is connected in the console.
 export const budgetAlert = onMessagePublished<BudgetAlert>(
-  { ...common, topic: 'budget-alerts' },
+  { ...common, serviceAccount: KILL_SWITCH_ACCOUNT, topic: 'budget-alerts' },
   async (event) => {
-    if (overBudget(event.data.message.json)) {
-      await detachBilling(String(process.env.GCLOUD_PROJECT));
+    const alert = event.data.message.json;
+    const project = String(process.env.GCLOUD_PROJECT);
+
+    if (alert.check === true) {
+      await checkReadiness(project);
+    } else if (overBudget(alert)) {
+      await detachBilling(project);
     }
   },
 );

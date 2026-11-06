@@ -8,6 +8,13 @@ export const REGION = 'europe-west2';
  */
 export const SERVICE_ACCOUNT = 'firebase-adminsdk-fbsvc@fellowship-510917.iam.gserviceaccount.com';
 
+/**
+ * Who the kill switch runs as. It holds Billing Account Administrator, the one
+ * role here that reaches beyond this project, so it is kept away from the account
+ * above, whose key sits on the WordPress server. It has no key of its own.
+ */
+export const KILL_SWITCH_ACCOUNT = 'budget-kill-switch@fellowship-510917.iam.gserviceaccount.com';
+
 /** Matches MAX_DEVICES_PER_MEMBER in Fellowship's DeviceAuthController. */
 export const MAX_DEVICES_PER_MEMBER = 5;
 

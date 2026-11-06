@@ -384,6 +384,7 @@ describe('the kill switch', () => {
     ['with a forecast only', { budgetAmount: 5, alertThresholdExceeded: 1 }, false],
     ['with no budget', { costAmount: 5, budgetAmount: 0 }, false],
     ['with nothing', {}, false],
+    ['with only a test request', { check: true }, false],
   ])('%s', (_name, alert, expected) => {
     expect(overBudget(alert)).toBe(expected);
   });
