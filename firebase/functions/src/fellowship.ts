@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import * as logger from 'firebase-functions/logger';
 import { HttpsError } from 'firebase-functions/v2/https';
 import { GoogleAuth } from 'google-auth-library';
@@ -130,18 +132,32 @@ export function httpFellowship(
 }
 
 /**
- * The shape every client of the site introduces itself with: what it is, a human
- * to contact and which deployment it belongs to. See `src/Core/UserAgent.php`.
- * There is no version, because nothing keeps one for the Functions, and the
- * convention is to leave it out rather than invent one.
+ * The plugin's version, stamped beside the Functions at deploy by
+ * `scripts/stamp-version.cjs`. Empty when it isn't there, as in the tests.
  */
-export function userAgent(serviceUrl: string): string {
+const VERSION = (() => {
+  try {
+    return readFileSync(join(__dirname, '..', 'version.txt'), 'utf8').trim();
+  } catch {
+    return '';
+  }
+})();
+
+/**
+ * The shape every client of the site introduces itself with: what it is and its
+ * version, a human to contact and which deployment it belongs to. The same as
+ * `src/Core/UserAgent.php`, Register and Monitor. With no version the slash is left
+ * out rather than a number invented, as the PHP side does.
+ */
+export function userAgent(serviceUrl: string, version: string = VERSION): string {
   const deployment = serviceUrl
     .split('/wp-json')[0]
     .replace(/[\r\n\t();]/g, '')
     .replace(/\/+$/, '');
 
-  return `Fellowship-Functions (${CONTACT}; ${deployment || 'unknown'})`;
+  const product = /^[0-9A-Za-z.+-]+$/.test(version) ? `Fellowship-Functions/${version}` : 'Fellowship-Functions';
+
+  return `${product} (${CONTACT}; ${deployment || 'unknown'})`;
 }
 
 function jsonObject(text: string): Record<string, unknown> | null {

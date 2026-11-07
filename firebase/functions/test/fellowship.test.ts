@@ -58,8 +58,20 @@ describe('asking Fellowship', () => {
     ['characters that would break the header', 'https://a.org/x(y);\r\nz/wp-json/x', 'https://a.org/xyz'],
     ['nothing', '', 'unknown'],
   ])('the deployment is named for %s', (_name, url, expected) => {
-    expect(userAgent(url)).toBe(`Fellowship-Functions (rest@aa-bristol.org; ${expected})`);
+    expect(userAgent(url, '')).toBe(`Fellowship-Functions (rest@aa-bristol.org; ${expected})`);
   });
+
+  test('the version goes after the product, as every other client of the site sends it', () => {
+    expect(userAgent('https://aa-bristol.org/amber/wp-json/x', '1.18.0'))
+      .toBe('Fellowship-Functions/1.18.0 (rest@aa-bristol.org; https://aa-bristol.org/amber)');
+  });
+
+  test.each([['nothing', ''], ['a version that would break the header', '1.0 (evil); x']])(
+    'with %s the slash is left out rather than a version invented',
+    (_name, version) => {
+      expect(userAgent('https://a.org/wp-json/x', version)).toBe('Fellowship-Functions (rest@aa-bristol.org; https://a.org)');
+    },
+  );
 
   test('a member comes back with whether they are admitted', async () => {
     answers(200, '{"member_id":7,"admitted":false}');

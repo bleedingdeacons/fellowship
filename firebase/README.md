@@ -125,7 +125,16 @@ of the page as `Fellowship answered something that could not be read`.
 The site's host challenges requests it can't identify, with a `202` page redirecting
 to `/.well-known/sgcaptcha/`, which a server can't complete. So the Functions send
 what every other client of the site sends: a `User-Agent` in the suite's shape
-(what it is, a contact and the deployment) and `Accept: application/json`.
+(what it is and its version, a contact and the deployment) and `Accept: application/json`.
+The version is the plugin's, stamped beside the Functions at deploy by
+`scripts/stamp-version.cjs`.
+
+**The headers don't always get through.** On 2026-11-07 the challenge page named its
+reason as `y=ipr:<address>`, the reputation of the Google address the call came from,
+which no header changes. One call from a phone was challenged and the next one got
+through. If sends or sign-ins keep failing with `fellowship_unreadable_answer`, the
+fix is SiteGround exempting `/wp-json/fellowship/v1/service/*` from its anti-bot
+check, or the Functions leaving from one fixed address.
 
 Without them the Functions were challenged on every call, while the same request
 from a PC got through, so **a check from outside Google doesn't prove this path.**
