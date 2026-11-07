@@ -25,6 +25,9 @@ use Fellowship\Messaging\RecipientResolver;
 use Fellowship\Push\FcmClient;
 use Fellowship\Push\FcmTransport;
 use Fellowship\Tests\Support\InMemoryDeviceRepository;
+use Fellowship\Tests\Support\InMemoryLinkDevices;
+use Fellowship\Tests\Support\InMemoryMessageLog;
+use Fellowship\Tests\Support\RecordingDelivery;
 use Fellowship\Tests\Support\InMemoryMessageRepository;
 use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
 use Fellowship\Tests\Support\InMemoryRecipientRepository;
@@ -237,7 +240,7 @@ function coreUnitsDevice(
 
 function coreUnitsMessagesPage(): MessagesPage
 {
-    return new MessagesPage(new InMemoryMessageRepository(), new InMemoryRecipientRepository());
+    return new MessagesPage(new InMemoryMessageLog(), new InMemoryMemberRepository([]));
 }
 
 function coreUnitsComposePage(): ComposePage
@@ -246,17 +249,13 @@ function coreUnitsComposePage(): ComposePage
         new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: 'dave@example.org'),
     ]);
     $gate = new MemberGate($members);
-    $settings = new Settings();
 
     return new ComposePage(
         new MessageApi(
-            new MessageDispatcher(
-                new InMemoryMessageRepository(),
-                new InMemoryRecipientRepository(),
-                new InMemoryDeviceRepository(),
-                new FcmTransport(new FcmClient(), $settings, new MessageSealer()),
-            ),
+            new RecordingDelivery(),
+            new MessageSealer(),
             new RecipientResolver($members, new InMemoryCommitteeRepository(), $gate),
+            $members,
             new SpyAuditLogger(),
         ),
         new InMemoryCommitteeRepository(),
@@ -271,7 +270,7 @@ function coreUnitsDevicesPage(): DevicesPage
     $gate = new MemberGate($members);
 
     return new DevicesPage(
-        new InMemoryDeviceRepository(),
+        new InMemoryLinkDevices(),
         $members,
         new SpyAuditLogger(),
         new PasswordAuthenticator(

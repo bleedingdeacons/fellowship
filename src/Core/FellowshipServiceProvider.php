@@ -26,6 +26,8 @@ use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Devices\FirebaseDevices;
 use Fellowship\Firebase\AdminFunctions;
 use Fellowship\Firebase\FirestoreClient;
+use Fellowship\Firebase\FirestoreLinkDevices;
+use Fellowship\Firebase\FirestoreMessageLog;
 use Fellowship\Firebase\GoogleTokens;
 use Fellowship\Firebase\LiveMembers;
 use Fellowship\Sync\MemberWatch;
@@ -233,8 +235,10 @@ final class FellowshipServiceProvider
         ));
 
         $container->register(MessageApi::class, fn(ContainerInterface $c) => new MessageApi(
-            $c->get(MessageDispatcher::class),
+            $c->get(AdminFunctions::class),
+            $c->get(MessageSealer::class),
             $c->get(RecipientResolver::class),
+            $c->get(MemberRepository::class),
             $c->get(AuditLogger::class),
         ));
 
@@ -415,8 +419,8 @@ final class FellowshipServiceProvider
 
         // ── Admin ──
         $container->register(MessagesPage::class, fn(ContainerInterface $c) => new MessagesPage(
-            $c->get(MessageRepository::class),
-            $c->get(RecipientRepository::class),
+            new FirestoreMessageLog($c->get(FirestoreClient::class)),
+            $c->get(MemberRepository::class),
         ));
         $container->register(ComposePage::class, fn(ContainerInterface $c) => new ComposePage(
             $c->get(MessageApi::class),
@@ -427,7 +431,7 @@ final class FellowshipServiceProvider
             $c->get(DirectoryPresenter::class),
         ));
         $container->register(DevicesPage::class, fn(ContainerInterface $c) => new DevicesPage(
-            $c->get(DeviceRepository::class),
+            new FirestoreLinkDevices($c->get(FirestoreClient::class), $c->get(AdminFunctions::class)),
             $c->get(MemberRepository::class),
             $c->get(AuditLogger::class),
             $c->get(PasswordAuthenticator::class),

@@ -24,6 +24,8 @@ use Fellowship\Messaging\RecipientResolver;
 use Fellowship\Push\FcmClient;
 use Fellowship\Push\FcmTransport;
 use Fellowship\Tests\Support\InMemoryDeviceRepository;
+use Fellowship\Tests\Support\InMemoryLinkDevices;
+use Fellowship\Tests\Support\RecordingDelivery;
 use Fellowship\Tests\Support\InMemoryMessageRepository;
 use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
 use Fellowship\Tests\Support\InMemoryRecipientRepository;
@@ -74,6 +76,7 @@ beforeEach(function () {
     when('wp_generate_uuid4')->alias(static fn(): string => '1111-' . random_int(1, 999999999));
 
     $this->devices = new InMemoryDeviceRepository();
+    $this->linkDevices = new InMemoryLinkDevices();
     $this->messages = new InMemoryMessageRepository();
     $this->recipients = new InMemoryRecipientRepository();
     $this->audit = new SpyAuditLogger();
@@ -178,9 +181,8 @@ test('a client secret survives the slashes WordPress adds', function () {
 // ── The device list ───────────────────────────────────────────────
 
 test('a revoked handset is shown as revoked rather than hidden', function () {
-    // The row stays so somebody can see what happened and when.
-    adminBranchesEnrol();
-    $this->devices->revoke(1, 1788000100);
+    // The record stays so somebody can see what happened and when.
+    $this->linkDevices->add(revoked: true);
 
     expect(captureOutput(fn() => adminBranchesDevicesPage()->render()))->toContain('Revoked');
 });
@@ -188,8 +190,7 @@ test('a revoked handset is shown as revoked rather than hidden', function () {
 test('a handset that cannot read its messages is flagged loudly', function () {
     // Enrolled, looks healthy, and cannot read a word it is sent.
     // The only place that is visible is this screen.
-    adminBranchesEnrol();
-    $this->devices->markKeyFault(1, 1788000100);
+    $this->linkDevices->add(keyFault: true);
 
     expect(captureOutput(fn() => adminBranchesDevicesPage()->render()))->toContain('Cannot read messages');
 });
@@ -197,27 +198,19 @@ test('a handset that cannot read its messages is flagged loudly', function () {
 test('a device whose member has gone says so rather than showing a blank', function () {
     // It means a handset that will fail its next request, and
     // somebody may want to remove the row.
-    adminBranchesEnrol();
+    $this->linkDevices->add();
     $this->members = new InMemoryMemberRepository([]);
 
     expect(captureOutput(fn() => adminBranchesDevicesPage()->render()))->toContain('no member record');
 });
 
 test('a member with no anonymous name is named as such', function () {
-    adminBranchesEnrol();
+    $this->linkDevices->add();
     $this->members = new InMemoryMemberRepository([
         new MemberStub(id: 7, anonymousName: '', personalEmail: ADMIN_BRANCHES_MEMBER),
     ]);
 
     expect(captureOutput(fn() => adminBranchesDevicesPage()->render()))->toContain('unnamed member');
-});
-
-test('a member is found by address when the device carries no id', function () {
-    // Device rows predating the id column carry only the address,
-    // and they still belong to somebody.
-    $this->devices->create('hash-1', ADMIN_BRANCHES_MEMBER, 0, 'Pixel 6a', 'android', 'spki', 'fcm', 'token-1', 1788000000);
-
-    expect(captureOutput(fn() => adminBranchesDevicesPage()->render()))->toContain('Dave P');
 });
 
 // ── The compose screen ────────────────────────────────────────────
@@ -415,7 +408,7 @@ function adminBranchesDevicesPage(): DevicesPage
     $gate = new MemberGate(test()->members);
 
     return new DevicesPage(
-        test()->devices,
+        test()->linkDevices,
         test()->members,
         test()->audit,
         new PasswordAuthenticator(
@@ -432,17 +425,13 @@ function adminBranchesDevicesPage(): DevicesPage
 function adminBranchesComposePage(array $committees = []): ComposePage
 {
     $gate = new MemberGate(test()->members);
-    $settings = new Settings();
 
     return new ComposePage(
         new MessageApi(
-            new MessageDispatcher(
-                test()->messages,
-                test()->recipients,
-                test()->devices,
-                new FcmTransport(new FcmClient(), $settings, new MessageSealer()),
-            ),
+            new RecordingDelivery(),
+            new MessageSealer(),
             new RecipientResolver(test()->members, new InMemoryCommitteeRepository($committees), $gate),
+            test()->members,
             test()->audit,
         ),
         new InMemoryCommitteeRepository($committees),

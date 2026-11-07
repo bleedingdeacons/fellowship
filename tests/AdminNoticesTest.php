@@ -24,6 +24,9 @@ use Fellowship\Messaging\RecipientResolver;
 use Fellowship\Push\FcmClient;
 use Fellowship\Push\FcmTransport;
 use Fellowship\Tests\Support\InMemoryDeviceRepository;
+use Fellowship\Tests\Support\InMemoryLinkDevices;
+use Fellowship\Tests\Support\InMemoryMessageLog;
+use Fellowship\Tests\Support\RecordingDelivery;
 use Fellowship\Tests\Support\InMemoryMessageRepository;
 use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
 use Fellowship\Tests\Support\InMemoryRecipientRepository;
@@ -88,17 +91,17 @@ test('each device result says something', function () {
 });
 
 test('each device refusal says something different', function () {
-    // Three ways the password code does not go out, each needing a
-    // different thing from whoever reads it.
+    // The ways an action does not happen, each needing a different thing
+    // from whoever reads it.
     $seen = [];
 
-    foreach (['code_bad_address', 'code_not_a_member', 'code_too_soon'] as $result) {
+    foreach (['code_bad_address', 'code_not_a_member', 'code_too_soon', 'firebase_unavailable'] as $result) {
         $_GET['fellowship_result'] = $result;
 
         $seen[] = noticeFrom(fn() => adminNoticesDevicesPage()->render());
     }
 
-    expect(array_unique($seen))->toHaveCount(3, 'Two refusals read the same.');
+    expect(array_unique($seen))->toHaveCount(4, 'Two refusals read the same.');
 });
 
 test('the compose screen reports a send', function () {
@@ -147,13 +150,13 @@ test('the messages screen owns the top level menu', function () {
     // a URL that goes nowhere.
     expectAdded('admin_menu')->once();
 
-    (new MessagesPage($this->messages, $this->recipients))->register();
+    (new MessagesPage(new InMemoryMessageLog(), $this->members))->register();
 });
 
 test('every screen registers its menu', function () {
     expectAdded('admin_menu')->times(4);
 
-    (new MessagesPage($this->messages, $this->recipients))->register();
+    (new MessagesPage(new InMemoryMessageLog(), $this->members))->register();
     adminNoticesComposePage()->register();
     adminNoticesDevicesPage()->register();
     (new SettingsPage(new Settings()))->register();
@@ -205,7 +208,7 @@ function adminNoticesDevicesPage(): DevicesPage
     $gate = new MemberGate(test()->members);
 
     return new DevicesPage(
-        test()->devices,
+        new InMemoryLinkDevices(),
         test()->members,
         test()->audit,
         new PasswordAuthenticator(
@@ -232,17 +235,11 @@ function adminNoticesComposePage(): ComposePage
 
 function adminNoticesApi(): MessageApi
 {
-    $gate = new MemberGate(test()->members);
-    $settings = new Settings();
-
     return new MessageApi(
-        new MessageDispatcher(
-            test()->messages,
-            test()->recipients,
-            test()->devices,
-            new FcmTransport(new FcmClient(), $settings, new MessageSealer()),
-        ),
-        new RecipientResolver(test()->members, new InMemoryCommitteeRepository(), $gate),
+        new RecordingDelivery(),
+        new MessageSealer(),
+        new RecipientResolver(test()->members, new InMemoryCommitteeRepository(), new MemberGate(test()->members)),
+        test()->members,
         test()->audit,
     );
 }

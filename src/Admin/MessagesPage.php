@@ -8,25 +8,24 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-use Fellowship\Messaging\MessageRepository;
-use Fellowship\Messaging\MessageRequest;
-use Fellowship\Messaging\RecipientRepository;
+use Fellowship\Firebase\FirebaseUnavailable;
+use Fellowship\Messaging\LoggedMessage;
+use Fellowship\Messaging\MessageLog;
 use Scrutiny\Privacy\PersonalDataPolicy;
+use Unity\Members\Interfaces\MemberRepository;
 
 /**
- * The message log — what was sent, to whom, and how far it has got:
- * sent, delivered to a handset, read.
+ * The message log: who sent what kind of message, and how far it has got. Sent,
+ * delivered to a handset, read.
  *
- * <b>Guarded by Scrutiny's view capability, not by Fellowship's own.</b>
- * Message bodies are fellowship business held against named members;
- * reading them is reading personal data, and the site already has one
- * answer to who may do that. A second capability here would let the two
- * drift apart.
+ * <b>It can't show what a message said.</b> Messages are end-to-end encrypted, so no
+ * subject, body or committee name is held anywhere this site can read. That is the
+ * point of the design, and it replaces the old trade where an admin could read every
+ * message.
  *
- * This screen is also the plainest statement of the design trade the
- * plugin made: an admin can read these messages, which is what makes a
- * committee broadcast and an audit possible, and is the reason the
- * retention window exists.
+ * <b>Guarded by Scrutiny's view capability, not by Fellowship's own.</b> Who wrote to
+ * the fellowship and when is still personal data, and the site already has one answer
+ * to who may read that.
  */
 final class MessagesPage
 {
@@ -38,8 +37,8 @@ final class MessagesPage
     private const PER_PAGE = 25;
 
     public function __construct(
-        private readonly MessageRepository $messages,
-        private readonly RecipientRepository $recipients,
+        private readonly MessageLog $messages,
+        private readonly MemberRepository $members,
     ) {
     }
 
@@ -78,12 +77,21 @@ final class MessagesPage
             return;
         }
 
-        $page  = max(1, (int) filter_var($_GET['paged'] ?? null, FILTER_VALIDATE_INT));
-        $total = $this->messages->countAll();
-        $rows  = $this->messages->list(self::PER_PAGE, ($page - 1) * self::PER_PAGE);
+        $page = max(1, (int) filter_var($_GET['paged'] ?? null, FILTER_VALIDATE_INT));
 
         echo '<div class="wrap">';
         echo '<h1>' . esc_html__('Fellowship messages', 'fellowship') . '</h1>';
+
+        try {
+            // One more than a page, which is how to tell there is a next page without
+            // counting the collection.
+            $rows = $this->messages->page(self::PER_PAGE + 1, ($page - 1) * self::PER_PAGE);
+        } catch (FirebaseUnavailable) {
+            echo '<div class="notice notice-error"><p>'
+                . esc_html__('Firebase could not be reached, so the message log can\'t be shown right now. Nothing has been lost. Please try again.', 'fellowship')
+                . '</p></div></div>';
+            return;
+        }
 
         if ($rows === []) {
             echo '<p>' . esc_html__('No messages have been sent yet.', 'fellowship') . '</p>';
@@ -91,45 +99,32 @@ final class MessagesPage
             return;
         }
 
+        $hasMore = count($rows) > self::PER_PAGE;
+
         echo '<table class="wp-list-table widefat fixed striped">';
         echo '<thead><tr>';
         echo '<th scope="col">' . esc_html__('Sent', 'fellowship') . '</th>';
         echo '<th scope="col">' . esc_html__('From', 'fellowship') . '</th>';
-        echo '<th scope="col">' . esc_html__('Subject', 'fellowship') . '</th>';
         echo '<th scope="col">' . esc_html__('Audience', 'fellowship') . '</th>';
         echo '<th scope="col">' . esc_html__('Delivery', 'fellowship') . '</th>';
         echo '</tr></thead><tbody>';
 
-        // One grouped query for the page, the one Link's ticks are drawn
-        // from, rather than two counts per row.
-        $receipts = $this->recipients->receiptsFor(array_map(
-            static fn($message): int => $message->id,
-            $rows,
-        ));
-
-        foreach ($rows as $message) {
+        foreach (array_slice($rows, 0, self::PER_PAGE) as $message) {
             echo '<tr>';
             echo '<td>' . esc_html($this->when($message->createdAt)) . '</td>';
-            echo '<td>' . esc_html($message->senderName !== '' ? $message->senderName : __('Intergroup', 'fellowship'));
-            if ($message->cameFromApp()) {
-                echo ' <span class="description">' . esc_html__('(from Link)', 'fellowship') . '</span>';
-            }
-            echo '</td>';
-            echo '<td><strong>' . esc_html($message->subject) . '</strong>';
-            echo '<div class="row-actions"><span>' . esc_html($this->excerpt($message->body)) . '</span></div>';
-            echo '</td>';
-            echo '<td>' . esc_html($this->audience($message->audienceType, $message->audienceRef)) . '</td>';
-            echo '<td>' . esc_html($this->delivery($receipts[$message->id] ?? null)) . '</td>';
+            echo '<td>' . esc_html($this->sender($message)) . '</td>';
+            echo '<td>' . esc_html($this->audience($message->audience)) . '</td>';
+            echo '<td>' . esc_html($this->delivery($message)) . '</td>';
             echo '</tr>';
         }
 
         echo '</tbody></table>';
 
         echo '<p class="description">'
-            . esc_html__('Delivered means one of the member\'s handsets has opened the message; read means they have read it in Link. A push Google accepted but no handset has yet opened is still only sent.', 'fellowship')
+            . esc_html__('Messages are end-to-end encrypted, so this log can\'t show what any of them said. Delivered means one of the member\'s handsets has opened the message; read means they have read it in Link. A push Google accepted but no handset has yet opened is still only sent.', 'fellowship')
             . '</p>';
 
-        $this->pagination($page, $total);
+        $this->pagination($page, $hasMore ? $page + 1 : $page);
 
         echo '</div>';
     }
@@ -147,59 +142,56 @@ final class MessagesPage
      *
      * One recipient is said in a word; more are counted, because "read"
      * of a committee message would otherwise mean "read by somebody".
-     *
-     * @param array{recipients: int, received: int, read: int}|null $counts
      */
-    private function delivery(?array $counts): string
+    private function delivery(LoggedMessage $message): string
     {
-        if ($counts === null || $counts['recipients'] === 0) {
+        if ($message->recipients === 0) {
             return __('Reached nobody', 'fellowship');
         }
 
-        if ($counts['recipients'] === 1) {
+        if ($message->recipients === 1) {
             return match (true) {
-                $counts['read'] > 0     => __('Read', 'fellowship'),
-                $counts['received'] > 0 => __('Delivered', 'fellowship'),
-                default                 => __('Sent', 'fellowship'),
+                $message->read > 0     => __('Read', 'fellowship'),
+                $message->received > 0 => __('Delivered', 'fellowship'),
+                default                => __('Sent', 'fellowship'),
             };
         }
 
         return sprintf(
             /* translators: 1: recipients, 2: how many have it on a handset, 3: how many have read it */
             __('%1$d recipients: %2$d delivered, %3$d read', 'fellowship'),
-            $counts['recipients'],
-            $counts['received'],
-            $counts['read'],
+            $message->recipients,
+            $message->received,
+            $message->read,
         );
     }
 
-    private function audience(string $type, string $ref): string
+    /** The intergroup when nobody wrote it, and a member whose record has gone says so. */
+    private function sender(LoggedMessage $message): string
     {
-        $slugs = array_values(array_filter(explode(',', $ref), static fn(string $s): bool => $s !== ''));
-
-        // All GSRs travels among the committee slugs as a token nobody
-        // should have to read; it is said in words, and ahead of the
-        // committees, as it is stored.
-        if (in_array(MessageRequest::ALL_GSRS, $slugs, true)) {
-            $slugs = array_values(array_diff($slugs, [MessageRequest::ALL_GSRS]));
-            $rest  = $slugs === [] ? '' : sprintf(__('committee: %s', 'fellowship'), implode(', ', $slugs));
-
-            return implode(', ', array_filter([
-                $type === 'mixed' ? __('Named members', 'fellowship') : '',
-                __('All GSRs', 'fellowship'),
-                $rest,
-            ]));
+        if ($message->senderMemberId <= 0) {
+            return __('Intergroup', 'fellowship');
         }
 
-        // The ref holds slugs joined with commas, so a send to several
-        // reads as a list rather than as one oddly-named committee.
-        $named = str_replace(',', ', ', $ref);
+        $member = $this->members->findById($message->senderMemberId);
+        if ($member === null) {
+            return __('(no member record)', 'fellowship');
+        }
 
-        return match ($type) {
-            'committee' => sprintf(__('Committee: %s', 'fellowship'), $named),
-            'members'   => __('Named members', 'fellowship'),
-            'mixed'     => sprintf(__('Named members and committee: %s', 'fellowship'), $named),
-            default     => __('Everyone', 'fellowship'),
+        $name = trim($member->getAnonymousName());
+
+        return $name !== '' ? $name : __('(unnamed member)', 'fellowship');
+    }
+
+    /** The kind of audience, which is all that is kept: a committee's name says what it is. */
+    private function audience(string $kind): string
+    {
+        return match ($kind) {
+            LoggedMessage::AUDIENCE_EVERYONE => __('Everyone', 'fellowship'),
+            LoggedMessage::AUDIENCE_PART     => __('A committee or the GSRs', 'fellowship'),
+            LoggedMessage::AUDIENCE_MEMBERS  => __('Named members', 'fellowship'),
+            LoggedMessage::AUDIENCE_MIXED    => __('Named members and a committee or the GSRs', 'fellowship'),
+            default                          => __('Unknown', 'fellowship'),
         };
     }
 
@@ -215,15 +207,8 @@ final class MessagesPage
         return is_string($formatted) ? $formatted : '';
     }
 
-    private function excerpt(string $body): string
+    private function pagination(int $page, int $pages): void
     {
-        $body = trim(preg_replace('/\s+/', ' ', $body) ?? '');
-        return mb_strlen($body) <= 120 ? $body : mb_substr($body, 0, 120) . '…';
-    }
-
-    private function pagination(int $page, int $total): void
-    {
-        $pages = (int) ceil($total / self::PER_PAGE);
         if ($pages <= 1) {
             return;
         }

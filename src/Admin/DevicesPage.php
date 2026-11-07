@@ -10,9 +10,10 @@ if (!defined('ABSPATH')) {
 
 use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Core\Capabilities;
-use Fellowship\Devices\Device;
-use Fellowship\Devices\DeviceRepository;
+use Fellowship\Devices\LinkDevice;
+use Fellowship\Devices\LinkDevices;
 use Fellowship\Devices\MemberGate;
+use Fellowship\Firebase\FirebaseUnavailable;
 use Scrutiny\Audit\Interfaces\AuditLogger;
 use Scrutiny\Privacy\PersonalDataPolicy;
 use Unity\Members\Interfaces\MemberRepository;
@@ -23,17 +24,20 @@ use Unity\Members\Interfaces\MemberRepository;
  * <b>Revoke and remove are not the same thing, and the difference is the
  * point of having both.</b>
  *
- * *Revoke* is the ordinary answer to a lost or stolen phone: the token
- * stops working immediately — the repository's lookup refuses revoked
- * rows outright, so it is indistinguishable from an unknown token — and
- * the row stays, so this screen can still show that the device existed
- * and when it was cut off. That record is the useful part when somebody
- * asks what happened.
+ * *Revoke* is the ordinary answer to a lost or stolen phone: the device is
+ * cut off immediately, even with a token that hasn't expired, and the
+ * record stays, so this screen can still show that the device existed and
+ * when it was cut off. That record is the useful part when somebody asks
+ * what happened.
  *
- * *Remove* deletes the row. It is for tidying up test enrolments and for
- * an erasure request, and it destroys the evidence that the device ever
- * existed. It is offered second and confirmed, because "revoke" is
- * almost always what was meant.
+ * *Remove* deletes the record and the device's inbox. It is for tidying up
+ * test enrolments and for an erasure request, and it destroys the evidence
+ * that the device ever existed. It is offered second and confirmed, because
+ * "revoke" is almost always what was meant.
+ *
+ * Devices live in Firebase, so reading and changing them can fail in a way a
+ * table never did. This screen says so rather than showing an empty list or
+ * claiming a device was cut off when it wasn't.
  *
  * Reading this screen needs Scrutiny's view capability — it lists
  * members against devices. Acting on it needs Fellowship's own
@@ -53,8 +57,11 @@ final class DevicesPage
     private const NONCE = 'fellowship_device_action';
     private const PER_PAGE = 25;
 
+    /** A Firebase device id. Anything else was never on this screen. */
+    private const DEVICE_ID = '/^d_[a-f0-9]{1,64}$/';
+
     public function __construct(
-        private readonly DeviceRepository $devices,
+        private readonly LinkDevices $devices,
         private readonly MemberRepository $members,
         private readonly AuditLogger $auditLogger,
         private readonly PasswordAuthenticator $passwords,
@@ -93,9 +100,7 @@ final class DevicesPage
         // page chose to render is not a permission check.
         $canManage = current_user_can(self::MANAGE_CAPABILITY);
 
-        $page  = max(1, (int) filter_var($_GET['paged'] ?? null, FILTER_VALIDATE_INT));
-        $total = $this->devices->countAll();
-        $rows  = $this->devices->list(self::PER_PAGE, ($page - 1) * self::PER_PAGE);
+        $page = max(1, (int) filter_var($_GET['paged'] ?? null, FILTER_VALIDATE_INT));
 
         echo '<div class="wrap">';
         echo '<h1>' . esc_html__('Link devices', 'fellowship') . '</h1>';
@@ -106,10 +111,22 @@ final class DevicesPage
             $this->resetCodeForm();
         }
 
+        try {
+            // One more than a page, which is how to tell there is a next page.
+            $rows = $this->devices->page(self::PER_PAGE + 1, ($page - 1) * self::PER_PAGE);
+        } catch (FirebaseUnavailable) {
+            echo '<div class="notice notice-error"><p>'
+                . esc_html__('Firebase could not be reached, so the devices can\'t be shown right now. Please try again.', 'fellowship')
+                . '</p></div></div>';
+            return;
+        }
+
         if ($rows === []) {
             echo '<p>' . esc_html__('No handsets have been enrolled yet.', 'fellowship') . '</p></div>';
             return;
         }
+
+        $hasMore = count($rows) > self::PER_PAGE;
 
         echo '<table class="wp-list-table widefat fixed striped">';
         echo '<thead><tr>';
@@ -121,20 +138,20 @@ final class DevicesPage
         echo '<th scope="col">' . esc_html__('Status', 'fellowship') . '</th>';
         echo '</tr></thead><tbody>';
 
-        foreach ($rows as $device) {
+        foreach (array_slice($rows, 0, self::PER_PAGE) as $device) {
             echo '<tr>';
             echo '<td>' . esc_html($this->memberName($device)) . '</td>';
             echo '<td>' . esc_html($device->label !== '' ? $device->label : __('(unnamed)', 'fellowship'));
             echo ' <span class="description">' . esc_html($device->platform) . '</span></td>';
-            // "Poll only" on its own sends somebody to the Firebase
-            // console for a handset that simply has not been given a
-            // token yet. The reason is the actionable half.
+            // "Poll only" on its own sends somebody to the Firebase console for a
+            // handset that simply has not been given a token yet. The reason is the
+            // actionable half.
             echo '<td>';
-            if ($device->wantsPush()) {
+            if ($device->hasPushToken) {
                 echo esc_html__('Yes', 'fellowship');
             } else {
                 echo esc_html__('Poll only', 'fellowship');
-                echo ' <span class="description">' . esc_html($device->pushBlocker()) . '</span>';
+                echo ' <span class="description">' . esc_html__('no push token yet', 'fellowship') . '</span>';
             }
             echo '</td>';
             echo '<td>' . esc_html($this->when($device->createdAt)) . '</td>';
@@ -146,6 +163,9 @@ final class DevicesPage
         }
 
         echo '</tbody></table>';
+
+        $this->pagination($page, $hasMore ? $page + 1 : $page);
+
         echo '</div>';
     }
 
@@ -169,15 +189,27 @@ final class DevicesPage
     {
         $id = $this->authoriseAction();
 
-        if ($this->devices->revoke($id, time())) {
-            $this->auditLogger->log(
-                AuditLogger::ACTION_DELETE,
-                AuditLogger::ENTITY_MEMBER,
-                $this->memberIdFor($id),
-                'authentication',
-                'Link device revoked;device:' . $id . ';by:admin:' . get_current_user_id(),
-            );
+        try {
+            $device = $this->devices->find($id);
+
+            // Already cut off, or gone: nothing happened, so nothing is recorded as
+            // having happened.
+            if ($device === null || $device->revoked) {
+                return 'revoked';
+            }
+
+            $this->devices->revoke($id);
+        } catch (FirebaseUnavailable) {
+            return 'firebase_unavailable';
         }
+
+        $this->auditLogger->log(
+            AuditLogger::ACTION_DELETE,
+            AuditLogger::ENTITY_MEMBER,
+            $device->memberId,
+            'authentication',
+            'Link device revoked;device:' . $id . ';by:admin:' . get_current_user_id(),
+        );
 
         return 'revoked';
     }
@@ -201,25 +233,24 @@ final class DevicesPage
     {
         $id = $this->authoriseAction();
 
-        // Read before the delete: afterwards there is no row to ask, and
-        // an audit entry that cannot say whose device it was is close to
-        // no audit entry at all.
-        $memberId = $this->memberIdFor($id);
+        try {
+            // Read before the delete: afterwards there is nothing to ask, and an audit
+            // entry that cannot say whose device it was is close to no audit entry at
+            // all. Zero rather than a guess when it has gone already.
+            $memberId = $this->devices->find($id)->memberId ?? 0;
 
-        // Revoked first, then deleted. If the delete fails the handset is
-        // still cut off, which is the half that matters; the other order
-        // would leave a working credential behind on a failed delete.
-        $this->devices->revoke($id, time());
-
-        if ($this->devices->remove($id)) {
-            $this->auditLogger->log(
-                AuditLogger::ACTION_DELETE,
-                AuditLogger::ENTITY_MEMBER,
-                $memberId,
-                'authentication',
-                'Link device removed;device:' . $id . ';by:admin:' . get_current_user_id(),
-            );
+            $this->devices->remove($id);
+        } catch (FirebaseUnavailable) {
+            return 'firebase_unavailable';
         }
+
+        $this->auditLogger->log(
+            AuditLogger::ACTION_DELETE,
+            AuditLogger::ENTITY_MEMBER,
+            $memberId,
+            'authentication',
+            'Link device removed;device:' . $id . ';by:admin:' . get_current_user_id(),
+        );
 
         return 'removed';
     }
@@ -319,8 +350,8 @@ final class DevicesPage
      * The one thing on this screen that is not about a device.
      *
      * <b>An address rather than a row, deliberately.</b> The member who
-     * most needs this has no handset yet — they cannot use any of the
-     * four sign-in buttons and have nothing in the table below — so a
+     * most needs this has no handset yet — they cannot use either
+     * sign-in button and have nothing in the table below — so a
      * per-row button would be missing for exactly the case it exists to
      * solve.
      *
@@ -334,7 +365,7 @@ final class DevicesPage
 
         echo '<p class="description">'
             . esc_html__(
-                'Emails a member a one-time code for setting a Link password. Most members sign in with Google, Microsoft, Apple or Facebook and never need one; this is for a member whose address is not one of those accounts.',
+                'Emails a member a one-time code for setting a Link password. Most members sign in with Google or Apple and never need one; this is for a member whose address is not one of those accounts.',
                 'fellowship'
             )
             . '</p>';
@@ -362,25 +393,24 @@ final class DevicesPage
      * Check the capability and the nonce, and return the device id.
      * Dies rather than returning on refusal.
      */
-    private function authoriseAction(): int
+    private function authoriseAction(): string
     {
         if (!current_user_can(self::MANAGE_CAPABILITY)) {
             wp_die(esc_html__('You are not allowed to manage devices.', 'fellowship'), '', ['response' => 403]);
         }
 
-        // <b>Validated, not cast.</b> "12abc" must be refused rather than
-        // quietly becoming 12, because this value is concatenated into the
-        // nonce action name on the next line — a coerced id would check a
-        // nonce for a device other than the one the form named.
+        // <b>Validated before anything else reads it.</b> This value is concatenated
+        // into the nonce action name on the next line and into a Firestore path after
+        // that, so it has to be a device id and nothing that merely contains one.
         //
-        // filter_var on the superglobal rather than filter_input, which
-        // reads the *original* request and so cannot be driven by a test
-        // at all. The validation is identical; only the source differs.
-        $id = (int) filter_var($_POST['device'] ?? null, FILTER_VALIDATE_INT);
+        // The superglobal rather than filter_input, which reads the *original* request
+        // and so cannot be driven by a test at all.
+        $posted = $_POST['device'] ?? null;
+        $id = is_string($posted) && preg_match(self::DEVICE_ID, $posted) === 1 ? $posted : '';
 
         check_admin_referer(self::NONCE . '_' . $id);
 
-        if ($id <= 0) {
+        if ($id === '') {
             wp_die(esc_html__('No device was named.', 'fellowship'), '', ['response' => 400]);
         }
 
@@ -398,11 +428,11 @@ final class DevicesPage
      * Echoing directly keeps the escaping next to the value it protects
      * and leaves no HTML-carrying string for anything to have to trust.
      */
-    private function status(Device $device, bool $canManage): void
+    private function status(LinkDevice $device, bool $canManage): void
     {
-        if ($device->isRevoked()) {
+        if ($device->revoked) {
             echo '<span class="description">'
-                . esc_html(sprintf(__('Revoked %s', 'fellowship'), $this->when((int) $device->revokedAt)))
+                . esc_html(sprintf(__('Revoked %s', 'fellowship'), $this->when($device->revokedAt)))
                 . '</span>';
 
             if ($canManage) {
@@ -413,7 +443,7 @@ final class DevicesPage
             return;
         }
 
-        if ($device->hasKeyFault()) {
+        if ($device->keyFault) {
             // Worth saying loudly: this handset is enrolled, looks
             // healthy, and cannot read a word it is sent.
             echo '<span style="color:#b32d2e"><strong>'
@@ -432,11 +462,11 @@ final class DevicesPage
         $this->button(self::REMOVE_ACTION, $device->id, __('Remove', 'fellowship'), true);
     }
 
-    private function button(string $action, int $deviceId, string $label, bool $confirm): void
+    private function button(string $action, string $deviceId, string $label, bool $confirm): void
     {
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="display:inline">';
         echo '<input type="hidden" name="action" value="' . esc_attr($action) . '">';
-        echo '<input type="hidden" name="device" value="' . esc_attr((string) $deviceId) . '">';
+        echo '<input type="hidden" name="device" value="' . esc_attr($deviceId) . '">';
 
         wp_nonce_field(self::NONCE . '_' . $deviceId, '_wpnonce', true, true);
 
@@ -451,32 +481,14 @@ final class DevicesPage
         echo '>' . esc_html($label) . '</button></form>';
     }
 
-    /**
-     * The member a device belongs to, or 0 when the row has gone.
-     *
-     * Zero rather than a guess: an audit entry attributing somebody
-     * else's id to this action would be worse than one that admits it
-     * does not know.
-     */
-    private function memberIdFor(int $deviceId): int
-    {
-        $device = $this->devices->findById($deviceId);
-
-        return $device === null ? 0 : $device->memberId;
-    }
-
-    private function memberName(Device $device): string
+    private function memberName(LinkDevice $device): string
     {
         $member = $device->memberId > 0 ? $this->members->findById($device->memberId) : null;
-        if ($member === null) {
-            $member = $this->members->findByEmail($device->memberEmail);
-        }
 
         if ($member === null) {
-            // The member has gone from Unity but the device row remains.
-            // Worth showing as such rather than as a blank cell: it means
-            // a handset that will fail its next request, and somebody may
-            // want to remove the row.
+            // The member has gone from Unity but the device remains. Worth showing as
+            // such rather than as a blank cell: it means a handset that will fail its
+            // next request, and somebody may want to remove it.
             return __('(no member record)', 'fellowship');
         }
 
@@ -492,6 +504,29 @@ final class DevicesPage
 
         $formatted = wp_date('j M Y H:i', $epoch);
         return is_string($formatted) ? $formatted : '';
+    }
+
+    private function pagination(int $page, int $pages): void
+    {
+        if ($pages <= 1) {
+            return;
+        }
+
+        $links = paginate_links([
+            'base'      => add_query_arg('paged', '%#%'),
+            'format'    => '',
+            'current'   => $page,
+            'total'     => $pages,
+            'prev_text' => '&laquo;',
+            'next_text' => '&raquo;',
+        ]);
+
+        if (is_string($links)) {
+            // Taint traced from $_GET['paged'], which is cast to int before it goes
+            // anywhere. See MessagesPage::pagination().
+            // nosemgrep: php.lang.security.taint-unsafe-echo-tag.taint-unsafe-echo-tag
+            echo '<div class="tablenav"><div class="tablenav-pages">' . wp_kses_post($links) . '</div></div>';
+        }
     }
 
     private function redirect(string $result): void
@@ -520,9 +555,10 @@ final class DevicesPage
             return;
         }
 
-        // The three ways it does not work, each needing a different thing
+        // The ways it does not work, each needing a different thing
         // from whoever is reading it.
         $warning = match ($result) {
+            'firebase_unavailable' => __('Firebase could not be reached, so nothing has changed. That device is not cut off yet: please try again.', 'fellowship'),
             'code_bad_address' => __('That is not a valid email address.', 'fellowship'),
             'code_not_a_member' => __('No member holds that address. Check it against the membership record — sign-in matches on the address the intergroup has.', 'fellowship'),
             'code_too_soon' => __('A code was sent to that member less than two minutes ago. Wait, then try again — the first one is still valid.', 'fellowship'),

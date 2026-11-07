@@ -12,6 +12,7 @@ use Fellowship\Devices\WpdbDeviceRepository;
 use Fellowship\Directory\DirectoryPresenter;
 use Fellowship\Messaging\Message;
 use Fellowship\Messaging\MessageApi;
+use Fellowship\Messaging\MessageDelivery;
 use Fellowship\Messaging\MessageDispatcher;
 use Fellowship\Messaging\RecipientResolver;
 use Fellowship\Messaging\WpdbMessageRepository;
@@ -21,6 +22,8 @@ use Fellowship\Crypto\MessageSealer;
 use Fellowship\Push\FcmClient;
 use Fellowship\Push\FcmTransport;
 use Fellowship\Tests\Support\InMemoryDeviceRepository;
+use Fellowship\Tests\Support\InMemoryMessageLog;
+use Fellowship\Tests\Support\RecordingDelivery;
 use Fellowship\Tests\Support\InMemoryMessageRepository;
 use Fellowship\Tests\Support\InMemoryRecipientRepository;
 use Fellowship\Tests\Support\RecordingWpdb;
@@ -64,6 +67,9 @@ beforeEach(function () {
     $this->messages = new InMemoryMessageRepository();
     $this->recipients = new InMemoryRecipientRepository();
     $this->devices = new InMemoryDeviceRepository();
+    $this->log = new InMemoryMessageLog();
+    $this->delivery = new RecordingDelivery();
+    $this->audit = new SpyAuditLogger();
 });
 
 // ── The send API ──────────────────────────────────────────────────
@@ -77,8 +83,8 @@ test('members can be named by directory id rather than by address', function () 
     ]);
 
     expect($id)->toBeInt();
-    expect(test()->messages->findById((int) $id)?->audienceType)->toBe(Message::AUDIENCE_MEMBERS);
-    expect(array_values(test()->recipients->rows)[0]->memberEmail)->toBe('dave@example.org');
+    expect(test()->delivery->resolved[0]['memberIds'])->toBe([7]);
+    expect(test()->audit->entries[0]['detail'])->toContain('audience:' . Message::AUDIENCE_MEMBERS);
 });
 
 test('ids that name nobody are refused rather than sent to everyone', function () {
@@ -91,7 +97,7 @@ test('ids that name nobody are refused rather than sent to everyone', function (
 
     expect($result)->toBeInstanceOf(WP_Error::class);
     expect($result->get_error_code())->toBe('fellowship_no_recipients');
-    expect(test()->messages->rows)->toBe([]);
+    expect(test()->delivery->resolved)->toBe([]);
 });
 
 test('ids and a string of addresses together reach each member once', function () {
@@ -103,35 +109,31 @@ test('ids and a string of addresses together reach each member once', function (
     ]);
 
     expect($id)->toBeInt();
-    expect(test()->recipients->rows)->toHaveCount(1);
+    expect(test()->delivery->resolved[0]['memberIds'])->toBe([7]);
 });
 
-test('a message sent through the API is stored and audited', function () {
-    $audit = new SpyAuditLogger();
-
-    $id = reachedThroughApi($audit)->send([
+test('a message sent through the API is sent and audited', function () {
+    $id = reachedThroughApi()->send([
         'subject' => 'Intergroup moved',
         'body' => 'Now the 14th.',
         'member_emails' => ['dave@example.org'],
     ]);
 
     expect($id)->toBeInt();
-    expect($audit->entries)->not->toBeEmpty();
+    expect(test()->audit->entries)->not->toBeEmpty();
 });
 
 test('a send with no member behind it is attributed to nobody', function () {
     // Entity id 0 is the intergroup speaking. Inventing a member to
     // attribute it to would make the audit trail say something
     // untrue.
-    $audit = new SpyAuditLogger();
-
-    reachedThroughApi($audit)->send([
+    reachedThroughApi()->send([
         'subject' => 'Intergroup moved',
         'body' => 'Now the 14th.',
         'member_emails' => ['dave@example.org'],
     ]);
 
-    expect($audit->entries)->not->toBeEmpty();
+    expect(test()->audit->entries[0]['entityId'])->toBe(0);
 });
 
 test('a send with no sender name is signed with the site name', function () {
@@ -143,7 +145,7 @@ test('a send with no sender name is signed with the site name', function () {
         'member_emails' => ['dave@example.org'],
     ]);
 
-    expect(reachedThroughStored()->senderName)->toBe('Bristol Intergroup');
+    expect(reachedThroughSentSender())->toBe('Bristol Intergroup');
 });
 
 test('a site with no name is still signed with something', function () {
@@ -156,7 +158,7 @@ test('a site with no name is still signed with something', function () {
         'member_emails' => ['dave@example.org'],
     ]);
 
-    expect(reachedThroughStored()->senderName)->toBe('Intergroup');
+    expect(reachedThroughSentSender())->toBe('Intergroup');
 });
 
 test('a caller can sign the message itself', function () {
@@ -167,24 +169,35 @@ test('a caller can sign the message itself', function () {
         'sender_name' => 'The Steering Committee',
     ]);
 
-    expect(reachedThroughStored()->senderName)->toBe('The Steering Committee');
+    expect(reachedThroughSentSender())->toBe('The Steering Committee');
 });
 
-test('a malformed request is refused rather than stored', function () {
+test('a malformed request is refused rather than sent', function () {
     $result = reachedThroughApi()->send(['subject' => '', 'body' => '']);
 
     expect($result)->toBeInstanceOf(WP_Error::class);
-    expect($this->messages->rows)->toBe([]);
+    expect(test()->delivery->resolved)->toBe([]);
 });
 
-test('a storage failure is an error rather than a fatal', function () {
+test('a fault while sending is an error rather than a fatal', function () {
     // It must not propagate into whatever plugin asked to send.
     $members = reachedThroughMembers();
-    $gate = new MemberGate($members);
 
     $api = new MessageApi(
-        new MessageDispatcher(reachedThroughThrowingMessages(), $this->recipients, $this->devices, reachedThroughTransport()),
-        new RecipientResolver($members, new InMemoryCommitteeRepository(), $gate),
+        new class implements MessageDelivery {
+            public function resolve(array $audience): array
+            {
+                throw new RuntimeException('Something broke.');
+            }
+
+            public function deliver(array $audience, int $id, array $envelopes): int
+            {
+                return 0;
+            }
+        },
+        new MessageSealer(),
+        new RecipientResolver($members, new InMemoryCommitteeRepository(), new MemberGate($members)),
+        $members,
         new SpyAuditLogger(),
     );
 
@@ -205,7 +218,7 @@ test('the action form sends without answering anything', function () {
         'member_emails' => ['dave@example.org'],
     ]);
 
-    expect($this->messages->rows)->toHaveCount(1);
+    expect(test()->delivery->delivered)->toHaveCount(1);
 });
 
 test('the action form logs a refusal rather than dropping it silently', function () {
@@ -338,24 +351,26 @@ test('a key fault is cleared when a handset rotates its key', function () {
 
 // ── The log's own rendering ───────────────────────────────────────
 
-test('a long body is shortened rather than breaking the column', function () {
-    reachedThroughStore('Intergroup moved', str_repeat('a very long sentence indeed ', 20), 1788000000);
-
-    expect(renderLog())->toContain('…');
-});
-
 test('the log paginates once there is more than one page', function () {
     for ($i = 0; $i < 60; $i++) {
-        reachedThroughStore('Subject ' . $i, 'Body', 1788000000);
+        test()->log->add();
     }
 
     expect(renderLog())->toContain('tablenav-pages');
 });
 
+test('the last page has no next page', function () {
+    for ($i = 0; $i < 25; $i++) {
+        test()->log->add();
+    }
+
+    expect(renderLog())->not->toContain('tablenav-pages');
+});
+
 test('a message with no date shows nothing rather than the epoch', function () {
     // "1 Jan 1970" in the sent column reads as a bug in the data
     // rather than as an absent date.
-    reachedThroughStore('Intergroup moved', 'Now the 14th.', 0);
+    test()->log->add(createdAt: 0);
 
     expect(renderLog())->not->toContain('1970');
 });
@@ -379,11 +394,16 @@ function reachedThroughStore(string $subject, string $body, int $createdAt): voi
     );
 }
 
-function reachedThroughStored(): Message
+/** The name a sent message was sealed under, opened as a handset would. */
+function reachedThroughSentSender(): string
 {
-    expect(test()->messages->rows)->not->toBe([], 'Nothing was stored.');
+    $envelope = test()->delivery->delivered[0]['envelopes'][0];
+    $contentKey = '';
+    openssl_private_decrypt((string) base64_decode($envelope['k'], true), $contentKey, RecordingDelivery::privateKey(), OPENSSL_PKCS1_OAEP_PADDING);
+    $sealed = (string) base64_decode($envelope['p'], true);
+    $plain = openssl_decrypt(substr($sealed, 28), 'aes-256-gcm', $contentKey, OPENSSL_RAW_DATA, substr($sealed, 0, 12), substr($sealed, 12, 16));
 
-    return array_values(test()->messages->rows)[0];
+    return (string) (json_decode((string) gzdecode((string) $plain), true)['sender'] ?? '');
 }
 
 function reachedThroughTransport(): FcmTransport
@@ -393,18 +413,19 @@ function reachedThroughTransport(): FcmTransport
 
 function renderLog(): string
 {
-    return captureOutput(fn() => (new MessagesPage(test()->messages, test()->recipients))->render());
+    return captureOutput(fn() => (new MessagesPage(test()->log, reachedThroughMembers()))->render());
 }
 
-function reachedThroughApi(?SpyAuditLogger $audit = null): MessageApi
+function reachedThroughApi(): MessageApi
 {
     $members = reachedThroughMembers();
-    $gate = new MemberGate($members);
 
     return new MessageApi(
-        new MessageDispatcher(test()->messages, test()->recipients, test()->devices, reachedThroughTransport()),
-        new RecipientResolver($members, new InMemoryCommitteeRepository(), $gate),
-        $audit ?? new SpyAuditLogger(),
+        test()->delivery,
+        new MessageSealer(),
+        new RecipientResolver($members, new InMemoryCommitteeRepository(), new MemberGate($members)),
+        $members,
+        test()->audit,
     );
 }
 

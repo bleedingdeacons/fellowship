@@ -19,14 +19,12 @@ use Fellowship\Devices\MemberGate;
 use Fellowship\Directory\DirectoryPresenter;
 use Fellowship\Crypto\MessageSealer;
 use Fellowship\Messaging\MessageApi;
-use Fellowship\Messaging\MessageDispatcher;
 use Fellowship\Messaging\RecipientResolver;
-use Fellowship\Push\FcmClient;
-use Fellowship\Push\FcmTransport;
 use Fellowship\Tests\Support\InMemoryDeviceRepository;
-use Fellowship\Tests\Support\InMemoryMessageRepository;
+use Fellowship\Tests\Support\InMemoryLinkDevices;
+use Fellowship\Tests\Support\InMemoryMessageLog;
+use Fellowship\Tests\Support\RecordingDelivery;
 use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
-use Fellowship\Tests\Support\InMemoryRecipientRepository;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;
 use Unity\Testing\Doubles\InMemoryCommitteeRepository;
 use Unity\Testing\Doubles\InMemoryMemberRepository;
@@ -73,9 +71,9 @@ beforeEach(function () {
     when('submit_button')->justReturn(null);
     when('paginate_links')->justReturn('');
 
-    $this->messages = new InMemoryMessageRepository();
-    $this->recipients = new InMemoryRecipientRepository();
+    $this->log = new InMemoryMessageLog();
     $this->devices = new InMemoryDeviceRepository();
+    $this->linkDevices = new InMemoryLinkDevices();
     $this->audit = new SpyAuditLogger();
 
     $this->members = new InMemoryMemberRepository([
@@ -135,29 +133,17 @@ test('an empty message log says so rather than rendering an empty table', functi
     expect($markup)->toContain('No messages');
 });
 
-test('the message log lists what was sent', function () {
-    $this->messages->create(
-        'uuid-1',
-        'dave@example.org',
-        7,
-        'Dave B',
-        'Intergroup moved',
-        'Now the 14th.',
-        'committee',
-        'steering',
-        1788000000,
-        0,
-        0,
-    );
+test('the message log lists who sent what kind of message', function () {
+    $this->log->add(senderMemberId: 7);
 
     $markup = captureOutput(fn() => adminScreensMessagesPage()->render());
 
-    expect($markup)->toContain('Intergroup moved');
+    expect($markup)->toContain('Dave');
+    expect($markup)->toContain('Named members');
 });
 
 test('the message log renders nothing without the capability', function () {
-    // The log carries message subjects, which are the members' own
-    // words.
+    // Who wrote to the fellowship and when is still personal data.
     WpState::$userCan = false;
 
     expect(captureOutput(fn() => adminScreensMessagesPage()->render()))->toBe('');
@@ -241,7 +227,7 @@ test('removing without the capability is refused', function () {
  */
 function adminScreensMessagesPage(): MessagesPage
 {
-    return new MessagesPage(test()->messages, test()->recipients);
+    return new MessagesPage(test()->log, test()->members);
 }
 
 function adminScreensComposePage(): ComposePage
@@ -250,18 +236,13 @@ function adminScreensComposePage(): ComposePage
     // only prove the page calls something. What these tests are about
     // is the capability guard, which sits in front of it either way.
     $gate = new MemberGate(test()->members);
-    $settings = new Settings();
-    $sealer = new MessageSealer();
 
     return new ComposePage(
         new MessageApi(
-            new MessageDispatcher(
-                test()->messages,
-                test()->recipients,
-                test()->devices,
-                new FcmTransport(new FcmClient(), $settings, $sealer),
-            ),
+            new RecordingDelivery(),
+            new MessageSealer(),
             new RecipientResolver(test()->members, new InMemoryCommitteeRepository(), $gate),
+            test()->members,
             test()->audit,
         ),
         new InMemoryCommitteeRepository(),
@@ -275,7 +256,7 @@ function adminScreensDevicesPage(): DevicesPage
     $gate = new MemberGate(test()->members);
 
     return new DevicesPage(
-        test()->devices,
+        test()->linkDevices,
         test()->members,
         test()->audit,
         new PasswordAuthenticator(
@@ -290,15 +271,5 @@ function adminScreensDevicesPage(): DevicesPage
 
 function enrolADevice(): void
 {
-    test()->devices->create(
-        'hash-1',
-        ADMIN_SCREENS_MEMBER,
-        7,
-        'Pixel 6a',
-        'android',
-        'spki',
-        'fcm',
-        'token-1',
-        1788000000,
-    );
+    test()->linkDevices->add();
 }

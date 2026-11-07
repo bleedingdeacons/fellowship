@@ -100,6 +100,71 @@ final class FirestoreClient
     }
 
     /**
+     * A page of a collection, newest first by this field.
+     *
+     * @param list<string> $fields Which to fetch.
+     *
+     * @return list<array{id: string, fields: array<string, mixed>}>
+     *
+     * @throws FirebaseUnavailable When Firestore couldn't be asked.
+     */
+    public function query(string $collection, array $fields, string $newestBy, int $limit, int $offset): array
+    {
+        $account = ($this->account)();
+        if ($account === null) {
+            throw new FirebaseUnavailable('No service account is configured.');
+        }
+
+        [$status, $body] = $this->request(
+            'POST',
+            $this->root($account) . ':runQuery',
+            [
+                'structuredQuery' => [
+                    'from'    => [['collectionId' => $collection]],
+                    'select'  => ['fields' => array_map(
+                        static fn(string $field): array => ['fieldPath' => $field],
+                        $fields,
+                    )],
+                    'orderBy' => [['field' => ['fieldPath' => $newestBy], 'direction' => 'DESCENDING']],
+                    'limit'   => $limit,
+                    'offset'  => $offset,
+                ],
+            ],
+        );
+
+        if ($status !== 200 || !is_array($body)) {
+            throw $this->unavailable('query', $status);
+        }
+
+        $rows = [];
+        foreach ($body as $row) {
+            $document = is_array($row) ? ($row['document'] ?? null) : null;
+            if (!is_array($document) || !is_string($document['name'] ?? null)) {
+                continue;
+            }
+
+            $rows[] = [
+                'id'     => substr((string) strrchr('/' . $document['name'], '/'), 1),
+                'fields' => self::decodeFields($document['fields'] ?? []),
+            ];
+        }
+
+        return $rows;
+    }
+
+    /** A Firestore timestamp as Unix seconds, or 0 when there isn't one. */
+    public static function epoch(mixed $timestamp): int
+    {
+        if (!is_string($timestamp) || $timestamp === '') {
+            return 0;
+        }
+
+        $epoch = strtotime($timestamp);
+
+        return $epoch === false ? 0 : $epoch;
+    }
+
+    /**
      * The member id of every live device.
      *
      * @return list<int>

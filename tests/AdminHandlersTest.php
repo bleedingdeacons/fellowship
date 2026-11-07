@@ -15,7 +15,7 @@ use Fellowship\Auth\PasswordResetMailer;
 use Fellowship\Core\Schema;
 use Fellowship\Core\Settings;
 use Fellowship\Devices\MemberGate;
-use Fellowship\Tests\Support\InMemoryDeviceRepository;
+use Fellowship\Tests\Support\InMemoryLinkDevices;
 use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
 use Fellowship\Tests\Support\RecordingWpdb;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;
@@ -51,7 +51,7 @@ beforeEach(function () {
     when('check_admin_referer')->justReturn(true);
     when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
 
-    $this->devices = new InMemoryDeviceRepository();
+    $this->devices = new InMemoryLinkDevices();
     $this->audit = new SpyAuditLogger();
 
     $this->members = new InMemoryMemberRepository([
@@ -62,38 +62,28 @@ beforeEach(function () {
 // ── Cutting a handset off ─────────────────────────────────────────
 
 test('revoking cuts the handset off', function () {
-    adminHandlersEnrol();
-    $_POST['device'] = '1';
+    $this->devices->add();
+    $_POST['device'] = 'd_abc';
 
     expect(adminHandlersDevicesPage()->revokeFromRequest())->toBe('revoked');
-    expect($this->devices->rows[1]->isRevoked())->toBeTrue();
+    expect($this->devices->rows['d_abc']->revoked)->toBeTrue();
 });
 
-test('a revoked handset can no longer be found by its token', function () {
-    // Which is the whole mechanism: it is refused because it is not
-    // there, not because something downstream checks a flag.
-    adminHandlersEnrol();
-    $_POST['device'] = '1';
+test('revoking is audited against the member', function () {
+    $this->devices->add(memberId: 7);
+    $_POST['device'] = 'd_abc';
 
     adminHandlersDevicesPage()->revokeFromRequest();
 
-    expect($this->devices->findByTokenHash('hash-1'))->toBeNull();
-});
-
-test('revoking is audited', function () {
-    adminHandlersEnrol();
-    $_POST['device'] = '1';
-
-    adminHandlersDevicesPage()->revokeFromRequest();
-
-    expect($this->audit->entries)->not->toBeEmpty();
+    expect($this->audit->entries[0]['entityId'])->toBe(7);
+    expect($this->audit->entries[0]['detail'])->toContain('device:d_abc');
 });
 
 test('revoking something already revoked writes no second entry', function () {
     // Otherwise the log gains an entry for a revocation that did not
     // happen, which makes the ones that did harder to find.
-    adminHandlersEnrol();
-    $_POST['device'] = '1';
+    $this->devices->add();
+    $_POST['device'] = 'd_abc';
 
     adminHandlersDevicesPage()->revokeFromRequest();
     $first = count($this->audit->entries);
@@ -103,25 +93,48 @@ test('revoking something already revoked writes no second entry', function () {
     expect($this->audit->entries)->toHaveCount($first);
 });
 
-test('removing revokes first and then deletes', function () {
-    // The order matters: if the delete fails the handset is still cut
-    // off, which is the half that counts. The other way round leaves
-    // a working credential behind.
-    adminHandlersEnrol();
-    $_POST['device'] = '1';
+test('revoking a device that has gone writes no entry', function () {
+    $_POST['device'] = 'd_0ff';
+
+    expect(adminHandlersDevicesPage()->revokeFromRequest())->toBe('revoked');
+    expect($this->audit->entries)->toBe([]);
+});
+
+test('Firebase being out says the device was not cut off', function () {
+    // Saying "revoked" here would leave somebody believing a lost phone was dealt with.
+    $this->devices->add();
+    $this->devices->down = true;
+    $_POST['device'] = 'd_abc';
+
+    expect(adminHandlersDevicesPage()->revokeFromRequest())->toBe('firebase_unavailable');
+    expect($this->audit->entries)->toBe([]);
+});
+
+test('removing deletes the record and audits whose it was', function () {
+    $this->devices->add(memberId: 7);
+    $_POST['device'] = 'd_abc';
 
     expect(adminHandlersDevicesPage()->removeFromRequest())->toBe('removed');
     expect($this->devices->rows)->toBe([]);
+    expect($this->audit->entries[0]['entityId'])->toBe(7);
 });
 
-test('a device id that is not an id is refused', function () {
-    // Validated rather than cast: "12abc" must not quietly become 12,
-    // because the value goes into the nonce action name.
-    adminHandlersEnrol();
-    $_POST['device'] = '1abc';
+test('Firebase being out says the device was not removed', function () {
+    $this->devices->add();
+    $this->devices->down = true;
+    $_POST['device'] = 'd_abc';
+
+    expect(adminHandlersDevicesPage()->removeFromRequest())->toBe('firebase_unavailable');
+    expect($this->audit->entries)->toBe([]);
+});
+
+test('a device id that is not an id is refused', function (string $id) {
+    // It goes into the nonce action name and a Firestore path.
+    $this->devices->add();
+    $_POST['device'] = $id;
 
     adminHandlersDevicesPage()->revokeFromRequest();
-})->throws(WpDieException::class);
+})->with(['1', 'd_abc/inbox', '../d_abc', 'd_ABC', 'd_'])->throws(WpDieException::class);
 
 test('naming no device is refused', function () {
     adminHandlersDevicesPage()->revokeFromRequest();
@@ -260,20 +273,5 @@ function adminHandlersDevicesPage(): DevicesPage
             new PasswordPolicy(),
         ),
         $gate,
-    );
-}
-
-function adminHandlersEnrol(): void
-{
-    test()->devices->create(
-        'hash-1',
-        ADMIN_HANDLERS_MEMBER,
-        7,
-        'Pixel 6a',
-        'android',
-        'spki',
-        'fcm',
-        'token-1',
-        1788000000,
     );
 }

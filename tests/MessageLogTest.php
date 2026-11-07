@@ -10,9 +10,9 @@ use Fellowship\Admin\MessagesPage;
 use Fellowship\Auth\DeviceTokenMinter;
 use Fellowship\Devices\CurrentDevice;
 use Fellowship\Devices\MemberGate;
+use Fellowship\Messaging\LoggedMessage;
 use Fellowship\Tests\Support\InMemoryDeviceRepository;
-use Fellowship\Tests\Support\InMemoryMessageRepository;
-use Fellowship\Tests\Support\InMemoryRecipientRepository;
+use Fellowship\Tests\Support\InMemoryMessageLog;
 use Unity\Testing\Doubles\InMemoryMemberRepository;
 use Unity\Testing\Doubles\MemberStub;
 use WP_REST_Request;
@@ -20,12 +20,9 @@ use WP_REST_Request;
 /**
  * The admin message log, and who the server thinks is calling.
  *
- * <b>The log is the reason message bodies are stored readable.</b> That
- * was a decision rather than an oversight — it is what makes an admin
- * composing to a committee, this screen, and Scrutiny's audit possible at
- * all — so what the screen shows about each message is the visible half
- * of that trade, and the delivery counts are what make "this went
- * nowhere" noticeable.
+ * <b>The log can't show what a message said.</b> Messages are end-to-end
+ * encrypted, so it shows who sent one, the kind of audience, and how far it
+ * got. The delivery counts are what make "this went nowhere" noticeable.
  *
  * <b>CurrentDevice is the single answer to "who is calling?"</b> Every
  * authenticated route runs through it, and it re-runs the member gate on
@@ -45,8 +42,7 @@ beforeEach(function () {
     when('paginate_links')->justReturn('');
     when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
 
-    $this->messages = new InMemoryMessageRepository();
-    $this->recipients = new InMemoryRecipientRepository();
+    $this->log = new InMemoryMessageLog();
     $this->devices = new InMemoryDeviceRepository();
     $this->minter = new DeviceTokenMinter();
 
@@ -55,134 +51,97 @@ beforeEach(function () {
     ]);
 });
 
-test('the log shows who sent what and to whom', function () {
-    messageLogGive('committee', 'steering', 'Dave P');
+test('the log shows who sent one and to what kind of audience', function () {
+    $this->log->add(senderMemberId: 7, audience: LoggedMessage::AUDIENCE_PART);
 
     $markup = messageLogRender();
 
-    expect($markup)->toContain('Intergroup moved');
     expect($markup)->toContain('Dave P');
-    expect($markup)->toContain('steering');
+    expect($markup)->toContain('A committee or the GSRs');
 });
 
-test('a message from the app is marked as such', function () {
-    // Which is how somebody reading the log tells a member's message
-    // from one the intergroup sent.
-    messageLogGive('members', '', 'Dave P', fromApp: true);
+test('the log says why it shows no message text', function () {
+    $this->log->add();
 
-    expect(messageLogRender())->toContain('from Link');
+    expect(messageLogRender())->toContain('end-to-end encrypted');
 });
 
 test('a message with no sender reads as the intergroup', function () {
     // A send through the API has no member behind it. Showing a blank
     // sender would look like data loss.
-    messageLogGive('all', '', '');
+    $this->log->add(senderMemberId: 0);
 
     expect(messageLogRender())->toContain('Intergroup');
+});
+
+test('a sender whose record has gone says so', function () {
+    $this->log->add(senderMemberId: 99);
+
+    expect(messageLogRender())->toContain('no member record');
+});
+
+test('a sender with no anonymous name says so', function () {
+    $this->members = new InMemoryMemberRepository([
+        new MemberStub(id: 7, anonymousName: ' ', personalEmail: MESSAGE_LOG_MEMBER),
+    ]);
+    $this->log->add(senderMemberId: 7);
+
+    expect(messageLogRender())->toContain('unnamed member');
 });
 
 test('the log counts delivery and reading for a message to several', function () {
     // The half of the screen that makes "this went nowhere" visible.
     // Counted, because "read" of a committee message would otherwise
     // mean "read by somebody".
-    $id = messageLogGive('members', '', 'Dave P');
+    $this->log->add(recipients: 3, received: 2, read: 1);
 
-    $this->recipients->addMany($id, [
-        ['email' => MESSAGE_LOG_MEMBER, 'member_id' => 7],
-        ['email' => 'sue@example.org', 'member_id' => 8],
-        ['email' => 'jo@example.org', 'member_id' => 9],
-    ], 1788000000);
-    $this->recipients->markReceived([$id], 'sue@example.org', 1788000050);
-    $this->recipients->markRead($id, MESSAGE_LOG_MEMBER, 1788000100);
-
-    // A read counts as delivered, as it does for Link's ticks.
     expect(messageLogRender())->toContain('3 recipients: 2 delivered, 1 read');
 });
 
-test('a message to one member is said in a word, as Link ticks it', function (?string $state, string $expected) {
-    $id = messageLogGive('members', '', 'Dave P');
-    $this->recipients->addMany($id, [['email' => 'sue@example.org', 'member_id' => 8]], 1788000000);
-
-    if ($state === 'received' || $state === 'read+received') {
-        $this->recipients->markReceived([$id], 'sue@example.org', 1788000050);
-    }
-
-    if ($state === 'read' || $state === 'read+received') {
-        $this->recipients->markRead($id, 'sue@example.org', 1788000100);
-    }
+test('a message to one member is said in a word, as Link ticks it', function (int $received, int $read, string $expected) {
+    $this->log->add(recipients: 1, received: $received, read: $read);
 
     expect(messageLogRender())->toContain('<td>' . $expected . '</td>');
 })->with([
-    'not yet on a handset' => [null, 'Sent'],
-    'opened on a handset'  => ['received', 'Delivered'],
-    'read'                 => ['read+received', 'Read'],
-    'read with the receipt lost on the way back' => ['read', 'Read'],
+    'not yet on a handset' => [0, 0, 'Sent'],
+    'opened on a handset'  => [1, 0, 'Delivered'],
+    'read'                 => [1, 1, 'Read'],
+    'read with the receipt lost on the way back' => [0, 1, 'Read'],
 ]);
 
-test('a push Google accepted is not shown as delivered', function () {
-    // FCM taking a push says nothing about a handset having it, and this
-    // column is looked at exactly when somebody says it never arrived.
-    $id = messageLogGive('members', '', 'Dave P');
-    $this->recipients->addMany($id, [['email' => 'sue@example.org', 'member_id' => 8]], 1788000000);
-    $this->recipients->markPushed($id, 'sue@example.org', 1788000010);
-
-    expect(messageLogRender())->toContain('<td>Sent</td>');
-});
-
 test('a message that reached nobody says so', function () {
-    messageLogGive('members', '', 'Dave P');
+    $this->log->add(recipients: 0);
 
     expect(messageLogRender())->toContain('Reached nobody');
 });
 
-test('the log asks for every row\'s receipts at once', function () {
-    // One grouped query for the page rather than counts per row.
-    $first = messageLogGive('members', '', 'Dave P');
-    $second = messageLogGive('members', '', 'Dave P');
-    $this->recipients->addMany($first, [['email' => 'sue@example.org', 'member_id' => 8]], 1788000000);
-    $this->recipients->addMany($second, [['email' => 'sue@example.org', 'member_id' => 8]], 1788000000);
+test('each kind of audience is named in words', function (string $kind, string $words) {
+    $this->log->add(audience: $kind);
 
-    $spy = new class ($this->recipients) extends \Fellowship\Tests\Support\InMemoryRecipientRepository {
-        /** @var list<list<int>> */
-        public array $asked = [];
+    expect(messageLogRender())->toContain($words);
+})->with([
+    'everyone'     => [LoggedMessage::AUDIENCE_EVERYONE, 'Everyone'],
+    'part'         => [LoggedMessage::AUDIENCE_PART, 'A committee or the GSRs'],
+    'members'      => [LoggedMessage::AUDIENCE_MEMBERS, 'Named members'],
+    'mixed'        => [LoggedMessage::AUDIENCE_MIXED, 'Named members and a committee or the GSRs'],
+    'not one of ours' => ['something-new', 'Unknown'],
+]);
 
-        public function __construct(private readonly \Fellowship\Tests\Support\InMemoryRecipientRepository $inner)
-        {
-        }
-
-        public function receiptsFor(array $messageIds): array
-        {
-            $this->asked[] = $messageIds;
-
-            return $this->inner->receiptsFor($messageIds);
-        }
-    };
-
-    captureOutput(fn() => (new MessagesPage(test()->messages, $spy))->render());
-
-    expect($spy->asked)->toHaveCount(1);
-    expect($spy->asked[0])->toEqualCanonicalizing([$first, $second]);
-});
-
-test('each audience is named in words', function () {
-    messageLogGive('all', '', 'Dave P');
-
-    expect(messageLogRender())->toContain('Everyone');
-});
-
-test('a send to all gsrs says so in words, not as its token', function () {
-    messageLogGive('committee', '@gsrs,steering', 'Dave P');
+test('Firebase being out says so rather than that nothing was sent', function () {
+    $this->log->down = true;
 
     $markup = messageLogRender();
 
-    expect($markup)->toContain('All GSRs, committee: steering');
-    expect($markup)->not->toContain('@gsrs');
+    expect($markup)->toContain('could not be reached');
+    expect($markup)->not->toContain('No messages have been sent');
 });
 
-test('all gsrs with named members says both', function () {
-    messageLogGive('mixed', '@gsrs', 'Dave P');
+test('the log asks for one more than a page, to know if there is a next one', function () {
+    for ($i = 0; $i < 26; $i++) {
+        $this->log->add();
+    }
 
-    expect(messageLogRender())->toContain('Named members, All GSRs');
+    expect(substr_count(messageLogRender(), '<tr>'))->toBe(26);
 });
 
 // ── Who is calling ────────────────────────────────────────────────
@@ -240,24 +199,7 @@ test('the member behind a device is resolved through the same gate', function ()
 
 function messageLogRender(): string
 {
-    return captureOutput(fn() => (new MessagesPage(test()->messages, test()->recipients))->render());
-}
-
-function messageLogGive(string $audience, string $ref, string $sender, bool $fromApp = false): int
-{
-    return test()->messages->create(
-        'uuid-' . count(test()->messages->rows),
-        $sender === '' ? '' : 'dave@example.org',
-        $sender === '' ? 0 : 7,
-        $sender,
-        'Intergroup moved',
-        'Now the 14th, same room as usual.',
-        $audience,
-        $ref,
-        1788000000,
-        0,
-        $fromApp ? 4 : 0,
-    )->id;
+    return captureOutput(fn() => (new MessagesPage(test()->log, test()->members))->render());
 }
 
 function messageLogCurrentDevice(): CurrentDevice
