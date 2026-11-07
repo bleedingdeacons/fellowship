@@ -15,6 +15,7 @@ use Fellowship\Messaging\RecipientResolver;
 use Fellowship\Push\FcmClient;
 use Fellowship\Push\FcmTransport;
 use Fellowship\Tests\Support\InMemoryDeviceRepository;
+use Fellowship\Tests\Support\RecordingDelivery;
 use Fellowship\Tests\Support\InMemoryMessageRepository;
 use Fellowship\Tests\Support\InMemoryRecipientRepository;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;
@@ -119,29 +120,33 @@ test('the sending device is recorded when it came from the app', function () {
     expect($message->senderDeviceId)->toBe(4);
 });
 
-// ── The one door in ───────────────────────────────────────────────
+// ── The one door in ──────────────────────────────────────────────
 
 test('the API sends and audits', function () {
-    $result = dispatcherApi()->send([
+    $delivery = new RecordingDelivery();
+
+    $result = dispatcherApi($delivery)->send([
         'subject' => 'Intergroup moved',
         'body' => 'Now the 14th.',
         'member_emails' => ['sue@example.org'],
     ]);
 
     expect($result)->not->toBeInstanceOf(WP_Error::class);
-    expect($this->messages->rows)->toHaveCount(1);
+    expect($delivery->delivered)->toHaveCount(1);
     expect($this->audit->entries)->not->toBeEmpty();
 });
 
 test('the API refuses a message with no subject', function () {
-    $result = dispatcherApi()->send([
+    $delivery = new RecordingDelivery();
+
+    $result = dispatcherApi($delivery)->send([
         'subject' => '',
         'body' => 'Now the 14th.',
         'member_emails' => ['sue@example.org'],
     ]);
 
     expect($result)->toBeInstanceOf(WP_Error::class);
-    expect($this->messages->rows)->toBe([]);
+    expect($delivery->resolved)->toBe([]);
 });
 
 test('the API refuses a message with no body', function () {
@@ -154,25 +159,19 @@ test('the API refuses a message with no body', function () {
     expect($result)->toBeInstanceOf(WP_Error::class);
 });
 
-test('a message that reaches nobody is still recorded', function () {
-    // Not a refusal, and worth stating plainly because the opposite
-    // is the intuitive guess: the message is a record of what the
-    // intergroup said, so it is stored with no recipients rather than
-    // rejected. The admin log shows the recipient count, which is
-    // where "this went nowhere" is meant to become visible.
-    //
-    // The two callers that must not allow it guard separately: the
-    // REST controller refuses a handset addressing the whole
-    // fellowship, and the compose screen refuses an empty audience.
-    $result = dispatcherApi()->send([
+test('a message that would reach nobody is refused', function () {
+    // There is no longer a table to record it in. The sender is told instead, which
+    // is sooner than finding it in a log.
+    $delivery = new RecordingDelivery();
+
+    $result = dispatcherApi($delivery)->send([
         'subject' => 'Intergroup moved',
         'body' => 'Now the 14th.',
         'member_emails' => ['stranger@example.org'],
     ]);
 
-    expect($result)->not->toBeInstanceOf(WP_Error::class);
-    expect($this->messages->rows)->toHaveCount(1);
-    expect($this->recipients->rows)->toBe([]);
+    expect($result)->toBeInstanceOf(WP_Error::class);
+    expect($delivery->delivered)->toBe([]);
 });
 
 test('a refused send writes no audit entry', function () {
@@ -198,15 +197,17 @@ function dispatcherDispatcher(): MessageDispatcher
     );
 }
 
-function dispatcherApi(): MessageApi
+function dispatcherApi(?RecordingDelivery $delivery = null): MessageApi
 {
     return new MessageApi(
-        dispatcherDispatcher(),
+        $delivery ?? new RecordingDelivery(),
+        new MessageSealer(),
         new RecipientResolver(
             test()->members,
             new InMemoryCommitteeRepository(),
             new MemberGate(test()->members),
         ),
+        test()->members,
         test()->audit,
     );
 }

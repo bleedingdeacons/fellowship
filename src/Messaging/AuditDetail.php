@@ -24,8 +24,7 @@ if (!defined('ABSPATH')) {
  * the message table, which is exactly the thing an auditor reviewing
  * access should not have to do. The subject is the line the recipients
  * saw first and the shortest thing that identifies a message. The body is
- * where the substance is, and Scrutiny does not need a second copy of it:
- * it is already in a table, with its own retention window.</p>
+ * where the substance is, and it is not kept here at all.</p>
  *
  * <p><b>A subject is member-typed text and may carry personal data.</b>
  * The AuditLogger contract asks callers to keep raw PII out of the
@@ -59,17 +58,42 @@ final class AuditDetail
         int $recipients,
         array $extra = [],
     ): string {
+        return self::forSend(
+            $message->id,
+            $message->audienceType,
+            $message->audienceRef,
+            $message->subject,
+            $origin,
+            $recipients,
+            $extra,
+        );
+    }
+
+    /**
+     * The same, for a message that was never stored here.
+     *
+     * @param array<string, string|int> $extra Trailing fields, in order.
+     */
+    public static function forSend(
+        int $id,
+        string $audienceType,
+        string $audienceRef,
+        string $subject,
+        string $origin,
+        int $recipients,
+        array $extra = [],
+    ): string {
         $detail = $origin
-            . ';message:' . $message->id
-            . ';audience:' . $message->audienceType
-            . ($message->audienceRef !== '' ? ';ref:' . $message->audienceRef : '')
+            . ';message:' . $id
+            . ';audience:' . $audienceType
+            . ($audienceRef !== '' ? ';ref:' . $audienceRef : '')
             . ';recipients:' . $recipients;
 
         foreach ($extra as $key => $value) {
             $detail .= ';' . $key . ':' . $value;
         }
 
-        $subject = self::sanitiseSubject($message->subject);
+        $subject = self::sanitiseSubject($subject);
 
         // Last, and only when there is one. A message with a blank
         // subject should read as one, not as a field with nothing after

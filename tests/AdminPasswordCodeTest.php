@@ -12,7 +12,7 @@ use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
 use Fellowship\Devices\MemberGate;
-use Fellowship\Tests\Support\InMemoryDeviceRepository;
+use Fellowship\Tests\Support\InMemoryLinkDevices;
 use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;
 use Unity\Testing\Doubles\InMemoryMemberRepository;
@@ -184,7 +184,7 @@ function adminPasswordCodePage(): DevicesPage
     $gate = new MemberGate(test()->members);
 
     return new DevicesPage(
-        new InMemoryDeviceRepository(),
+        new InMemoryLinkDevices(),
         test()->members,
         test()->audit,
         new PasswordAuthenticator(test()->credentials, $gate, test()->mailer, new PasswordPolicy()),

@@ -8,10 +8,13 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+use Fellowship\Crypto\MessageSealer;
+use Fellowship\Firebase\FirebaseUnavailable;
 use Fellowship\Logger\HasLogger;
 use Scrutiny\Audit\Interfaces\AuditLogger;
 use Throwable;
 use Unity\Members\Interfaces\Member;
+use Unity\Members\Interfaces\MemberRepository;
 use WP_Error;
 
 use function add_action;
@@ -34,12 +37,18 @@ use function add_action;
  * message from the site's name cannot be. A send from a handset goes
  * through {@see \Fellowship\Rest\MessageController} instead.
  *
- * <b>Members are named by id, as the app names them.</b> `member_ids`
- * takes the opaque ids the directory hands out and is resolved here
- * through {@see RecipientResolver::emailsForIds()}, the same conversion a
- * handset's send goes through, so the admin compose screen never handles
- * an address. `member_emails` is still accepted for callers that already
- * hold them.
+ * <b>Sealed here, and kept nowhere.</b> A send asks Firebase who the message reaches,
+ * seals one envelope to each of their devices, and hands the envelopes back, as a
+ * handset does. WordPress sees the text because somebody typed it here, and it isn't
+ * stored. Only its subject stays, in the audit trail.
+ *
+ * <b>Members are named by id, as the app names them.</b> `member_ids` takes the opaque
+ * ids the directory hands out, so the admin compose screen never handles an address.
+ * `member_emails` is still accepted for callers that already hold them.
+ *
+ * <b>Everyone has to be asked for.</b> The audience is built from what was validated,
+ * and `everyone` is only ever set when nobody was named. Names that turn out to be
+ * nobody can't become a broadcast, because the far side refuses an empty audience.
  *
  * The author is a typed argument rather than an input key on purpose.
  * The input array is what other plugins hand in, and a key there would
@@ -55,9 +64,16 @@ final class MessageApi
         return 'fellowship';
     }
 
+    /** A sealed id can't be changed, so an audience that moves means sealing again. */
+    private const SEND_ATTEMPTS = 3;
+
+    private const STALE_AUDIENCE = 'fellowship_stale_audience';
+
     public function __construct(
-        private readonly MessageDispatcher $dispatcher,
+        private readonly MessageDelivery $delivery,
+        private readonly MessageSealer $sealer,
         private readonly RecipientResolver $resolver,
+        private readonly MemberRepository $members,
         private readonly AuditLogger $auditLogger,
     ) {
     }
@@ -73,7 +89,7 @@ final class MessageApi
      *        intergroup. When given, the message carries their name and
      *        id, it is not delivered back to them, and the audit entry is
      *        recorded against them — what a send from the app does.
-     * @return int|WP_Error The stored message id, or why it was refused.
+     * @return int|WP_Error The message id, or why it was refused.
      */
     public function send(array $input, ?Member $author = null): int|WP_Error
     {
@@ -90,23 +106,23 @@ final class MessageApi
         $senderName = isset($input['sender_name']) && is_string($input['sender_name']) && trim($input['sender_name']) !== ''
             ? trim($input['sender_name'])
             : $this->siteName();
-        $senderEmail = '';
         $senderMemberId = 0;
 
         if ($author !== null) {
             $senderName = $author->getAnonymousName();
-            $senderEmail = strtolower(trim($author->getPersonalEmail()));
             $senderMemberId = $author->getId();
         }
 
         try {
-            $members = $this->resolver->resolve($request, $senderEmail);
-            $message = $this->dispatcher->dispatch($request, $members, $senderEmail, $senderMemberId, $senderName);
+            [$id, $reached] = $this->deliver($request, $senderMemberId, $senderName);
+        } catch (FirebaseUnavailable $e) {
+            return $e->refusal !== ''
+                ? new WP_Error($e->reason !== '' ? $e->reason : 'fellowship_refused', $e->refusal, ['status' => 400])
+                : new WP_Error('fellowship_send_failed', 'Firebase could not be reached, so the message was not sent. Please try again.', ['status' => 503]);
         } catch (Throwable $e) {
-            // A storage failure here is a real fault and the caller needs
-            // to know, but it must not propagate as a fatal into whatever
-            // plugin asked to send — the same reasoning as the bootstrap
-            // wrapper around this method.
+            // A real fault and the caller needs to know, but it must not propagate
+            // as a fatal into whatever plugin asked to send: the same reasoning as
+            // the bootstrap wrapper around this method.
             self::logError('Message could not be sent', ['error' => $e->getMessage()]);
 
             return new WP_Error(
@@ -116,25 +132,136 @@ final class MessageApi
             );
         }
 
-        // Audited because a message is personal data addressed to named
-        // members. What is recorded is who it reached, how it was
-        // addressed, and the subject — not the body, which is already in
-        // a table Scrutiny does not need a second copy of. See
-        // AuditDetail on why the subject is the one piece of the message
-        // text that earns its place here.
+        // Audited because a message is addressed to named members. What is recorded
+        // is who it reached, how it was addressed, and the subject, which is now the
+        // only record of what a message was. See AuditDetail on why the subject earns
+        // its place here. Never the body.
         //
-        // Entity id 0 when there is no author: then it is the intergroup
-        // speaking, and inventing a member to attribute it to would make
-        // the audit trail say something untrue.
+        // Entity id 0 when there is no author: then it is the intergroup speaking, and
+        // inventing a member to attribute it to would make the audit trail say
+        // something untrue.
         $this->auditLogger->log(
             AuditLogger::ACTION_MESSAGE,
             AuditLogger::ENTITY_MEMBER,
             $senderMemberId,
             'message',
-            AuditDetail::forMessage($message, 'Message sent from WordPress', count($members)),
+            AuditDetail::forSend(
+                $id,
+                $request->audienceType,
+                $request->audienceRef,
+                $request->subject,
+                'Message sent from WordPress',
+                $reached,
+            ),
         );
 
-        return $message->id;
+        return $id;
+    }
+
+    /**
+     * Ask who it reaches, seal to each device, and hand the envelopes over.
+     *
+     * @return array{0: int, 1: int} The message id, and how many members it reached.
+     *
+     * @throws FirebaseUnavailable When Firebase couldn't be asked, or refused.
+     */
+    private function deliver(MessageRequest $request, int $senderMemberId, string $senderName): array
+    {
+        $audience = $this->audienceOf($request, $senderMemberId);
+
+        for ($attempt = 1;; $attempt++) {
+            $resolved = $this->delivery->resolve($audience);
+
+            if ($resolved['devices'] === []) {
+                throw new FirebaseUnavailable('Nobody to send to.', 'fellowship_no_reachable_members', 'None of those members have Link yet.');
+            }
+
+            $id = $resolved['id'];
+            $envelopes = $this->sealAll($request, $id, $senderMemberId, $senderName, $resolved['devices']);
+
+            try {
+                return [$id, $this->delivery->deliver($audience, $id, $envelopes)];
+            } catch (FirebaseUnavailable $e) {
+                if ($e->reason !== self::STALE_AUDIENCE || $attempt >= self::SEND_ATTEMPTS) {
+                    throw $e;
+                }
+            }
+        }
+    }
+
+    /** @return array<string, mixed> What {@see MessageDelivery} takes. */
+    private function audienceOf(MessageRequest $request, int $senderMemberId): array
+    {
+        $audience = ['senderMemberId' => $senderMemberId];
+
+        if ($request->audienceType === Message::AUDIENCE_ALL) {
+            return $audience + ['everyone' => true];
+        }
+
+        $memberIds = [];
+        foreach ($request->memberEmails as $email) {
+            $member = $this->members->findByEmail($email);
+            if ($member !== null) {
+                $memberIds[] = $member->getId();
+            }
+        }
+
+        if ($memberIds !== []) {
+            $audience['memberIds'] = $memberIds;
+        }
+
+        $committees = array_values(array_diff($request->committees, [MessageRequest::ALL_GSRS]));
+        if ($committees !== []) {
+            $audience['committees'] = $committees;
+        }
+
+        if ($request->includesAllGsrs()) {
+            $audience['gsrs'] = true;
+        }
+
+        return $audience;
+    }
+
+    /**
+     * One envelope per device, in the payload a handset's send seals.
+     *
+     * <b>All or nothing.</b> The far side refuses a set that leaves a device out, so a
+     * key that can't be used stops the send rather than quietly missing somebody.
+     *
+     * @param list<array{deviceId: string, publicKey: string}> $devices
+     *
+     * @return list<array{deviceId: string, k: string, p: string}>
+     *
+     * @throws FirebaseUnavailable When a device can't be sealed to.
+     */
+    private function sealAll(MessageRequest $request, int $id, int $senderMemberId, string $senderName, array $devices): array
+    {
+        $payload = [
+            'id'         => $id,
+            'uuid'       => wp_generate_uuid4(),
+            'subject'    => $request->subject,
+            'body'       => $request->body,
+            'sender'     => $senderName,
+            'sender_id'  => $senderMemberId,
+            'created_at' => intdiv(intdiv($id, 1024), 1000),
+            'reply_to'   => $request->replyToId,
+        ];
+
+        $envelopes = [];
+        foreach ($devices as $device) {
+            $sealed = $this->sealer->seal($payload, $device['publicKey']);
+            if ($sealed === null) {
+                throw new FirebaseUnavailable(
+                    'A device key could not be used.',
+                    'fellowship_unusable_key',
+                    'One of those devices has a key that can\'t be used, so the message was not sent. Revoke that device on the Devices screen and try again.',
+                );
+            }
+
+            $envelopes[] = ['deviceId' => $device['deviceId'], 'k' => $sealed['k'], 'p' => $sealed['p']];
+        }
+
+        return $envelopes;
     }
 
     /**

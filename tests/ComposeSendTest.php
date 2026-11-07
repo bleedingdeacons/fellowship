@@ -5,21 +5,16 @@ declare(strict_types=1);
 namespace Fellowship\Tests;
 
 use function Brain\Monkey\Functions\when;
-use BleedingDeacons\WpMocks\Doubles\FakeWpHttp;
 use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Admin\ComposePage;
-use Fellowship\Core\Settings;
 use Fellowship\Crypto\MessageSealer;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Directory\DirectoryPresenter;
+use Fellowship\Firebase\FirebaseUnavailable;
 use Fellowship\Messaging\MessageApi;
-use Fellowship\Messaging\MessageDispatcher;
 use Fellowship\Messaging\RecipientResolver;
-use Fellowship\Push\FcmClient;
-use Fellowship\Push\FcmTransport;
 use Fellowship\Tests\Support\InMemoryDeviceRepository;
-use Fellowship\Tests\Support\InMemoryMessageRepository;
-use Fellowship\Tests\Support\InMemoryRecipientRepository;
+use Fellowship\Tests\Support\RecordingDelivery;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;
 use Unity\Testing\Doubles\CommitteeStub;
 use Unity\Testing\Doubles\InMemoryCommitteeRepository;
@@ -55,12 +50,10 @@ beforeEach(function () {
         static fn(): string => '11111111-2222-4333-8444-555555555555'
     );
 
-    $this->messages = new InMemoryMessageRepository();
-    $this->recipients = new InMemoryRecipientRepository();
+    $this->delivery = new RecordingDelivery();
     $this->audit = new SpyAuditLogger();
     $this->devices = new InMemoryDeviceRepository();
     $this->committees = new InMemoryCommitteeRepository();
-    $this->settings = new Settings();
 
     $this->members = new InMemoryMemberRepository([
         new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: 'dave@example.org'),
@@ -74,8 +67,8 @@ test('a message to the whole fellowship is sent from here', function () {
     $_POST['body'] = 'Now the 14th, same room.';
 
     expect(composeSendPage()->sendFromRequest())->toBe('sent');
-    expect($this->messages->rows)->toHaveCount(1);
-    expect($this->recipients->rows)->toHaveCount(2);
+    expect($this->delivery->delivered)->toHaveCount(1);
+    expect($this->delivery->resolved[0]['everyone'])->toBeTrue();
 });
 
 test('sending is audited', function () {
@@ -92,7 +85,7 @@ test('a message with no subject is refused', function () {
     $_POST['body'] = 'Now the 14th.';
 
     expect(composeSendPage()->sendFromRequest())->toBe('error');
-    expect($this->messages->rows)->toBe([]);
+    expect($this->delivery->delivered)->toBe([]);
 });
 
 test('a message with no body is refused', function () {
@@ -139,21 +132,7 @@ test('a message from a member is credited to them', function () {
 
     composeSendPage()->sendFromRequest();
 
-    $message = array_values($this->messages->rows)[0];
-    expect($message->senderMemberId)->toBe(9);
-    expect($message->senderName)->toBe('Jo B');
-});
-
-test('a member who writes one does not receive it', function () {
-    // What a send from the app does. Their own message arriving on
-    // their phone would offer a reply addressed to themselves.
-    composeSendAuthorIsMember();
-    $_POST['subject'] = 'Intergroup moved';
-    $_POST['body'] = 'Now the 14th.';
-
-    composeSendPage()->sendFromRequest();
-
-    expect($this->recipients->rows)->toHaveCount(2);
+    expect($this->delivery->delivered[0]['audience']['senderMemberId'])->toBe(9);
 });
 
 test('a member\'s send is audited against them', function () {
@@ -173,8 +152,7 @@ test('a user who is not a member still sends as the intergroup', function () {
 
     composeSendPage()->sendFromRequest();
 
-    $message = array_values($this->messages->rows)[0];
-    expect($message->senderMemberId)->toBe(0);
+    expect($this->delivery->delivered[0]['audience']['senderMemberId'])->toBe(0);
     expect($this->audit->entries[0]['entityId'])->toBe(0);
 });
 
@@ -195,57 +173,30 @@ test('the screen says when it will not be from a member', function () {
 // ── To one member ─────────────────────────────────────────────────
 
 test('one member is sent to by their id', function () {
-    // The id the directory hands out, and the only thing the form
-    // carries. The address is found on the far side of MessageApi.
+    // The id the directory hands out, and the only thing the form carries.
     $_POST['audience'] = 'member:8';
     $_POST['subject'] = 'Your rota';
     $_POST['body'] = 'Can you take Tuesday?';
 
     expect(composeSendPage()->sendFromRequest())->toBe('sent');
-
-    $message = array_values($this->messages->rows)[0];
-    expect($message->audienceType)->toBe('members');
-
-    $recipients = array_values($this->recipients->rows);
-    expect($recipients)->toHaveCount(1);
-    expect($recipients[0]->memberId)->toBe(8);
-    expect($recipients[0]->memberEmail)->toBe('sue@example.org');
+    expect($this->delivery->resolved[0]['memberIds'])->toBe([8]);
+    expect($this->delivery->resolved[0])->not->toHaveKey('everyone');
+    expect($this->audit->entries[0]['detail'])->toContain('audience:members');
 });
 
-test('a message to one member is sealed and pushed to their handset as the app would push it', function () {
-    // The same dispatcher, sealer and FCM transport a handset's send goes
-    // through. One RSA key stands in for both the service account and
-    // the handset, as in AdminBranchesTest: a fake key would stop the
-    // push before the first HTTP call and assert nothing.
-    $pem = composeSendPrivateKey();
-    $this->settings->setFcmServiceAccount((string) wp_json_encode([
-        'type'         => 'service_account',
-        'project_id'   => 'intergroup-fellowship',
-        'client_email' => 'pusher@intergroup-fellowship.iam.gserviceaccount.com',
-        'private_key'  => $pem,
-        'token_uri'    => 'https://oauth2.googleapis.com/token',
-    ]));
-    $this->devices->create('hash-8', 'sue@example.org', 8, 'Pixel 6a', 'android', composeSendPublicKey($pem), 'fcm', 'token-8', 1788000000);
-
-    FakeWpHttp::reset();
-    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-    FakeWpHttp::pushResponse(200, '{}');
-
+test('what leaves is sealed, with none of the message in the clear', function () {
     $_POST['audience'] = 'member:8';
     $_POST['subject'] = 'Your rota';
     $_POST['body'] = 'Can you take Tuesday?';
 
-    expect(composeSendPage()->sendFromRequest())->toBe('sent');
-    expect(array_values($this->recipients->rows)[0]->pushedAt)->not->toBeNull();
+    composeSendPage()->sendFromRequest();
 
-    // The push carries the hybrid envelope's two fields and none of the
-    // message in the clear.
-    $push = (string) (FakeWpHttp::sentArgs(1)['body'] ?? '');
-    expect($push)->toContain('token-8');
-    expect($push)->toContain('"k"');
-    expect($push)->toContain('"p"');
-    expect($push)->not->toContain('Can you take Tuesday?');
-    expect($push)->not->toContain('Your rota');
+    $sent = (string) wp_json_encode($this->delivery->delivered[0]);
+
+    expect($sent)->toContain('"k"');
+    expect($sent)->toContain('"p"');
+    expect($sent)->not->toContain('Can you take Tuesday?');
+    expect($sent)->not->toContain('Your rota');
 });
 
 test('a committee is sent to', function () {
@@ -258,8 +209,16 @@ test('a committee is sent to', function () {
     $_POST['body'] = 'Attached.';
 
     expect(composeSendPage()->sendFromRequest())->toBe('sent');
-    expect(array_values($this->messages->rows)[0]->audienceRef)->toBe('steering');
-    expect(array_values($this->recipients->rows)[0]->memberId)->toBe(7);
+    expect($this->delivery->resolved[0]['committees'])->toBe(['steering']);
+});
+
+test('a refusal from Firebase reaches the screen in its own words', function () {
+    $this->delivery->resolveFailure = new FirebaseUnavailable('Refused.', 'fellowship_no_reachable_members', 'None of those members have Link yet.');
+    $_POST['subject'] = 'Agenda';
+    $_POST['body'] = 'Attached.';
+
+    expect(composeSendPage()->sendFromRequest())->toBe('error');
+    expect(implode('|', array_map('strval', WpState::$transients)))->toContain('None of those members have Link yet.');
 });
 
 test('an audience the form does not offer is refused rather than sent to everyone', function (string $audience) {
@@ -270,7 +229,7 @@ test('an audience the form does not offer is refused rather than sent to everyon
     $_POST['body'] = 'Now the 14th.';
 
     expect(composeSendPage()->sendFromRequest())->toBe('error');
-    expect($this->messages->rows)->toBe([]);
+    expect($this->delivery->resolved)->toBe([]);
     expect($this->audit->entries)->toBe([]);
 })->with(['', 'nobody', 'member:', 'member:0', 'member:-8', 'member:eight', 'committee:']);
 
@@ -283,8 +242,7 @@ test('a member whose record has gone is refused rather than sent to everyone', f
     $_POST['body'] = 'Can you take Tuesday?';
 
     expect(composeSendPage()->sendFromRequest())->toBe('error');
-    expect($this->messages->rows)->toBe([]);
-    expect($this->recipients->rows)->toBe([]);
+    expect($this->delivery->resolved)->toBe([]);
 });
 
 test('members are offered from the app address book, by name and never by address', function () {
@@ -327,32 +285,6 @@ test('the signed-in member is not offered to themselves', function () {
     expect($markup)->not->toContain('value="member:9"');
 });
 
-function composeSendPrivateKey(): string
-{
-    static $pem = null;
-
-    if ($pem === null) {
-        $resource = openssl_pkey_new([
-            'private_key_bits' => 2048,
-            'private_key_type' => OPENSSL_KEYTYPE_RSA,
-        ]);
-        expect($resource)->not->toBeFalse();
-
-        openssl_pkey_export($resource, $pem);
-    }
-
-    return (string) $pem;
-}
-
-/** The SPKI body a handset sends at enrolment, without PEM armour. */
-function composeSendPublicKey(string $pem): string
-{
-    $details = openssl_pkey_get_details(openssl_pkey_get_private($pem));
-    expect($details)->toBeArray();
-
-    return preg_replace('/\s+|-----[^-]*-----/', '', (string) $details['key']) ?? '';
-}
-
 /**
  * Members as the directory lists them: Sue with a handset, Dave without,
  * and one with their profile hidden. Optionally the signed-in
@@ -394,18 +326,13 @@ function composeSendAuthorIsMember(): void
 function composeSendPage(): ComposePage
 {
     $gate = new MemberGate(test()->members);
-    $settings = test()->settings;
-    $sealer = new MessageSealer();
 
     return new ComposePage(
         new MessageApi(
-            new MessageDispatcher(
-                test()->messages,
-                test()->recipients,
-                test()->devices,
-                new FcmTransport(new FcmClient(), $settings, $sealer),
-            ),
+            test()->delivery,
+            new MessageSealer(),
             new RecipientResolver(test()->members, test()->committees, $gate),
+            test()->members,
             test()->audit,
         ),
         test()->committees,

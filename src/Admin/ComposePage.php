@@ -27,9 +27,7 @@ use WP_Error;
  * address list open beside them. So one member is chosen the way the app
  * chooses one: from the address book Link is given
  * ({@see DirectoryPresenter}), by anonymous name, and addressed by opaque
- * member id. The id is turned into an address on the far side of
- * {@see MessageApi}, by the same resolver a handset's send goes through,
- * and this screen never sees one.
+ * member id, so this screen never sees an address.
  *
  * Choosing from that list carries its rules with it. A member with no Link
  * device is shown but cannot be chosen, as in the app, because a message
@@ -234,12 +232,10 @@ final class ComposePage
     {
         $audience = $this->audienceFromRequest();
 
-        // Passed through the same API another plugin would call, rather
-        // than reaching for the dispatcher directly. One path in means
-        // one place where validation, audit and the send actually happen
-        // — and behind it the same resolver, dispatcher, sealer and FCM
-        // transport a handset's send uses, so a member reached from here
-        // receives exactly what the app would have sent them.
+        // Passed through the same API another plugin would call. One path in
+        // means one place where validation, audit and the send actually happen,
+        // and it seals the same payload a handset's send seals, so a member
+        // reached from here receives exactly what the app would have sent them.
         $result = $audience instanceof WP_Error
             ? $audience
             : $this->api->send([

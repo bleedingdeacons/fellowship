@@ -11,6 +11,7 @@ if (!defined('ABSPATH')) {
 use Closure;
 use Fellowship\Core\UserAgent;
 use Fellowship\Logger\HasLogger;
+use Fellowship\Messaging\MessageDelivery;
 use Fellowship\Push\ServiceAccount;
 
 /**
@@ -19,14 +20,18 @@ use Fellowship\Push\ServiceAccount;
  * Google checks the caller's ID token before any code runs, because these functions
  * can only be invoked by that account.
  */
-final class AdminFunctions
+final class AdminFunctions implements MessageDelivery
 {
     use HasLogger;
 
     /** Where the Functions are deployed. Firestore's region can't change either. */
     private const REGION = 'europe-west2';
 
-    private const TIMEOUT_SECONDS = 15;
+    /**
+     * Long enough for a cold start, and for resolving an audience, which calls back
+     * into this site.
+     */
+    private const TIMEOUT_SECONDS = 30;
 
     /** @var Closure(): ?ServiceAccount */
     private readonly Closure $account;
@@ -57,6 +62,51 @@ final class AdminFunctions
     public function revokeMember(int $memberId, bool $remove = false): void
     {
         $this->call('adminRevokeMember', ['memberId' => $memberId, 'remove' => $remove]);
+    }
+
+    /**
+     * Cut one device off and keep its record.
+     *
+     * @throws FirebaseUnavailable When the function couldn't be called or refused.
+     */
+    public function revoke(string $deviceId): void
+    {
+        $this->call('adminRevoke', ['deviceId' => $deviceId]);
+    }
+
+    /**
+     * Delete one device's record and its inbox.
+     *
+     * @throws FirebaseUnavailable When the function couldn't be called or refused.
+     */
+    public function remove(string $deviceId): void
+    {
+        $this->call('adminRemove', ['deviceId' => $deviceId]);
+    }
+
+    public function resolve(array $audience): array
+    {
+        $answer = $this->call('adminResolve', $audience);
+
+        $devices = [];
+        foreach (is_array($answer['devices'] ?? null) ? $answer['devices'] : [] as $device) {
+            if (is_array($device) && is_string($device['deviceId'] ?? null) && is_string($device['publicKey'] ?? null)) {
+                $devices[] = ['deviceId' => $device['deviceId'], 'publicKey' => $device['publicKey']];
+            }
+        }
+
+        return [
+            'id'      => is_int($answer['id'] ?? null) ? $answer['id'] : 0,
+            'members' => is_int($answer['members'] ?? null) ? $answer['members'] : 0,
+            'devices' => $devices,
+        ];
+    }
+
+    public function deliver(array $audience, int $id, array $envelopes): int
+    {
+        $answer = $this->call('adminSend', $audience + ['id' => $id, 'envelopes' => $envelopes]);
+
+        return is_int($answer['reachable'] ?? null) ? $answer['reachable'] : 0;
     }
 
     /**
@@ -103,12 +153,19 @@ final class AdminFunctions
         $body = json_decode((string) wp_remote_retrieve_body($response), true);
 
         if ($status < 200 || $status >= 300) {
+            $reason = is_array($body) && is_string($body['reason'] ?? null) ? $body['reason'] : '';
+
             self::logWarning('An admin function refused a call', [
                 'function' => $function,
                 'status'   => $status,
-                'reason'   => is_array($body) ? (string) ($body['reason'] ?? '') : '',
+                'reason'   => $reason,
             ]);
-            throw new FirebaseUnavailable('An admin function answered ' . $status . '.');
+
+            throw new FirebaseUnavailable(
+                'An admin function answered ' . $status . '.',
+                $reason,
+                is_array($body) && is_string($body['message'] ?? null) ? $body['message'] : '',
+            );
         }
 
         return is_array($body) ? $body : [];
