@@ -16,8 +16,21 @@ import type { MemberQuery } from './fellowship';
 
 const SIGN_IN_PROVIDERS_WITH_ADDRESS = ['google.com', 'apple.com'];
 
-/** Which member this sign-in proves. Refuses anything stale, used or unknown. */
+/** Which member this sign-in proves, and it can't be used again. Refuses anything stale, used or unknown. */
 export async function proveMember(deps: Deps, caller: Caller | undefined): Promise<number> {
+  const memberId = await identifyMember(deps, caller);
+
+  await spendSignIn(deps, caller);
+
+  return memberId;
+}
+
+/**
+ * Which member this sign-in proves, leaving it unspent. For a caller that may
+ * refuse for a reason of its own and leave the sign-in good for something else.
+ * That caller must call spendSignIn before it changes anything.
+ */
+export async function identifyMember(deps: Deps, caller: Caller | undefined): Promise<number> {
   if (caller === undefined) {
     throw new HttpsError('unauthenticated', 'Sign in first.', { reason: 'fellowship_unauthenticated' });
   }
@@ -33,8 +46,6 @@ export async function proveMember(deps: Deps, caller: Caller | undefined): Promi
       reason: 'fellowship_not_a_member',
     });
   }
-
-  await spend(deps, caller);
 
   return answer.memberId;
 }
@@ -82,7 +93,11 @@ function memberQuery(caller: Caller): MemberQuery {
  * enrolling a second handset. Kept until it would have expired anyway, when the
  * daily sweep removes it.
  */
-async function spend(deps: Deps, caller: Caller): Promise<void> {
+export async function spendSignIn(deps: Deps, caller: Caller | undefined): Promise<void> {
+  if (caller === undefined) {
+    throw badToken();
+  }
+
   const id = createHash('sha256').update(`${caller.uid}:${caller.token.iat}`).digest('hex');
   const expireAt = Number(caller.token.exp) + CLOCK_SKEW_SECONDS;
 
