@@ -224,6 +224,82 @@ describe('taking over a device', () => {
     expect(await reasonOf(takeOverDevice(deps, await googleCaller(), { deviceId, publicKey })))
       .toBe('fellowship_device_revoked');
   });
+
+  test('the device list shows the phone it moved to', async () => {
+    const { deps, deviceId, publicKey } = await enrolled();
+
+    await takeOverDevice(deps, await googleCaller(), { deviceId, publicKey, platform: 'ios', label: 'New phone' });
+
+    const device = await db.collection('devices').doc(deviceId).get();
+    expect(device.get('platform')).toBe('ios');
+    expect(device.get('label')).toBe('New phone');
+  });
+
+  test('not saying which phone leaves the list as it was', async () => {
+    const { deps, deviceId, publicKey } = await enrolled();
+    const before = await db.collection('devices').doc(deviceId).get();
+
+    await takeOverDevice(deps, await googleCaller(), { deviceId, publicKey });
+
+    const after = await db.collection('devices').doc(deviceId).get();
+    expect(after.get('platform')).toBe(before.get('platform'));
+    expect(after.get('label')).toBe(before.get('label'));
+  });
+
+  test('a platform it does not know is refused before anything changes', async () => {
+    const { deps, deviceId, publicKey } = await enrolled();
+    const anHourAgo = Math.floor(Date.now() / 1000) - 3600;
+    const oldPhone = deviceCaller(deviceId, 7, { auth_time: anHourAgo });
+
+    expect(await reasonOf(takeOverDevice(deps, await googleCaller(), { deviceId, publicKey, platform: 'nokia' })))
+      .toBe('fellowship_bad_request');
+    await expect(requireLiveDevice(deps, oldPhone)).resolves.toBeDefined();
+  });
+
+  test.each([
+    ['a key that no longer matches', 'fellowship_key_mismatch'],
+    ['a device that is not theirs', 'fellowship_no_such_device'],
+    ['a revoked device', 'fellowship_device_revoked'],
+  ])('refusing %s leaves the sign-in good for enrolling as new', async (_what, reason) => {
+    const { deps, deviceId, publicKey } = await enrolled();
+    let asked = { deviceId, publicKey };
+
+    if (reason === 'fellowship_key_mismatch') {
+      asked = { deviceId, publicKey: newPublicKey() };
+    } else if (reason === 'fellowship_no_such_device') {
+      asked = { deviceId: 'd_nobody', publicKey };
+    } else {
+      await revokeDevice(deps, deviceId);
+    }
+
+    const signIn = await googleCaller();
+
+    expect(await reasonOf(takeOverDevice(deps, signIn, asked))).toBe(reason);
+
+    const result = await enrol(deps, signIn, { publicKey: newPublicKey(), platform: 'android' });
+    expect(result.memberId).toBe(7);
+    expect(result.deviceId).not.toBe(deviceId);
+  });
+
+  test('a sign-in that took over cannot take over or enrol again', async () => {
+    const { deps, deviceId, publicKey } = await enrolled();
+    const signIn = await googleCaller();
+
+    await takeOverDevice(deps, signIn, { deviceId, publicKey });
+
+    expect(await reasonOf(takeOverDevice(deps, signIn, { deviceId, publicKey }))).toBe('fellowship_bad_id_token');
+    expect(await reasonOf(enrol(deps, signIn, { publicKey: newPublicKey(), platform: 'android' })))
+      .toBe('fellowship_bad_id_token');
+  });
+
+  test('a sign-in already spent cannot take over', async () => {
+    const { deps, deviceId, publicKey } = await enrolled();
+    const signIn = await googleCaller();
+
+    await enrol(deps, signIn, { publicKey: newPublicKey(), platform: 'android' });
+
+    expect(await reasonOf(takeOverDevice(deps, signIn, { deviceId, publicKey }))).toBe('fellowship_bad_id_token');
+  });
 });
 
 describe('cutting a device off', () => {

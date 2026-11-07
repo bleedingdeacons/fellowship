@@ -10,7 +10,7 @@ import {
   TAKEOVER_SKEW_SECONDS,
 } from './config';
 import { Caller, Deps, nowSeconds } from './deps';
-import { discardIdentity, proveMember } from './identity';
+import { discardIdentity, identifyMember, proveMember, spendSignIn } from './identity';
 
 /**
  * Each device is its own Firebase user, with the device id as its uid and the
@@ -91,11 +91,23 @@ export async function replaceKey(deps: Deps, caller: Caller | undefined, data: D
  *
  * The key has to match, so a backup from before a key replacement cannot take
  * the device back, and the device has to be live, so an admin's revoke stays
- * final. Link enrols as new when this refuses.
+ * final. Link enrols as new when this refuses, with the same sign-in, because
+ * an Apple or Google credential can't be presented twice. So the sign-in is only
+ * spent once every check has passed.
  */
 export async function takeOverDevice(deps: Deps, caller: Caller | undefined, data: Data) {
-  const memberId = await proveMember(deps, caller);
+  const memberId = await identifyMember(deps, caller);
   const publicKey = requirePublicKey(data.publicKey);
+  const moved: Data = {};
+
+  if (data.platform !== undefined) {
+    moved.platform = requirePlatform(data.platform);
+  }
+
+  if (data.label !== undefined) {
+    moved.label = optionalString(data.label, LABEL_MAX_LENGTH);
+  }
+
   const ref = await membersLiveDevice(deps, data.deviceId, memberId);
 
   const device = await ref.get();
@@ -105,8 +117,11 @@ export async function takeOverDevice(deps: Deps, caller: Caller | undefined, dat
     });
   }
 
+  await spendSignIn(deps, caller);
+
   await deps.auth.revokeRefreshTokens(ref.id);
   await ref.update({
+    ...moved,
     tokensValidAfter: nowSeconds(deps) - TAKEOVER_SKEW_SECONDS,
     pushToken: optionalString(data.pushToken, PUSH_TOKEN_MAX_LENGTH),
     keyFault: false,
