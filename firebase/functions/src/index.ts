@@ -2,7 +2,6 @@ import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
-import { defineString } from 'firebase-functions/params';
 import { onDocumentCreated, onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https';
 import * as logger from 'firebase-functions/logger';
@@ -10,15 +9,12 @@ import { onMessagePublished } from 'firebase-functions/v2/pubsub';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import * as admin from './admin';
 import { countReceipt, pushInboxEntry, sweep as runSweep } from './background';
+import { googleCertificates, verifiedAttestations } from './attestation';
 import { KILL_SWITCH_ACCOUNT, REGION, SERVICE_ACCOUNT } from './config';
 import { Deps } from './deps';
 import * as devices from './devices';
-import { httpFellowship } from './fellowship';
 import { BudgetAlert, checkReadiness, detachBilling, overBudget } from './killSwitch';
 import * as messaging from './messaging';
-
-/** Fellowship's `/wp-json/fellowship/v1/service`, set at deploy. */
-const fellowshipServiceUrl = defineString('FELLOWSHIP_SERVICE_URL');
 
 initializeApp();
 
@@ -28,7 +24,7 @@ function deps(): Deps {
   cached ??= {
     db: getFirestore(),
     auth: getAuth(),
-    fellowship: httpFellowship(fellowshipServiceUrl.value()),
+    attestations: verifiedAttestations(googleCertificates(), () => Date.now()),
     push: (message) => getMessaging().send(message),
     now: () => Date.now(),
   };

@@ -14,7 +14,6 @@ use Fellowship\Logger\HasLogger;
 use Scrutiny\Audit\Interfaces\AuditLogger;
 use Throwable;
 use Unity\Members\Interfaces\Member;
-use Unity\Members\Interfaces\MemberRepository;
 use WP_Error;
 
 use function add_action;
@@ -37,9 +36,9 @@ use function add_action;
  * message from the site's name cannot be. A send from a handset goes
  * through {@see \Fellowship\Rest\MessageController} instead.
  *
- * <b>Sealed here, and kept nowhere.</b> A send asks Firebase who the message reaches,
- * seals one envelope to each of their devices, and hands the envelopes back, as a
- * handset does. WordPress sees the text because somebody typed it here, and it isn't
+ * <b>Sealed here, and kept nowhere.</b> A send works out here who the message reaches,
+ * asks Firebase for their devices, seals one envelope to each, and hands the envelopes
+ * back, as a handset does. Firebase is told member ids, never an address. WordPress sees the text because somebody typed it here, and it isn't
  * stored. Only its subject stays, in the audit trail.
  *
  * <b>Members are named by id, as the app names them.</b> `member_ids` takes the opaque
@@ -47,8 +46,8 @@ use function add_action;
  * `member_emails` is still accepted for callers that already hold them.
  *
  * <b>Everyone has to be asked for.</b> The audience is built from what was validated,
- * and `everyone` is only ever set when nobody was named. Names that turn out to be
- * nobody can't become a broadcast, because the far side refuses an empty audience.
+ * and is everyone only when nobody was named. Names that turn out to be nobody can't
+ * become a broadcast, because an audience that reaches nobody is refused here.
  *
  * The author is a typed argument rather than an input key on purpose.
  * The input array is what other plugins hand in, and a key there would
@@ -73,7 +72,6 @@ final class MessageApi
         private readonly MessageDelivery $delivery,
         private readonly MessageSealer $sealer,
         private readonly RecipientResolver $resolver,
-        private readonly MemberRepository $members,
         private readonly AuditLogger $auditLogger,
     ) {
     }
@@ -113,8 +111,13 @@ final class MessageApi
             $senderMemberId = $author->getId();
         }
 
+        $audience = $this->resolver->audienceOf($request, $author?->getPersonalEmail() ?? '');
+        if ($audience instanceof WP_Error) {
+            return $audience;
+        }
+
         try {
-            [$id, $reached] = $this->deliver($request, $senderMemberId, $senderName);
+            [$id, $reached] = $this->deliver($request, $audience, $senderMemberId, $senderName);
         } catch (FirebaseUnavailable $e) {
             return $e->refusal !== ''
                 ? new WP_Error($e->reason !== '' ? $e->reason : 'fellowship_refused', $e->refusal, ['status' => 400])
@@ -165,9 +168,13 @@ final class MessageApi
      *
      * @throws FirebaseUnavailable When Firebase couldn't be asked, or refused.
      */
-    private function deliver(MessageRequest $request, int $senderMemberId, string $senderName): array
+    private function deliver(MessageRequest $request, ResolvedAudience $reach, int $senderMemberId, string $senderName): array
     {
-        $audience = $this->audienceOf($request, $senderMemberId);
+        $audience = [
+            'senderMemberId' => $senderMemberId,
+            'memberIds'      => $reach->memberIds,
+            'audience'       => $reach->kind,
+        ];
 
         for ($attempt = 1;; $attempt++) {
             $resolved = $this->delivery->resolve($audience);
@@ -187,39 +194,6 @@ final class MessageApi
                 }
             }
         }
-    }
-
-    /** @return array<string, mixed> What {@see MessageDelivery} takes. */
-    private function audienceOf(MessageRequest $request, int $senderMemberId): array
-    {
-        $audience = ['senderMemberId' => $senderMemberId];
-
-        if ($request->audienceType === Message::AUDIENCE_ALL) {
-            return $audience + ['everyone' => true];
-        }
-
-        $memberIds = [];
-        foreach ($request->memberEmails as $email) {
-            $member = $this->members->findByEmail($email);
-            if ($member !== null) {
-                $memberIds[] = $member->getId();
-            }
-        }
-
-        if ($memberIds !== []) {
-            $audience['memberIds'] = $memberIds;
-        }
-
-        $committees = array_values(array_diff($request->committees, [MessageRequest::ALL_GSRS]));
-        if ($committees !== []) {
-            $audience['committees'] = $committees;
-        }
-
-        if ($request->includesAllGsrs()) {
-            $audience['gsrs'] = true;
-        }
-
-        return $audience;
     }
 
     /**

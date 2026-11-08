@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, test } from 'vitest';
-import { enrol, removeDevice, replaceKey, requireLiveDevice, revokeDevice, signOut, takeOverDevice } from '../src/devices';
+import type { Caller, Deps } from '../src/deps';
+import * as devices from '../src/devices';
+import { removeDevice, requireLiveDevice, revokeDevice, signOut } from '../src/devices';
 import {
   auth,
   db,
@@ -10,10 +12,22 @@ import {
   passwordCaller,
   reasonOf,
   resetEmulators,
+  sign,
   userExists,
+  withMember,
 } from './support';
 
 beforeEach(resetEmulators);
+
+type Data = Record<string, unknown>;
+
+// Each with what Fellowship's /attest/member would have answered the phone.
+const enrol = (deps: Deps, caller: Caller | undefined, data: Data) =>
+  devices.enrol(deps, caller, withMember(deps, caller, data));
+const replaceKey = (deps: Deps, caller: Caller | undefined, data: Data) =>
+  devices.replaceKey(deps, caller, withMember(deps, caller, data));
+const takeOverDevice = (deps: Deps, caller: Caller | undefined, data: Data) =>
+  devices.takeOverDevice(deps, caller, withMember(deps, caller, data));
 
 async function enrolled(email = 'dave@example.org', publicKey = newPublicKey()) {
   const { deps } = fake();
@@ -60,13 +74,40 @@ describe('enrolling', () => {
     expect((await auth.getUser(deviceId)).email).toBeUndefined();
   });
 
-  test('somebody who is not a member is refused and nothing is created', async () => {
+  test('somebody Fellowship would not vouch for is refused and nothing is created', async () => {
     const { deps } = fake();
     const caller = await googleCaller('stranger@example.org');
 
     expect(await reasonOf(enrol(deps, caller, { publicKey: newPublicKey(), platform: 'android' })))
-      .toBe('fellowship_not_a_member');
+      .toBe('fellowship_bad_attestation');
     expect((await db.collection('devices').get()).size).toBe(0);
+  });
+
+  test('a statement for another sign-in is refused', async () => {
+    const { deps } = fake();
+    const caller = await googleCaller();
+    const attestation = sign({ kind: 'member', sub: 'google_someone_else', memberId: 7 });
+
+    expect(await reasonOf(enrol(deps, caller, { publicKey: newPublicKey(), platform: 'android', attestation })))
+      .toBe('fellowship_bad_attestation');
+  });
+
+  test('a statement about the wrong member for a password sign-in is refused', async () => {
+    const { deps } = fake();
+    const caller = await passwordCaller(8);
+    const attestation = sign({ kind: 'member', sub: caller.uid, memberId: 7 });
+
+    expect(await reasonOf(enrol(deps, caller, { publicKey: newPublicKey(), platform: 'android', attestation })))
+      .toBe('fellowship_bad_id_token');
+  });
+
+  test('a statement about an audience is no use for enrolling', async () => {
+    const { deps } = fake();
+    const caller = await googleCaller();
+    const attestation = sign({ kind: 'audience', sub: caller.uid, senderMemberId: 7, memberIds: [8], audience: 'members' });
+
+    expect(await reasonOf(enrol(deps, caller, { publicKey: newPublicKey(), platform: 'android', attestation })))
+      .toBe('fellowship_bad_attestation');
   });
 
   test.each([

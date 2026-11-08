@@ -68,7 +68,7 @@ test('a message to the whole fellowship is sent from here', function () {
 
     expect(composeSendPage()->sendFromRequest())->toBe('sent');
     expect($this->delivery->delivered)->toHaveCount(1);
-    expect($this->delivery->resolved[0]['everyone'])->toBeTrue();
+    expect($this->delivery->resolved[0]['audience'])->toBe('everyone');
 });
 
 test('sending is audited', function () {
@@ -209,7 +209,8 @@ test('a committee is sent to', function () {
     $_POST['body'] = 'Attached.';
 
     expect(composeSendPage()->sendFromRequest())->toBe('sent');
-    expect($this->delivery->resolved[0]['committees'])->toBe(['steering']);
+    expect($this->delivery->resolved[0]['memberIds'])->toBe([7]);
+    expect($this->delivery->resolved[0]['audience'])->toBe('part');
 });
 
 test('a refusal from Firebase reaches the screen in its own words', function () {
@@ -332,7 +333,6 @@ function composeSendPage(): ComposePage
             test()->delivery,
             new MessageSealer(),
             new RecipientResolver(test()->members, test()->committees, $gate),
-            test()->members,
             test()->audit,
         ),
         test()->committees,

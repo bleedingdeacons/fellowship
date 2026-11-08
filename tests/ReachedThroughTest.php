@@ -197,7 +197,6 @@ test('a fault while sending is an error rather than a fatal', function () {
         },
         new MessageSealer(),
         new RecipientResolver($members, new InMemoryCommitteeRepository(), new MemberGate($members)),
-        $members,
         new SpyAuditLogger(),
     );
 
@@ -424,7 +423,6 @@ function reachedThroughApi(): MessageApi
         test()->delivery,
         new MessageSealer(),
         new RecipientResolver($members, new InMemoryCommitteeRepository(), new MemberGate($members)),
-        $members,
         test()->audit,
     );
 }

@@ -431,7 +431,6 @@ function adminBranchesComposePage(array $committees = []): ComposePage
             new RecordingDelivery(),
             new MessageSealer(),
             new RecipientResolver(test()->members, new InMemoryCommitteeRepository($committees), $gate),
-            test()->members,
             test()->audit,
         ),
         new InMemoryCommitteeRepository($committees),

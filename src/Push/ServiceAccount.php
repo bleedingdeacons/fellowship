@@ -31,6 +31,7 @@ final class ServiceAccount
         public readonly string $clientEmail,
         public readonly string $privateKey,
         public readonly string $tokenUri,
+        public readonly string $privateKeyId = '',
     ) {
     }
 
@@ -54,7 +55,13 @@ final class ServiceAccount
             return null;
         }
 
-        return new self($projectId, $clientEmail, $privateKey, self::tokenUri($data));
+        return new self(
+            $projectId,
+            $clientEmail,
+            $privateKey,
+            self::tokenUri($data),
+            self::string($data, 'private_key_id'),
+        );
     }
 
     public function sendEndpoint(): string

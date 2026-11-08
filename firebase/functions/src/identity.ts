@@ -3,22 +3,24 @@ import * as logger from 'firebase-functions/logger';
 import { HttpsError } from 'firebase-functions/v2/https';
 import { CLOCK_SKEW_SECONDS, MAX_AUTH_AGE_SECONDS } from './config';
 import { Caller, Deps, nowSeconds } from './deps';
-import type { MemberQuery } from './fellowship';
 
 /**
  * Proving who a member is, at enrolment and when replacing or taking over a key.
  *
- * Google and Apple prove an address, which Fellowship turns into a member. A
- * Unity password arrives as a custom token Fellowship already minted, carrying
- * the member id. Nothing else counts: Firebase also mints anonymous tokens and
- * device tokens, and neither proves a person.
+ * Google and Apple prove an address, and a Unity password arrives as a custom token
+ * Fellowship already minted. Nothing else counts: Firebase also mints anonymous
+ * tokens and device tokens, and neither proves a person.
+ *
+ * Which member it is comes from Fellowship, signed, in `data.attestation`, for this
+ * sign-in's uid. Fellowship refuses anybody who isn't a member before signing, so a
+ * phone that has no statement has been told why already.
  */
 
 const SIGN_IN_PROVIDERS_WITH_ADDRESS = ['google.com', 'apple.com'];
 
 /** Which member this sign-in proves, and it can't be used again. Refuses anything stale, used or unknown. */
-export async function proveMember(deps: Deps, caller: Caller | undefined): Promise<number> {
-  const memberId = await identifyMember(deps, caller);
+export async function proveMember(deps: Deps, caller: Caller | undefined, attestation: unknown): Promise<number> {
+  const memberId = await identifyMember(deps, caller, attestation);
 
   await spendSignIn(deps, caller);
 
@@ -30,7 +32,7 @@ export async function proveMember(deps: Deps, caller: Caller | undefined): Promi
  * refuse for a reason of its own and leave the sign-in good for something else.
  * That caller must call spendSignIn before it changes anything.
  */
-export async function identifyMember(deps: Deps, caller: Caller | undefined): Promise<number> {
+export async function identifyMember(deps: Deps, caller: Caller | undefined, attestation: unknown): Promise<number> {
   if (caller === undefined) {
     throw new HttpsError('unauthenticated', 'Sign in first.', { reason: 'fellowship_unauthenticated' });
   }
@@ -40,14 +42,16 @@ export async function identifyMember(deps: Deps, caller: Caller | undefined): Pr
     throw badToken();
   }
 
-  const answer = await deps.fellowship.member(memberQuery(caller));
-  if (!answer.admitted) {
-    throw new HttpsError('permission-denied', 'That address does not match a member record.', {
-      reason: 'fellowship_not_a_member',
-    });
+  requirePerson(caller);
+
+  const { memberId } = await deps.attestations.member(attestation, caller.uid);
+
+  // A password sign-in already names its member, and Fellowship can't have meant another.
+  if (caller.token.identity === 'password' && caller.token.memberId !== memberId) {
+    throw badToken();
   }
 
-  return answer.memberId;
+  return memberId;
 }
 
 /**
@@ -69,7 +73,8 @@ export async function discardIdentity(deps: Deps, caller: Caller | undefined): P
   }
 }
 
-function memberQuery(caller: Caller): MemberQuery {
+/** Fellowship checks this too. Checked again so a device can never pass as a person. */
+function requirePerson(caller: Caller): void {
   const { token } = caller;
   const provider = token.firebase?.sign_in_provider;
 
@@ -78,11 +83,11 @@ function memberQuery(caller: Caller): MemberQuery {
       throw badToken();
     }
 
-    return { email: token.email.toLowerCase() };
+    return;
   }
 
   if (provider === 'custom' && token.identity === 'password' && Number.isInteger(token.memberId)) {
-    return { memberId: token.memberId as number };
+    return;
   }
 
   throw badToken();

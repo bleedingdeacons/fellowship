@@ -1,13 +1,13 @@
 import type { Auth, DecodedIdToken } from 'firebase-admin/auth';
 import type { Firestore } from 'firebase-admin/firestore';
 import type { Message } from 'firebase-admin/messaging';
-import type { Fellowship } from './fellowship';
+import type { Attestations } from './attestation';
 
 /** What the handlers reach for, passed in so tests can run on the emulators. */
 export interface Deps {
   db: Firestore;
   auth: Auth;
-  fellowship: Fellowship;
+  attestations: Attestations;
   push: (message: Message) => Promise<string>;
   now: () => number;
 }
