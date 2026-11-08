@@ -179,7 +179,7 @@ export async function googleCaller(email = 'dave@example.org', claims: Record<st
 }
 
 /** Somebody who has just signed in with the token Fellowship mints for a Unity password. */
-export async function passwordCaller(memberId: number): Promise<Caller> {
+export async function unityCaller(memberId: number): Promise<Caller> {
   const uid = `pw_${memberId}_${++identities}`;
   await auth.createUser({ uid });
 

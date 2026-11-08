@@ -14,7 +14,7 @@ import {
   fake,
   googleCaller,
   newPublicKey,
-  passwordCaller,
+  unityCaller,
   reasonOf,
   resetEmulators,
   sign,
@@ -33,7 +33,7 @@ const sendMessage = (deps: Deps, caller: Caller | undefined, data: Data) =>
   messaging.sendMessage(deps, caller, withAudience(deps, caller, data));
 
 async function deviceFor(deps: Deps, memberId: number, pushToken?: string): Promise<string> {
-  const caller = await passwordCaller(memberId);
+  const caller = await unityCaller(memberId);
   const { deviceId } = await enrol(deps, caller, withMember(deps, caller, {
     publicKey: newPublicKey(),
     platform: 'android',

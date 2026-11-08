@@ -9,7 +9,7 @@ import {
   fake,
   googleCaller,
   newPublicKey,
-  passwordCaller,
+  unityCaller,
   reasonOf,
   resetEmulators,
   sign,
@@ -54,7 +54,7 @@ describe('enrolling', () => {
 
   test('a member signed in with a Unity password gets one too', async () => {
     const { deps } = fake();
-    const result = await enrol(deps, await passwordCaller(8), { publicKey: newPublicKey(), platform: 'ios' });
+    const result = await enrol(deps, await unityCaller(8), { publicKey: newPublicKey(), platform: 'ios' });
 
     expect(result.memberId).toBe(8);
   });
@@ -94,7 +94,7 @@ describe('enrolling', () => {
 
   test('a statement about the wrong member for a password sign-in is refused', async () => {
     const { deps } = fake();
-    const caller = await passwordCaller(8);
+    const caller = await unityCaller(8);
     const attestation = sign({ kind: 'member', sub: caller.uid, memberId: 7 });
 
     expect(await reasonOf(enrol(deps, caller, { publicKey: newPublicKey(), platform: 'android', attestation })))
