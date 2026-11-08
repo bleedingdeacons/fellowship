@@ -2,20 +2,43 @@ import { Timestamp } from 'firebase-admin/firestore';
 import { beforeEach, describe, expect, test } from 'vitest';
 import { adminRemove, adminResolve, adminRevoke, adminRevokeMember, adminSend } from '../src/admin';
 import { countReceipt, pushInboxEntry, sweep } from '../src/background';
-import type { Deps } from '../src/deps';
+import type { Caller, Deps } from '../src/deps';
 import { enrol } from '../src/devices';
 import { overBudget } from '../src/killSwitch';
-import { newMessageId, resolveAudience, sendMessage } from '../src/messaging';
-import { auth, db, deviceCaller, fake, googleCaller, newPublicKey, passwordCaller, reasonOf, resetEmulators } from './support';
+import * as messaging from '../src/messaging';
+import { newMessageId } from '../src/messaging';
+import {
+  auth,
+  db,
+  deviceCaller,
+  fake,
+  googleCaller,
+  newPublicKey,
+  unityCaller,
+  reasonOf,
+  resetEmulators,
+  sign,
+  withAudience,
+  withMember,
+} from './support';
 
 beforeEach(resetEmulators);
 
+type Data = Record<string, unknown>;
+
+// Each with what Fellowship's /attest/audience would have answered the phone.
+const resolveAudience = (deps: Deps, caller: Caller | undefined, data: Data) =>
+  messaging.resolveAudience(deps, caller, withAudience(deps, caller, data));
+const sendMessage = (deps: Deps, caller: Caller | undefined, data: Data) =>
+  messaging.sendMessage(deps, caller, withAudience(deps, caller, data));
+
 async function deviceFor(deps: Deps, memberId: number, pushToken?: string): Promise<string> {
-  const { deviceId } = await enrol(deps, await passwordCaller(memberId), {
+  const caller = await unityCaller(memberId);
+  const { deviceId } = await enrol(deps, caller, withMember(deps, caller, {
     publicKey: newPublicKey(),
     platform: 'android',
     pushToken,
-  });
+  }));
 
   return deviceId;
 }
@@ -60,20 +83,55 @@ describe('working out who a message reaches', () => {
     expect(answer.devices.map((device) => device.deviceId).sort()).toEqual([phone, tablet].sort());
   });
 
-  test('a phone always asks as a member, whatever it sends', async () => {
-    const { deps, audiences } = fake();
+  test('only what Fellowship signed counts, whatever else a phone sends', async () => {
+    const { deps } = fake();
     const sender = await deviceFor(deps, 7);
+    await deviceFor(deps, 8);
+    await deviceFor(deps, 10);
+    const attestation = sign({ kind: 'audience', sub: sender, senderMemberId: 7, memberIds: [8], audience: 'members' });
 
-    await resolveAudience(deps, deviceCaller(sender, 7), {
-      memberIds: [8],
-      origin: 'admin',
+    const answer = await resolveAudience(deps, deviceCaller(sender, 7), {
+      attestation,
+      memberIds: [8, 10],
       everyone: true,
       senderMemberId: 8,
     });
 
-    expect(audiences[0].origin).toBe('member');
-    expect(audiences[0].senderMemberId).toBe(7);
-    expect(audiences[0].everyone).toBeUndefined();
+    expect(answer.members).toBe(1);
+    expect(answer.devices.map((device) => device.memberId)).toEqual([8]);
+  });
+
+  test('a phone with no statement, or a forged one, is refused', async () => {
+    const { deps } = fake();
+    const sender = await deviceFor(deps, 7);
+    const forged = sign({ kind: 'audience', sub: sender, senderMemberId: 7, memberIds: [8], audience: 'members' }, { key: 'forged' });
+
+    expect(await reasonOf(messaging.resolveAudience(deps, deviceCaller(sender, 7), { memberIds: [8] })))
+      .toBe('fellowship_bad_attestation');
+    expect(await reasonOf(resolveAudience(deps, deviceCaller(sender, 7), { attestation: forged })))
+      .toBe('fellowship_bad_attestation');
+  });
+
+  test('a statement signed for another device, or another member, is refused', async () => {
+    const { deps } = fake();
+    const sender = await deviceFor(deps, 7);
+    const other = await deviceFor(deps, 10);
+    const forOther = sign({ kind: 'audience', sub: other, senderMemberId: 10, memberIds: [8], audience: 'members' });
+    const asSomebodyElse = sign({ kind: 'audience', sub: sender, senderMemberId: 10, memberIds: [8], audience: 'members' });
+
+    expect(await reasonOf(resolveAudience(deps, deviceCaller(sender, 7), { attestation: forOther })))
+      .toBe('fellowship_bad_attestation');
+    expect(await reasonOf(resolveAudience(deps, deviceCaller(sender, 7), { attestation: asSomebodyElse })))
+      .toBe('fellowship_bad_attestation');
+  });
+
+  test('a refused send spends nothing from the allowance', async () => {
+    const { deps } = fake();
+    const sender = await deviceFor(deps, 7);
+
+    await reasonOf(messaging.sendMessage(deps, deviceCaller(sender, 7), { id: newMessageId(Date.now()), envelopes: [] }));
+
+    expect((await db.collection('rateLimits').doc(sender).get()).exists).toBe(false);
   });
 
   test('more members than one query can hold are all found', async () => {
@@ -258,7 +316,7 @@ describe('sending', () => {
     const { deps } = fake();
     const sender = await deviceFor(deps, 7);
     const google = await googleCaller('sue@example.org', {});
-    const { deviceId: sue } = await enrol(deps, google, { publicKey: newPublicKey(), platform: 'android', label: 'Pixel' });
+    const { deviceId: sue } = await enrol(deps, google, withMember(deps, google, { publicKey: newPublicKey(), platform: 'android', label: 'Pixel' }));
 
     await sendMessage(deps, deviceCaller(sender, 7), { id: newMessageId(Date.now()),
       memberIds: [8],
@@ -284,18 +342,31 @@ describe('sending', () => {
 
 describe('the admin screens', () => {
   test('Compose can resolve and send to everyone', async () => {
-    const { deps, audiences } = fake();
+    const { deps } = fake();
     const dave = await deviceFor(deps, 7);
     const sue = await deviceFor(deps, 8);
+    const everyone = { memberIds: [7, 8, 10], audience: 'everyone' };
 
-    const answer = await adminResolve(deps, { everyone: true });
-    expect(audiences[0].origin).toBe('admin');
+    const answer = await adminResolve(deps, everyone);
+    expect(answer.members).toBe(3);
     expect(answer.reachable).toBe(2);
 
-    const { id } = await adminSend(deps, { id: newMessageId(Date.now()), everyone: true, envelopes: [envelope(dave), envelope(sue)] });
+    const { id } = await adminSend(deps, { ...everyone, id: newMessageId(Date.now()), envelopes: [envelope(dave), envelope(sue)] });
     const message = await db.collection('messages').doc(String(id)).get();
     expect(message.get('senderMemberId')).toBe(0);
     expect(message.get('audience')).toBe('everyone');
+  });
+
+  test.each([
+    ['no members', { audience: 'members' }, 'fellowship_no_recipients'],
+    ['an empty list', { memberIds: [], audience: 'members' }, 'fellowship_no_recipients'],
+    ['ids that are not ids', { memberIds: ['7'], audience: 'members' }, 'fellowship_no_recipients'],
+    ['no kind of audience', { memberIds: [7] }, 'fellowship_no_audience'],
+    ['everyone asked for the old way', { everyone: true }, 'fellowship_no_recipients'],
+  ])('Compose with %s is refused', async (_name, data, reason) => {
+    const { deps } = fake();
+
+    expect(await reasonOf(adminResolve(deps, data))).toBe(reason);
   });
 
   test('revoking a member reaches all their live devices and keeps the rows', async () => {

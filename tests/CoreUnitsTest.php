@@ -255,7 +255,6 @@ function coreUnitsComposePage(): ComposePage
             new RecordingDelivery(),
             new MessageSealer(),
             new RecipientResolver($members, new InMemoryCommitteeRepository(), $gate),
-            $members,
             new SpyAuditLogger(),
         ),
         new InMemoryCommitteeRepository(),

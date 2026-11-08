@@ -1,14 +1,17 @@
 # Link's back end on Firebase
 
 Firestore rules and Cloud Functions for project `fellowship-510917`. It lives in
-Fellowship's repo because the two have to agree: the Functions ask Fellowship's
-`/service/*` routes about members, and Fellowship's admin screens call the
+Fellowship's repo because the two have to agree: the Functions check what
+Fellowship's `/attest/*` routes sign, and Fellowship's admin screens call the
 `admin*` functions. None of this is in the plugin zip.
 
 ## What it holds, and what it doesn't
 
 **The member list stays in WordPress.** Nothing about a member is copied here.
-Functions ask Fellowship when they need an answer, and the answers are opaque ids.
+Fellowship decides who is a member and who a message reaches, and signs its answer
+as opaque ids. The phone fetches it and passes it on as `data.attestation`, and the
+Functions check the signature against the service account's public keys at Google.
+They never call the site: its host challenges Google Cloud's shared addresses.
 
 **Messages are end-to-end encrypted.** A phone asks who a message reaches, seals
 one envelope per device, and hands them back. The server addresses the message
@@ -62,12 +65,10 @@ npx firebase-tools@15 deploy --only firestore,functions --project fellowship-510
 `--force` also keeps the cleanup policy on old container images, so they don't
 build up storage charges.
 
-`functions/.env.fellowship-510917` holds `FELLOWSHIP_SERVICE_URL`, the full address
-of Fellowship's `/wp-json/fellowship/v1/service` on `/amber`. It has to match what
-Fellowship's `rest_url()` produces exactly, because it's also the token's audience.
-
-The Functions run as the service account Fellowship holds, because that's the
-only caller its service routes accept. See `SERVICE_ACCOUNT` in `src/config.ts`.
+The Functions run as the service account Fellowship holds, and only a statement
+signed with that account's key is believed. See `SERVICE_ACCOUNT` and
+`ATTESTATION_AUDIENCE` in `src/config.ts`. Fellowship needs the account's JSON with
+its `private_key_id`, which names the key Google publishes.
 
 ### What a new project needs first
 
@@ -111,34 +112,23 @@ bad member list shouldn't be able to cut off the fellowship.
 ### Checking it
 
 A phone function with no token should answer 401 with `fellowship_unauthenticated`,
-and an admin function with no token should answer a bare 403. `adminResolve`, called
-as the service account with `{"everyone": true}`, proves the whole path to
-Fellowship: the answer's `members` count comes from the real site, through a
-Google-signed token.
-
-If something in front of the site answers a success with its own page, the Functions
-refuse with `fellowship_unreadable_answer` and log the status, address and the start
-of the page as `Fellowship answered something that could not be read`.
+and an admin function with no token should answer a bare 403. A phone function with
+a token but no statement from Fellowship answers `fellowship_bad_attestation`.
+`adminResolve`, called as the service account with `{"memberIds": [<id>],
+"audience": "members"}`, lists that member's live devices.
 
 ### SiteGround's anti-bot challenge
 
 The site's host challenges requests it can't identify, with a `202` page redirecting
-to `/.well-known/sgcaptcha/`, which a server can't complete. So the Functions send
-what every other client of the site sends: a `User-Agent` in the suite's shape
-(what it is and its version, a contact and the deployment) and `Accept: application/json`.
-The version is the plugin's, stamped beside the Functions at deploy by
-`scripts/stamp-version.cjs`.
+to `/.well-known/sgcaptcha/`, which a server can't complete. On 2026-11-07 it named
+its reason as `y=ipr:<address>`: the reputation of the Google address a Function's
+call came from, which no header changes. Identical calls got through from some
+addresses and not others, and SiteGround offers no exemption for Google's changing
+ones.
 
-**The headers don't always get through.** On 2026-11-07 the challenge page named its
-reason as `y=ipr:<address>`, the reputation of the Google address the call came from,
-which no header changes. One call from a phone was challenged and the next one got
-through. If sends or sign-ins keep failing with `fellowship_unreadable_answer`, the
-fix is SiteGround exempting `/wp-json/fellowship/v1/service/*` from its anti-bot
-check, or the Functions leaving from one fixed address.
-
-Without them the Functions were challenged on every call, while the same request
-from a PC got through, so **a check from outside Google doesn't prove this path.**
-Use `adminResolve` as above.
+**So nothing here calls the site.** The phone, which reaches it, fetches Fellowship's
+signed answer and hands it over. Fellowship still calls the admin Functions, which
+is Google's side and isn't challenged.
 
 ### Deploying everything at once
 

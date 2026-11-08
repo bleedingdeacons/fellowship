@@ -68,16 +68,16 @@ beforeEach(function () {
 
 // ── Who a send is for ────────────────────────────────────────────
 
-test('everyone is asked for only when nobody was named', function () {
+test('everyone is resolved here, and only when nobody was named', function () {
     adminOnFirebaseApi()->send(['subject' => 'S', 'body' => 'B']);
 
-    expect($this->delivery->resolved[0])->toBe(['senderMemberId' => 0, 'everyone' => true]);
+    expect($this->delivery->resolved[0])->toBe(['senderMemberId' => 0, 'memberIds' => [7, 8], 'audience' => 'everyone']);
 });
 
 test('named members go by id, and the far side is never told an address', function () {
     adminOnFirebaseApi()->send(['subject' => 'S', 'body' => 'B', 'member_ids' => [8]]);
 
-    expect($this->delivery->resolved[0])->toBe(['senderMemberId' => 0, 'memberIds' => [8]]);
+    expect($this->delivery->resolved[0])->toBe(['senderMemberId' => 0, 'memberIds' => [8], 'audience' => 'members']);
 });
 
 test('addresses a caller already holds are turned into ids', function () {
@@ -87,21 +87,37 @@ test('addresses a caller already holds are turned into ids', function () {
 });
 
 test('an address nobody holds can never become everyone', function () {
-    // The most dangerous way this could go wrong. The audience names nobody, and the
-    // far side refuses it.
+    // The most dangerous way this could go wrong. The audience reaches nobody, so
+    // Firebase is never asked at all.
     $result = adminOnFirebaseApi()->send(['subject' => 'S', 'body' => 'B', 'member_emails' => ['stranger@example.org']]);
 
-    expect($this->delivery->resolved[0])->not->toHaveKey('everyone');
     expect($result)->toBeInstanceOf(WP_Error::class);
-    expect($result->get_error_code())->toBe('fellowship_no_audience');
+    expect($result->get_error_code())->toBe('fellowship_no_recipients');
+    expect($this->delivery->resolved)->toBe([]);
     expect($this->delivery->delivered)->toBe([]);
 });
 
-test('committees and the GSRs travel separately', function () {
-    adminOnFirebaseApi()->send(['subject' => 'S', 'body' => 'B', 'committees' => ['steering'], 'gsrs' => true]);
+test('a committee is resolved here, and only the kind of audience goes on', function () {
+    $committees = new InMemoryCommitteeRepository(
+        [new CommitteeStub(id: 2, slug: 'steering', name: 'Steering')],
+        ['steering' => [8]],
+    );
 
-    expect($this->delivery->resolved[0]['committees'])->toBe(['steering']);
-    expect($this->delivery->resolved[0]['gsrs'])->toBeTrue();
+    adminOnFirebaseApi($committees)->send(['subject' => 'S', 'body' => 'B', 'committees' => ['steering']]);
+
+    expect($this->delivery->resolved[0])->toBe(['senderMemberId' => 0, 'memberIds' => [8], 'audience' => 'part']);
+});
+
+test('a committee and a name together are mixed', function () {
+    $committees = new InMemoryCommitteeRepository(
+        [new CommitteeStub(id: 2, slug: 'steering', name: 'Steering')],
+        ['steering' => [8]],
+    );
+
+    adminOnFirebaseApi($committees)->send(['subject' => 'S', 'body' => 'B', 'committees' => ['steering'], 'member_ids' => [7]]);
+
+    expect($this->delivery->resolved[0]['memberIds'])->toBe([7, 8]);
+    expect($this->delivery->resolved[0]['audience'])->toBe('mixed');
 });
 
 test('the author is excluded and credited by id', function () {
@@ -110,6 +126,7 @@ test('the author is excluded and credited by id', function () {
     adminOnFirebaseApi()->send(['subject' => 'S', 'body' => 'B'], $author);
 
     expect($this->delivery->resolved[0]['senderMemberId'])->toBe(7);
+    expect($this->delivery->resolved[0]['memberIds'])->toBe([8]);
     expect($this->delivery->delivered[0]['audience']['senderMemberId'])->toBe(7);
 });
 
@@ -250,7 +267,10 @@ test('the audit trail records the subject and how many it reached, never the bod
 });
 
 test('a committee\'s name stays in WordPress\'s own audit trail', function () {
-    $committees = new InMemoryCommitteeRepository([new CommitteeStub(id: 2, slug: 'steering', name: 'Steering')]);
+    $committees = new InMemoryCommitteeRepository(
+        [new CommitteeStub(id: 2, slug: 'steering', name: 'Steering')],
+        ['steering' => [8]],
+    );
 
     adminOnFirebaseApi($committees)->send(['subject' => 'S', 'body' => 'B', 'committee' => 'steering']);
 
@@ -436,7 +456,6 @@ function adminOnFirebaseApi(?InMemoryCommitteeRepository $committees = null): Me
         test()->delivery,
         new MessageSealer(),
         new RecipientResolver(test()->members, $committees ?? new InMemoryCommitteeRepository(), new MemberGate(test()->members)),
-        test()->members,
         test()->audit,
     );
 }

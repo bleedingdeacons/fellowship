@@ -26,7 +26,7 @@ export interface LiveDevice {
 type Data = Record<string, unknown>;
 
 export async function enrol(deps: Deps, caller: Caller | undefined, data: Data) {
-  const memberId = await proveMember(deps, caller);
+  const memberId = await proveMember(deps, caller, data.attestation);
 
   const publicKey = requirePublicKey(data.publicKey);
   const platform = requirePlatform(data.platform);
@@ -76,7 +76,7 @@ export async function enrol(deps: Deps, caller: Caller | undefined, data: Data) 
 }
 
 export async function replaceKey(deps: Deps, caller: Caller | undefined, data: Data) {
-  const memberId = await proveMember(deps, caller);
+  const memberId = await proveMember(deps, caller, data.attestation);
   const publicKey = requirePublicKey(data.publicKey);
   const ref = await membersLiveDevice(deps, data.deviceId, memberId);
 
@@ -96,7 +96,7 @@ export async function replaceKey(deps: Deps, caller: Caller | undefined, data: D
  * spent once every check has passed.
  */
 export async function takeOverDevice(deps: Deps, caller: Caller | undefined, data: Data) {
-  const memberId = await identifyMember(deps, caller);
+  const memberId = await identifyMember(deps, caller, data.attestation);
   const publicKey = requirePublicKey(data.publicKey);
   const moved: Data = {};
 

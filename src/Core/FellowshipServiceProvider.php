@@ -25,6 +25,7 @@ use Fellowship\Auth\LinkAudience;
 use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Devices\FirebaseDevices;
 use Fellowship\Firebase\AdminFunctions;
+use Fellowship\Firebase\AttestationSigner;
 use Fellowship\Firebase\FirestoreClient;
 use Fellowship\Firebase\FirestoreLinkDevices;
 use Fellowship\Firebase\FirestoreMessageLog;
@@ -36,7 +37,7 @@ use Guardian\Firebase\FirebaseDeviceTokenVerifier;
 use Unity\Auth\Interfaces\PasswordCredentialRepository;
 use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
-use Fellowship\Auth\ServiceCaller;
+use Fellowship\Auth\SignInTokens;
 use Fellowship\Auth\StateStore;
 use Guardian\Credentials\CredentialStore;
 use Guardian\Firebase\FirebaseIdTokenVerifier;
@@ -54,6 +55,7 @@ use Fellowship\Devices\MemberGate;
 use Fellowship\Devices\WpdbDeviceRepository;
 use Fellowship\Cli\DirectoryCli;
 use Fellowship\Directory\DirectoryPresenter;
+use Fellowship\Messaging\AudienceResolver;
 use Fellowship\Messaging\MessageApi;
 use Fellowship\Messaging\MessageDispatcher;
 use Fellowship\Messaging\MessageRepository;
@@ -68,7 +70,7 @@ use Fellowship\Rest\DeviceAuthController;
 use Fellowship\Rest\DirectoryController;
 use Fellowship\Rest\FirebaseIdentityController;
 use Fellowship\Rest\MessageController;
-use Fellowship\Rest\ServiceController;
+use Fellowship\Rest\AttestationController;
 use Psr\Container\ContainerInterface;
 use Scrutiny\Audit\Interfaces\AuditLogger;
 use Unity\Committees\Interfaces\CommitteeRepository;
@@ -238,7 +240,6 @@ final class FellowshipServiceProvider
             $c->get(AdminFunctions::class),
             $c->get(MessageSealer::class),
             $c->get(RecipientResolver::class),
-            $c->get(MemberRepository::class),
             $c->get(AuditLogger::class),
         ));
 
@@ -310,12 +311,19 @@ final class FellowshipServiceProvider
             );
         });
 
-        $container->register(ServiceCaller::class, function (ContainerInterface $c) {
+        // And it signs what the Functions are told about members, which a phone
+        // carries to them. See AttestationSigner on why the phone carries it.
+        $container->register(AttestationSigner::class, function (ContainerInterface $c) {
             $settings = $c->get(Settings::class);
-            return new ServiceCaller(
+            return new AttestationSigner(
+                static fn(): ?ServiceAccount => ServiceAccount::fromJson($settings->getFcmServiceAccount()),
+            );
+        });
+        $container->register(SignInTokens::class, function (ContainerInterface $c) {
+            $settings = $c->get(Settings::class);
+            return new SignInTokens(
                 $c->get(self::JWT_VERIFIER),
-                static fn(): string => ServiceAccount::fromJson($settings->getFcmServiceAccount())->clientEmail ?? '',
-                static fn(): string => rest_url(ServiceController::SERVICE_PATH),
+                static fn(): string => ServiceAccount::fromJson($settings->getFcmServiceAccount())->projectId ?? '',
             );
         });
 
@@ -408,12 +416,19 @@ final class FellowshipServiceProvider
             $c->get(Settings::class),
         ));
 
-        $container->register(ServiceController::class, fn(ContainerInterface $c) => new ServiceController(
-            $c->get(ServiceCaller::class),
-            $c->get(MemberRepository::class),
-            $c->get(MemberGate::class),
+        $container->register(AudienceResolver::class, fn(ContainerInterface $c) => new AudienceResolver(
             $c->get(RecipientResolver::class),
             $c->get(Settings::class),
+        ));
+
+        $container->register(AttestationController::class, fn(ContainerInterface $c) => new AttestationController(
+            $c->get(AttestationSigner::class),
+            $c->get(SignInTokens::class),
+            $c->get(FirebaseDevices::class),
+            $c->get(MemberRepository::class),
+            $c->get(MemberGate::class),
+            $c->get(AudienceResolver::class),
+            $c->get(RateLimiter::class),
             $c->get(AuditLogger::class),
         ));
 

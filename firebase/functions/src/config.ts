@@ -2,11 +2,17 @@
 export const REGION = 'europe-west2';
 
 /**
- * Who the Functions run as: the service account Fellowship holds. Fellowship's
- * service routes accept a token only from this address, and it is the only
- * caller allowed to invoke the admin functions.
+ * Who the Functions run as: the service account Fellowship holds. Fellowship signs
+ * what a phone carries here with its key, and it is the only caller allowed to
+ * invoke the admin functions.
  */
 export const SERVICE_ACCOUNT = 'firebase-adminsdk-fbsvc@fellowship-510917.iam.gserviceaccount.com';
+
+/** Who Fellowship signs a statement for. See AttestationSigner::audience(). */
+export const ATTESTATION_AUDIENCE = 'fellowship-functions:fellowship-510917';
+
+/** Fellowship signs for five minutes. Anything longer wasn't signed by it. */
+export const ATTESTATION_MAX_LIFETIME_SECONDS = 300;
 
 /**
  * Who the kill switch runs as. It holds Billing Account Administrator, the one

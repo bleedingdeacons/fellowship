@@ -12,6 +12,7 @@ use Fellowship\Devices\MemberGate;
 use Unity\Committees\Interfaces\CommitteeRepository;
 use Unity\Members\Interfaces\Member;
 use Unity\Members\Interfaces\MemberRepository;
+use WP_Error;
 
 /**
  * Turns an audience into the actual list of members a message goes to.
@@ -84,6 +85,33 @@ final class RecipientResolver
         }
 
         return array_values($resolved);
+    }
+
+    /**
+     * Who a request reaches, as sorted member ids, and the kind of audience it was.
+     *
+     * <b>Nobody is refused, never passed on.</b> An empty list must not reach a
+     * caller that could read it as everyone.
+     */
+    public function audienceOf(MessageRequest $request, string $senderEmail = ''): ResolvedAudience|WP_Error
+    {
+        $memberIds = array_map(
+            static fn(array $recipient): int => $recipient['member_id'],
+            $this->resolve($request, $senderEmail),
+        );
+
+        if ($memberIds === []) {
+            return self::noRecipients();
+        }
+
+        sort($memberIds);
+
+        return new ResolvedAudience($memberIds, ResolvedAudience::kindOf($request->audienceType));
+    }
+
+    public static function noRecipients(): WP_Error
+    {
+        return new WP_Error('fellowship_no_recipients', 'That message would not reach anybody.', ['status' => 400]);
     }
 
     /**

@@ -1,10 +1,11 @@
-import { generateKeyPairSync } from 'node:crypto';
+import { createSign, generateKeyPairSync } from 'node:crypto';
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { DecodedIdToken, getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { HttpsError } from 'firebase-functions/v2/https';
+import { verifiedAttestations } from '../src/attestation';
+import { ATTESTATION_AUDIENCE, SERVICE_ACCOUNT } from '../src/config';
 import { Caller, Deps } from '../src/deps';
-import type { AudienceQuery, Fellowship, MemberQuery } from '../src/fellowship';
 
 export const PROJECT = 'demo-fellowship';
 
@@ -33,59 +34,114 @@ export function newPublicKey(): string {
   return publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
 }
 
+/** Stands in for the service account's key, which only Fellowship and Google hold. */
+const signingKey = generateKeyPairSync('rsa', { modulusLength: 2048 });
+export const SIGNING_KID = 'test-key';
+
+/** The certificates Google publishes for the account, as the Functions fetch them. */
+export const certificates = async () => ({
+  [SIGNING_KID]: signingKey.publicKey.export({ format: 'pem', type: 'spki' }).toString(),
+});
+
+/** A statement signed as Fellowship signs one. Change anything with `claims`, or remove it with undefined. */
+export function sign(claims: Record<string, unknown>, options: { kid?: string; key?: 'genuine' | 'forged' } = {}): string {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = Object.fromEntries(
+    Object.entries({ iss: SERVICE_ACCOUNT, aud: ATTESTATION_AUDIENCE, iat: now, exp: now + 300, ...claims })
+      .filter(([, value]) => value !== undefined),
+  );
+
+  const head = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: options.kid ?? SIGNING_KID })).toString('base64url');
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const key = options.key === 'forged' ? generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey : signingKey.privateKey;
+  const signature = createSign('RSA-SHA256').update(`${head}.${body}`).sign(key).toString('base64url');
+
+  return `${head}.${body}.${signature}`;
+}
+
 export interface Fake {
   deps: Deps;
   pushes: Record<string, unknown>[];
-  audiences: AudienceQuery[];
 }
 
+interface StandIn {
+  addresses: Record<string, number>;
+  admitted: number[];
+}
+
+/** What each fake's Fellowship admits, for the statements it signs. */
+const standIns = new WeakMap<Deps, StandIn>();
+
 /**
- * Fellowship stood in for: `members` maps an address to a member id, and only
- * ids in `admitted` are let in. The audience is whatever a test names, with the
- * sender left out, as the real route does.
+ * Fellowship stood in for: `addresses` maps an address to a member id, and only
+ * ids in `admitted` are let in. It signs what the real routes would sign, with
+ * the sender left out of an audience, and nothing for somebody it refuses.
  */
 export function fake(options: { admitted?: number[]; pushError?: string } = {}): Fake {
-  const addresses: Record<string, number> = { 'dave@example.org': 7, 'sue@example.org': 8, 'pat@example.org': 10 };
-  const admitted = options.admitted ?? [7, 8, 10];
   const pushes: Record<string, unknown>[] = [];
-  const audiences: AudienceQuery[] = [];
 
-  const fellowship: Fellowship = {
-    async member(query: MemberQuery) {
-      const memberId = query.memberId ?? addresses[query.email ?? ''] ?? 0;
-
-      return { memberId, admitted: admitted.includes(memberId) };
-    },
-    async audience(query: AudienceQuery) {
-      audiences.push(query);
-
-      if (query.everyone === true) {
-        return admitted.filter((id) => id !== query.senderMemberId);
+  const deps: Deps = {
+    db,
+    auth,
+    attestations: verifiedAttestations(certificates, () => Date.now()),
+    push: async (message) => {
+      if (options.pushError !== undefined) {
+        throw Object.assign(new Error('push failed'), { code: options.pushError });
       }
 
-      return (query.memberIds ?? []).filter((id) => admitted.includes(id) && id !== query.senderMemberId);
+      pushes.push(message as unknown as Record<string, unknown>);
+
+      return 'sent';
     },
+    now: () => Date.now(),
   };
 
-  return {
-    pushes,
-    audiences,
-    deps: {
-      db,
-      auth,
-      fellowship,
-      push: async (message) => {
-        if (options.pushError !== undefined) {
-          throw Object.assign(new Error('push failed'), { code: options.pushError });
-        }
+  standIns.set(deps, {
+    addresses: { 'dave@example.org': 7, 'sue@example.org': 8, 'pat@example.org': 10 },
+    admitted: options.admitted ?? [7, 8, 10],
+  });
 
-        pushes.push(message as unknown as Record<string, unknown>);
+  return { pushes, deps };
+}
 
-        return 'sent';
-      },
-      now: () => Date.now(),
-    },
-  };
+/** `data` with what `/attest/member` would answer this caller, if anything. */
+export function withMember(deps: Deps, caller: Caller | undefined, data: Record<string, unknown>): Record<string, unknown> {
+  const standIn = standIns.get(deps);
+  if (caller === undefined || standIn === undefined || 'attestation' in data) {
+    return data;
+  }
+
+  const { token } = caller;
+  const memberId = typeof token.memberId === 'number'
+    ? token.memberId
+    : standIn.addresses[String(token.email ?? '').toLowerCase()] ?? 0;
+
+  if (!standIn.admitted.includes(memberId)) {
+    return data;
+  }
+
+  return { ...data, attestation: sign({ kind: 'member', sub: caller.uid, memberId }) };
+}
+
+/** `data` with what `/attest/audience` would answer this device, if anything. */
+export function withAudience(deps: Deps, caller: Caller | undefined, data: Record<string, unknown>): Record<string, unknown> {
+  const standIn = standIns.get(deps);
+  if (caller === undefined || standIn === undefined || 'attestation' in data) {
+    return data;
+  }
+
+  const senderMemberId = Number(caller.token.memberId);
+  const named = Array.isArray(data.memberIds) ? (data.memberIds as number[]) : [];
+  const part = (Array.isArray(data.committees) && data.committees.length > 0) || data.gsrs === true;
+  const memberIds = named.filter((id) => standIn.admitted.includes(id) && id !== senderMemberId);
+
+  if (memberIds.length === 0) {
+    return data;
+  }
+
+  const audience = part ? (named.length > 0 ? 'mixed' : 'part') : 'members';
+
+  return { ...data, attestation: sign({ kind: 'audience', sub: caller.uid, senderMemberId, memberIds, audience }) };
 }
 
 function token(uid: string, claims: Record<string, unknown>): DecodedIdToken {
@@ -123,7 +179,7 @@ export async function googleCaller(email = 'dave@example.org', claims: Record<st
 }
 
 /** Somebody who has just signed in with the token Fellowship mints for a Unity password. */
-export async function passwordCaller(memberId: number): Promise<Caller> {
+export async function unityCaller(memberId: number): Promise<Caller> {
   const uid = `pw_${memberId}_${++identities}`;
   await auth.createUser({ uid });
 

@@ -239,7 +239,6 @@ function adminNoticesApi(): MessageApi
         new RecordingDelivery(),
         new MessageSealer(),
         new RecipientResolver(test()->members, new InMemoryCommitteeRepository(), new MemberGate(test()->members)),
-        test()->members,
         test()->audit,
     );
 }

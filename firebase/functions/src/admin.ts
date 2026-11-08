@@ -1,14 +1,16 @@
 import { HttpsError } from 'firebase-functions/v2/https';
+import { isAudienceKind, requireMemberIds } from './attestation';
 import { Deps } from './deps';
 import { removeDevice, revokeDevice } from './devices';
-import type { AudienceQuery } from './fellowship';
-import { audienceInput, deliver, reachOf, summary } from './messaging';
+import { Audience, deliver, reachOf, summary } from './messaging';
 
 /**
  * What Fellowship's admin screens call. Only its service account can invoke
  * these, which Cloud Run enforces before any of this runs.
  *
- * Compose seals in PHP, so these never see a message either.
+ * Compose seals in PHP, so these never see a message either. Fellowship works out
+ * who it reaches, and sends the member ids and the kind of audience; with only
+ * Fellowship able to call, they are taken as given.
  */
 
 type Data = Record<string, unknown>;
@@ -49,7 +51,7 @@ export async function adminRevokeMember(deps: Deps, data: Data) {
 }
 
 export async function adminResolve(deps: Deps, data: Data) {
-  return summary(deps, await reachOf(deps, adminAudience(data)));
+  return summary(deps, await reachOf(deps, adminAudience(data).memberIds));
 }
 
 export async function adminSend(deps: Deps, data: Data) {
@@ -58,13 +60,18 @@ export async function adminSend(deps: Deps, data: Data) {
   return deliver(deps, adminAudience(data), senderMemberId, data.id, data.envelopes);
 }
 
-function adminAudience(data: Data): AudienceQuery {
-  return {
-    origin: 'admin',
-    senderMemberId: Number.isInteger(data.senderMemberId) ? (data.senderMemberId as number) : undefined,
-    everyone: data.everyone === true ? true : undefined,
-    ...audienceInput(data),
-  };
+function adminAudience(data: Data): Audience {
+  const memberIds = requireMemberIds(data.memberIds, () => new HttpsError(
+    'invalid-argument',
+    'That message would not reach anybody.',
+    { reason: 'fellowship_no_recipients' },
+  ));
+
+  if (!isAudienceKind(data.audience)) {
+    throw new HttpsError('invalid-argument', 'Choose who this message is for.', { reason: 'fellowship_no_audience' });
+  }
+
+  return { memberIds, kind: data.audience };
 }
 
 function requireDeviceId(value: unknown): string {

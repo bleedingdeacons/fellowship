@@ -266,20 +266,23 @@ Everything is under `fellowship/v1` and everything requires HTTPS.
 | `GET /messages/receipts` | device | `ids`: the member's own sent messages. Answers recipients, received and read counts for each; ids they did not send are left out. |
 | `GET /directory` | device, or a device's Firebase ID token | Address book. |
 
-Four more routes arrive ahead of the move to Firebase. Nothing calls them yet:
+Four more are for Link on Firebase:
 
 | Route | Auth | What |
 | --- | --- | --- |
 | `GET /backend` | none | Which back end Link should use here: `fellowship`, or `firebase` once a site is switched. |
 | `POST /auth/identity/password` | none | Check a Unity password and answer a five-minute Firebase custom token, uid `pw_<member id>`. Enrols nothing. |
-| `POST /service/member` | service | `email` or `member_id`: answers `member_id` and whether `MemberGate` admits them. |
-| `POST /service/audience` | service | `member_ids`, `committees`, `gsrs` or `everyone`, with `origin` and `sender_member_id`: answers `member_ids`, sender left out. |
+| `POST /attest/member` | a Firebase sign-in under five minutes old | Answers `attestation`: this sign-in is this member. For `enrol`, `replaceKey` and `takeOverDevice`. |
+| `POST /attest/audience` | a live device's Firebase ID token | `memberIds`, `committees` or `gsrs`: answers `attestation`, the member ids the message reaches, sender left out. For `resolveAudience` and `sendMessage`. |
 
-**The member list stays in WordPress**, so Link's Cloud Functions ask these
-instead of holding a copy. *Service* means a Google-signed OIDC token whose
-audience is this site's `/wp-json/fellowship/v1/service` and whose verified
-email is the service account under Settings, which the Functions run as. On
-Google's metadata server that needs `format=full`, or the token has no email.
+**The member list stays in WordPress**, so Link's Cloud Functions need its
+answers without holding a copy. They can't ask for them: SiteGround challenges
+calls from Google Cloud's shared addresses. So the phone asks here and carries
+the answer to them, as a JWT signed RS256 by the service account under
+Settings, `aud` `fellowship-functions:<project>`, five minutes long, and naming
+the sign-in or device it was issued to. The Functions check it against the
+account's public keys at Google and call nobody. Google and Apple sign-ins need
+a verified address. A password sign-in is the custom token above.
 
 Two sign-in flows meet at one exchange:
 
@@ -445,7 +448,7 @@ enrolment.
 
 Link's back end is moving to Firebase, while the member list stays here. The
 Firestore rules and Cloud Functions are in [`firebase/`](firebase/README.md),
-in this repo because they and the `/service/*` routes have to agree. They are
+in this repo because they and the `/attest/*` routes have to agree. They are
 not in the plugin zip.
 
 ## Version numbers

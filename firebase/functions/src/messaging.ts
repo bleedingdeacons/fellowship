@@ -2,17 +2,19 @@ import { randomInt } from 'node:crypto';
 import { FieldValue } from 'firebase-admin/firestore';
 import { HttpsError } from 'firebase-functions/v2/https';
 import { ENVELOPE_MAX_LENGTH, IN_QUERY_LIMIT, SEND_MAX, SEND_WINDOW_SECONDS } from './config';
+import type { AudienceKind } from './attestation';
 import { Caller, Deps, nowSeconds } from './deps';
-import { requireLiveDevice } from './devices';
-import type { AudienceQuery } from './fellowship';
+import { requireLiveDevice, type LiveDevice } from './devices';
 
 /**
  * Sending a message end to end encrypted.
  *
  * The phone asks who a message reaches, seals one envelope to each device, and
- * hands the envelopes back. The server still does the addressing: it works the
- * audience out again and refuses a set that does not match, so a client cannot
- * add a device or quietly leave one out. It never sees the message.
+ * hands the envelopes back. Who it reaches is Fellowship's answer, signed, which the
+ * phone fetched and passes in `data.attestation`; anything else it sends about the
+ * audience is ignored. The server still does the addressing: it finds the devices
+ * again and refuses a set that does not match, so a client cannot add a device or
+ * quietly leave one out. It never sees the message.
  *
  * Nothing readable is stored. A message records the kind of audience rather than
  * which committees, because a committee's slug says what it is.
@@ -52,25 +54,42 @@ interface Envelope {
 
 type Data = Record<string, unknown>;
 
+/** Who a message reaches, as Fellowship resolved it, and the kind of audience it was. */
+export interface Audience {
+  memberIds: number[];
+  kind: AudienceKind;
+}
+
 export async function resolveAudience(deps: Deps, caller: Caller | undefined, data: Data) {
   const device = await requireLiveDevice(deps, caller);
-  const reach = await reachOf(deps, memberAudience(device.memberId, data));
+  const audience = await attestedAudience(deps, device, data);
 
-  return summary(deps, reach);
+  return summary(deps, await reachOf(deps, audience.memberIds));
 }
 
 export async function sendMessage(deps: Deps, caller: Caller | undefined, data: Data) {
   const device = await requireLiveDevice(deps, caller);
+  const audience = await attestedAudience(deps, device, data);
 
   await spendAllowance(deps, device.deviceId);
 
-  const query = memberAudience(device.memberId, data);
-
-  return deliver(deps, query, device.memberId, data.id, data.envelopes);
+  return deliver(deps, audience, device.memberId, data.id, data.envelopes);
 }
 
-export async function reachOf(deps: Deps, query: AudienceQuery): Promise<Reach> {
-  const memberIds = await deps.fellowship.audience(query);
+/** Signed for this device, as its own member. */
+async function attestedAudience(deps: Deps, device: LiveDevice, data: Data): Promise<Audience> {
+  const statement = await deps.attestations.audience(data.attestation, device.deviceId);
+
+  if (statement.senderMemberId !== device.memberId) {
+    throw new HttpsError('permission-denied', 'The intergroup\'s answer could not be checked. Please try again.', {
+      reason: 'fellowship_bad_attestation',
+    });
+  }
+
+  return { memberIds: statement.memberIds, kind: statement.audience };
+}
+
+export async function reachOf(deps: Deps, memberIds: number[]): Promise<Reach> {
   const db = deps.db.collection('devices');
   const devices: Reach['devices'] = [];
 
@@ -98,19 +117,19 @@ export function summary(deps: Deps, reach: Reach) {
 }
 
 /**
- * Re-resolves and compares, then writes. Used by a handset and, with an admin
- * audience, by the Compose screen.
+ * Finds the devices again and compares, then writes. Used by a handset and, with an
+ * admin audience, by the Compose screen.
  */
 export async function deliver(
   deps: Deps,
-  query: AudienceQuery,
+  audience: Audience,
   senderMemberId: number,
   messageId: unknown,
   envelopes: unknown,
 ) {
   const sealed = requireEnvelopes(envelopes);
   const id = requireMessageId(deps, messageId);
-  const reach = await reachOf(deps, query);
+  const reach = await reachOf(deps, audience.memberIds);
 
   if (reach.devices.length === 0) {
     throw new HttpsError('failed-precondition', 'None of those members have Link yet.', {
@@ -135,7 +154,7 @@ export async function deliver(
   // arrives first could be acknowledged before there is anything to count.
   await createMessage(deps, id, {
     senderMemberId,
-    audience: audienceKind(query),
+    audience: audience.kind,
     recipientMemberIds,
     recipientCount: recipientMemberIds.length,
     receivedCount: 0,
@@ -197,37 +216,6 @@ function requireMessageId(deps: Deps, value: unknown): number {
   }
 
   return value;
-}
-
-function memberAudience(senderMemberId: number, data: Data): AudienceQuery {
-  return { origin: 'member', senderMemberId, ...audienceInput(data) };
-}
-
-export function audienceInput(data: Data): Pick<AudienceQuery, 'memberIds' | 'committees' | 'gsrs'> {
-  const memberIds = Array.isArray(data.memberIds)
-    ? data.memberIds.filter((id): id is number => Number.isInteger(id))
-    : undefined;
-
-  const committees = Array.isArray(data.committees)
-    ? data.committees.filter((slug): slug is string => typeof slug === 'string')
-    : undefined;
-
-  return { memberIds, committees, gsrs: data.gsrs === true ? true : undefined };
-}
-
-function audienceKind(query: AudienceQuery): string {
-  if (query.everyone === true) {
-    return 'everyone';
-  }
-
-  const part = (query.committees?.length ?? 0) > 0 || query.gsrs === true;
-  const named = (query.memberIds?.length ?? 0) > 0;
-
-  if (part && named) {
-    return 'mixed';
-  }
-
-  return part ? 'part' : 'members';
 }
 
 function requireEnvelopes(value: unknown): Envelope[] {

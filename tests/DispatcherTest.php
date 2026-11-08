@@ -207,7 +207,6 @@ function dispatcherApi(?RecordingDelivery $delivery = null): MessageApi
             new InMemoryCommitteeRepository(),
             new MemberGate(test()->members),
         ),
-        test()->members,
         test()->audit,
     );
 }
