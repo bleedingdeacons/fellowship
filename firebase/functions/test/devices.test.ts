@@ -142,6 +142,29 @@ describe('enrolling', () => {
       .toBe('fellowship_bad_id_token');
   });
 
+  test('a token refreshed from a spent sign-in is the same sign-in', async () => {
+    const { deps } = fake();
+    const caller = await googleCaller();
+    const { iat, exp } = caller.token;
+    const refreshed: Caller = { uid: caller.uid, token: { ...caller.token, iat: iat + 30, exp: exp + 30 } };
+
+    await enrol(deps, caller, { publicKey: newPublicKey(), platform: 'android' });
+
+    expect(await reasonOf(enrol(deps, refreshed, { publicKey: newPublicKey(), platform: 'android' })))
+      .toBe('fellowship_bad_id_token');
+    expect((await db.collection('devices').get()).size).toBe(1);
+  });
+
+  test('a spent sign-in is kept only until it would be stale anyway', async () => {
+    const { deps } = fake();
+    const caller = await googleCaller();
+
+    await enrol(deps, caller, { publicKey: newPublicKey(), platform: 'android' });
+
+    const [spent] = (await db.collection('spentIdentities').get()).docs;
+    expect(spent.get('expireAt')).toBe(Number(caller.token.auth_time) + 300 + 120);
+  });
+
   test.each([
     ['nonsense', 'not a key'],
     ['empty', ''],
