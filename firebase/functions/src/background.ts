@@ -69,29 +69,71 @@ export async function pushInboxEntry(
   }
 }
 
-/** Keeps a message's counts in step with its receipts. Reading counts as receiving. */
+type Receipt = { receivedAt?: unknown; readAt?: unknown };
+
+/**
+ * Keeps a message's counts in step with its receipts. Reading counts as receiving.
+ *
+ * <b>Each member is counted once for each, whatever arrives.</b> A trigger can run
+ * more than once for one write, so what was counted is recorded beside the message
+ * in `tallies/{memberId}`, in the same transaction as the count. A receipt that
+ * already had a time before this write was counted then, before tallies existed or
+ * by an earlier run, so it is marked and not counted again.
+ */
 export async function countReceipt(
   deps: Deps,
   messageId: string,
-  before: { receivedAt?: unknown; readAt?: unknown } | undefined,
-  after: { receivedAt?: unknown; readAt?: unknown } | undefined,
+  memberId: string,
+  before: Receipt | undefined,
+  after: Receipt | undefined,
 ): Promise<void> {
   if (after === undefined) {
     return;
   }
 
-  const update: Record<string, FieldValue> = {};
+  const received = (receipt: Receipt | undefined) => Boolean(receipt?.receivedAt || receipt?.readAt);
+  const read = (receipt: Receipt | undefined) => Boolean(receipt?.readAt);
 
-  if (!before?.receivedAt && !before?.readAt && (after.receivedAt || after.readAt)) {
-    update.receivedCount = FieldValue.increment(1);
-  }
-  if (!before?.readAt && after.readAt) {
-    update.readCount = FieldValue.increment(1);
+  if (!received(after)) {
+    return;
   }
 
-  if (Object.keys(update).length > 0) {
-    await deps.db.collection('messages').doc(messageId).update(update);
-  }
+  const message = deps.db.collection('messages').doc(messageId);
+  const tally = message.collection('tallies').doc(memberId);
+
+  await deps.db.runTransaction(async (tx) => {
+    const [sent, counted] = await Promise.all([tx.get(message), tx.get(tally)]);
+
+    // Swept since the receipt was written; there is nothing left to count on.
+    if (!sent.exists) {
+      return;
+    }
+
+    const update: Record<string, FieldValue> = {};
+    const marks: Record<string, boolean> = {};
+
+    if (counted.get('received') !== true) {
+      marks.received = true;
+      if (!received(before)) {
+        update.receivedCount = FieldValue.increment(1);
+      }
+    }
+
+    if (read(after) && counted.get('read') !== true) {
+      marks.read = true;
+      if (!read(before)) {
+        update.readCount = FieldValue.increment(1);
+      }
+    }
+
+    if (Object.keys(update).length > 0) {
+      tx.update(message, update);
+    }
+
+    if (Object.keys(marks).length > 0) {
+      tx.set(tally, marks, { merge: true });
+    }
+  });
 }
 
 /**

@@ -15,7 +15,9 @@ import {
   limit,
   orderBy,
   query,
+  deleteField,
   setDoc,
+  Timestamp,
   updateDoc,
   where,
 } from 'firebase/firestore';
@@ -183,27 +185,58 @@ describe('messages and receipts', () => {
   });
 
   test('a receipt for a message already swept is refused', async () => {
-    await assertFails(setDoc(doc(as('d_dave', 7), 'messages/swept/receipts/7'), { receivedAt: NOW }));
+    await assertFails(setDoc(doc(as('d_dave', 7), 'messages/swept/receipts/7'), { receivedAt: Timestamp.now() }));
   });
 
   test('a recipient writes their own receipt', async () => {
     const receipt = doc(as('d_dave', 7), 'messages/m1/receipts/7');
 
-    await assertSucceeds(setDoc(receipt, { receivedAt: NOW }));
-    await assertSucceeds(updateDoc(receipt, { readAt: NOW }));
+    await assertSucceeds(setDoc(receipt, { receivedAt: Timestamp.now() }));
+    await assertSucceeds(updateDoc(receipt, { readAt: Timestamp.now() }));
   });
 
   test('nobody writes a receipt for somebody else, or for a message not addressed to them', async () => {
-    await assertFails(setDoc(doc(as('d_dave', 7), 'messages/m1/receipts/8'), { receivedAt: NOW }));
-    await assertFails(setDoc(doc(as('d_sue', 8), 'messages/m1/receipts/8'), { receivedAt: NOW }));
+    await assertFails(setDoc(doc(as('d_dave', 7), 'messages/m1/receipts/8'), { receivedAt: Timestamp.now() }));
+    await assertFails(setDoc(doc(as('d_sue', 8), 'messages/m1/receipts/8'), { receivedAt: Timestamp.now() }));
   });
 
   test('a receipt carries only its two times', async () => {
-    await assertFails(setDoc(doc(as('d_dave', 7), 'messages/m1/receipts/7'), { receivedAt: NOW, extra: 'x' }));
+    await assertFails(setDoc(doc(as('d_dave', 7), 'messages/m1/receipts/7'), { receivedAt: Timestamp.now(), extra: 'x' }));
+  });
+
+  test.each([
+    ['a number', NOW],
+    ['a string', 'yesterday'],
+    ['null', null],
+  ])('a time is a timestamp, not %s', async (_name, value) => {
+    await assertFails(setDoc(doc(as('d_dave', 7), 'messages/m1/receipts/7'), { receivedAt: value }));
+    await assertFails(setDoc(doc(as('d_dave', 7), 'messages/m1/receipts/7'), { readAt: value }));
+  });
+
+  test('a time once set is neither cleared nor moved', async () => {
+    const receipt = doc(as('d_dave', 7), 'messages/m1/receipts/7');
+    const first = Timestamp.fromMillis(Date.now() - 60000);
+
+    await assertSucceeds(setDoc(receipt, { receivedAt: first, readAt: first }));
+
+    await assertFails(updateDoc(receipt, { readAt: null }));
+    await assertFails(updateDoc(receipt, { readAt: deleteField() }));
+    await assertFails(updateDoc(receipt, { readAt: Timestamp.now() }));
+    await assertFails(setDoc(receipt, { receivedAt: first }));
+    await assertSucceeds(updateDoc(receipt, { readAt: first }));
+  });
+
+  test('a phone cannot touch what the counts have tallied', async () => {
+    await env.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'messages/m1/tallies/7'), { received: true });
+    });
+
+    await assertFails(getDoc(doc(as('d_dave', 7), 'messages/m1/tallies/7')));
+    await assertFails(setDoc(doc(as('d_dave', 7), 'messages/m1/tallies/7'), { received: false }));
   });
 
   test('a revoked device cannot write a receipt', async () => {
-    await assertFails(setDoc(doc(as('d_gone', 7), 'messages/m1/receipts/7'), { receivedAt: NOW }));
+    await assertFails(setDoc(doc(as('d_gone', 7), 'messages/m1/receipts/7'), { receivedAt: Timestamp.now() }));
   });
 
   test('a phone cannot read receipts or change the counts', async () => {

@@ -102,7 +102,13 @@ export const onInboxEntry = onDocumentCreated(
 export const onReceipt = onDocumentWritten(
   { ...common, document: 'messages/{messageId}/receipts/{memberId}' },
   async (event) => {
-    await countReceipt(deps(), event.params.messageId, event.data?.before.data(), event.data?.after.data());
+    await countReceipt(
+      deps(),
+      event.params.messageId,
+      event.params.memberId,
+      event.data?.before.data(),
+      event.data?.after.data(),
+    );
   },
 );
 
