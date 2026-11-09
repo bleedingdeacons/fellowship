@@ -95,16 +95,24 @@ function requirePerson(caller: Caller): void {
 
 /**
  * Each sign-in works once. Without a nonce this is what stops a captured token
- * enrolling a second handset. Kept until it would have expired anyway, when the
+ * enrolling a second handset.
+ *
+ * <b>Keyed on the sign-in, not the token.</b> `auth_time` is when the person
+ * signed in, and every ID token refreshed from that sign-in carries the same one,
+ * whereas `iat` is new with each refresh. Keyed on `iat`, somebody holding the
+ * refresh token could mint a fresh ID token for each device, up to the cap.
+ *
+ * Kept until identifyMember would refuse the sign-in as stale anyway, when the
  * daily sweep removes it.
  */
 export async function spendSignIn(deps: Deps, caller: Caller | undefined): Promise<void> {
-  if (caller === undefined) {
+  const signedInAt = Number(caller?.token.auth_time);
+  if (caller === undefined || !Number.isFinite(signedInAt)) {
     throw badToken();
   }
 
-  const id = createHash('sha256').update(`${caller.uid}:${caller.token.iat}`).digest('hex');
-  const expireAt = Number(caller.token.exp) + CLOCK_SKEW_SECONDS;
+  const id = createHash('sha256').update(`${caller.uid}:${signedInAt}`).digest('hex');
+  const expireAt = signedInAt + MAX_AUTH_AGE_SECONDS + 2 * CLOCK_SKEW_SECONDS;
 
   try {
     await deps.db.collection('spentIdentities').doc(id).create({ expireAt });
