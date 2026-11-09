@@ -446,12 +446,18 @@ describe('pushing', () => {
 });
 
 describe('receipts', () => {
-  async function counts(before: object | undefined, after: object | undefined) {
+  async function counts(steps: [object | undefined, object | undefined][], tallied?: object) {
     const { deps } = fake();
     const ref = db.collection('messages').doc('m1');
     await ref.set({ receivedCount: 0, readCount: 0 });
 
-    await countReceipt(deps, 'm1', before, after);
+    if (tallied !== undefined) {
+      await ref.collection('tallies').doc('7').set(tallied);
+    }
+
+    for (const [before, after] of steps) {
+      await countReceipt(deps, 'm1', '7', before, after);
+    }
 
     const message = await ref.get();
 
@@ -459,13 +465,41 @@ describe('receipts', () => {
   }
 
   test.each([
-    ['first received', undefined, { receivedAt: 1 }, [1, 0]],
-    ['read without a received first', undefined, { readAt: 1 }, [1, 1]],
-    ['read after received', { receivedAt: 1 }, { receivedAt: 1, readAt: 2 }, [0, 1]],
-    ['written again', { receivedAt: 1, readAt: 2 }, { receivedAt: 1, readAt: 3 }, [0, 0]],
-    ['deleted', { receivedAt: 1 }, undefined, [0, 0]],
-  ])('%s', async (_name, before, after, expected) => {
-    expect(await counts(before, after)).toEqual(expected);
+    ['first received', [[undefined, { receivedAt: 1 }]], [1, 0]],
+    ['read without a received first', [[undefined, { readAt: 1 }]], [1, 1]],
+    ['read after received', [[undefined, { receivedAt: 1 }], [{ receivedAt: 1 }, { receivedAt: 1, readAt: 2 }]], [1, 1]],
+    ['written again', [[undefined, { receivedAt: 1, readAt: 2 }], [{ receivedAt: 1, readAt: 2 }, { receivedAt: 1, readAt: 3 }]], [1, 1]],
+    ['deleted', [[{ receivedAt: 1 }, undefined]], [0, 0]],
+    ['the same write delivered twice', [[undefined, { readAt: 1 }], [undefined, { readAt: 1 }]], [1, 1]],
+    [
+      'cleared and set again, over and over',
+      [
+        [undefined, { receivedAt: 1, readAt: 1 }],
+        [{ receivedAt: 1, readAt: 1 }, { receivedAt: null, readAt: null }],
+        [{ receivedAt: null, readAt: null }, { receivedAt: 2, readAt: 2 }],
+        [{ receivedAt: 2, readAt: 2 }, { receivedAt: null, readAt: null }],
+        [{ receivedAt: null, readAt: null }, { receivedAt: 3, readAt: 3 }],
+      ],
+      [1, 1],
+    ],
+  ] as [string, [object | undefined, object | undefined][], number[]][])('%s', async (_name, steps, expected) => {
+    expect(await counts(steps)).toEqual(expected);
+  });
+
+  test('a receipt counted before tallies existed is not counted again', async () => {
+    // Received was counted by the old trigger, which kept no tally.
+    expect(await counts([[{ receivedAt: 1 }, { receivedAt: 1, readAt: 2 }]])).toEqual([0, 1]);
+
+    const tally = await db.collection('messages').doc('m1').collection('tallies').doc('7').get();
+    expect(tally.data()).toEqual({ received: true, read: true });
+  });
+
+  test('a receipt for a message already swept is let go', async () => {
+    const { deps } = fake();
+
+    await countReceipt(deps, 'gone', '7', undefined, { receivedAt: 1 });
+
+    expect((await db.collection('messages').doc('gone').collection('tallies').get()).size).toBe(0);
   });
 });
 

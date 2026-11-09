@@ -44,13 +44,35 @@ service cloud.firestore {
       allow get, list: if isLiveDevice()
         && resource.data.senderMemberId == request.auth.token.memberId;
 
-      match /receipts/{memberId} {
-        allow create, update: if isLiveDevice()
+      // A receipt only ever moves forward. Each time is a timestamp, and once
+      // set it stays as it is: clearing one and setting it again would count
+      // the same member twice, and every write runs onReceipt. Link writes each
+      // time once, and takes a refusal for a time already set as accepted.
+      function isOwnReceipt(memberId) {
+        return isLiveDevice()
           && memberId == string(request.auth.token.memberId)
           && request.auth.token.memberId in
-               get(/databases/$(database)/documents/messages/$(messageId)).data.recipientMemberIds
-          && request.resource.data.keys().hasOnly(['receivedAt', 'readAt']);
+               get(/databases/$(database)/documents/messages/$(messageId)).data.recipientMemberIds;
       }
+
+      function holdsOnlyTimes() {
+        let data = request.resource.data;
+        return data.keys().hasOnly(['receivedAt', 'readAt'])
+          && (!('receivedAt' in data) || data.receivedAt is timestamp)
+          && (!('readAt' in data) || data.readAt is timestamp);
+      }
+
+      match /receipts/{memberId} {
+        allow create: if isOwnReceipt(memberId) && holdsOnlyTimes();
+
+        allow update: if isOwnReceipt(memberId)
+          && holdsOnlyTimes()
+          && request.resource.data.diff(resource.data).changedKeys().size() == 0
+          && request.resource.data.diff(resource.data).removedKeys().size() == 0;
+      }
+
+      // tallies/{memberId} is onReceipt's record of what it has counted. Only the
+      // Functions touch it, under the catch-all below.
     }
 
     match /{document=**} {
