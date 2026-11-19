@@ -1,10 +1,15 @@
 name: CI
 
+# GitHub runs this on merges to main only, as the release run. Pull requests
+# run no checks here: the gates run locally first, in the wp-plugin-ci
+# container (C:\Data\dev\wp-dev-tools\ci\ci-local.ps1), which reads this file's
+# `ci` job and runs the same steps. They still run here before every release,
+# which needs them, so a merge that was never checked locally still cannot
+# publish a broken zip; it just finds out at merge time instead.
+
 on:
   push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main, develop ]
+    branches: [ main ]
   # A merge is the release, so without this there is no way to cut one when the
   # merge's own run does not survive. Added after the 2026-08-06 Actions outage
   # left a release run wedged: queued with no runner, refusing both cancel
@@ -14,13 +19,13 @@ on:
   workflow_dispatch:
 
 concurrency:
-  # PR runs share one group per ref, so pushing again cancels the superseded
-  # run. Runs on main get a group of their own (run_id is unique) and therefore
-  # queue behind nothing — a run that never *starts* must not be able to block
-  # every run after it, which is what a single shared group allowed. Releases
-  # still serialise, on the release job's own group; the gates never needed to.
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Every run gets a group of its own (run_id is unique) and therefore queues
+  # behind nothing — a run that never *starts* must not be able to block every
+  # run after it, which is what a single shared group allowed. Nothing is
+  # cancelled: each run is a release. Releases still serialise, on the release
+  # job's own group; the gates never needed to.
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   ci:
@@ -135,14 +140,16 @@ jobs:
         # Running it on both legs has them scanning the same ref and uploading
         # to Semgrep Cloud concurrently, and the blocking determination races.
         if: matrix.php == '8.4'
-        # A gate, on pull requests and on main alike.
+        # A gate on the release: release has `needs: ci`, so a critical or
+        # high finding means no version is raised and no zip is published.
         #
-        # `semgrep ci` is diff-aware on a PR: it scans against the merge base
-        # and reports only what that PR introduces — the same bargain PHPStan's
-        # baseline strikes below, with the platform holding the existing state
-        # instead of a committed file. On main it runs a full scan, and that
-        # gates the release: release has `needs: ci`, so a blocking finding
-        # means no version is raised and no zip is published.
+        # Gated on severity, not on semgrep's own exit code. `semgrep ci` only
+        # marks a finding "blocking" in a pull_request context — measured on
+        # sentinel #50: 3 blocking in a PR run, 0 in a full scan of the same
+        # tree — and this workflow no longer runs on pull requests, so the
+        # exit code would never fail anything. The scheduled full scan
+        # (semgrep.yml) found the same and gates the same way; ci-local's
+        # -Semgrep applies this gate before a merge, without uploading.
         #
         # Deliberately no continue-on-error. Making the main scan advisory was
         # tried first, reasoning that a merge is the release here and a
@@ -176,7 +183,49 @@ jobs:
             exit 0
           fi
           python3 -m pip install --quiet semgrep==1.174.0
-          semgrep ci
+
+          # No --dry-run: this uploads, so the platform's view of main stays
+          # current and triage done in the UI keeps applying here. `|| true`
+          # because the exit code reflects blocking findings, which a scan
+          # outside a PR never has; the check below is the gate.
+          semgrep ci --json > "$RUNNER_TEMP/semgrep-results.json" || true
+
+          python3 - <<'PY'
+          import json, os, sys
+
+          path = os.path.join(os.environ['RUNNER_TEMP'], 'semgrep-results.json')
+          try:
+              with open(path, encoding='utf-8') as fh:
+                  data = json.load(fh)
+          except (OSError, ValueError) as exc:
+              # No readable results means the scan itself failed; that is not
+              # a pass.
+              sys.exit(f'Semgrep produced no readable results: {exc}')
+
+          results = data.get('results', [])
+
+          # Semgrep emits two severity vocabularies side by side - the older
+          # ERROR/WARNING/INFO and the newer CRITICAL/HIGH/MEDIUM/LOW - and a
+          # single scan can return both, so both spellings are listed here.
+          SERIOUS = {'ERROR', 'CRITICAL', 'HIGH'}
+
+          counts = {}
+          for r in results:
+              sev = (r.get('extra') or {}).get('severity', 'UNKNOWN').upper()
+              counts[sev] = counts.get(sev, 0) + 1
+          print('findings by severity:', counts or '(none)')
+
+          serious = [r for r in results
+                     if (r.get('extra') or {}).get('severity', '').upper() in SERIOUS]
+          for r in serious:
+              line = (r.get('start') or {}).get('line', '?')
+              print(f"  {r.get('check_id')}  {r.get('path')}:{line}")
+
+          if serious:
+              sys.exit(f'{len(serious)} critical/high finding(s). '
+                       'Triage in Semgrep or fix in code.')
+          print('No critical or high findings.')
+          PY
 
       - name: Install dependencies
         run: composer install --prefer-dist --no-progress
@@ -200,7 +249,8 @@ jobs:
         # Once only: the result is identical on both legs, and running it on
         # both has them writing the same paths at the same time.
         if: matrix.php == '8.4'
-        # The build is what /bump ships, so a broken build must fail the PR.
+        # The release job ships this command's output, so a broken build must
+        # fail before it gets there.
         run: composer build:production
 
       - name: PHPStan
@@ -370,8 +420,9 @@ jobs:
     # Every gate must pass first: needs: ci makes the whole release conditional
     # on a green run, so a failing test can never publish a zip.
     needs: [ci, firebase]
-    # main only. PRs run the gates and stop; a push to develop does too.
-    # workflow_dispatch releases as well — a manual trigger that ran the gates
+    # main only. Every trigger is main now, but a workflow_dispatch can still
+    # be pointed at another branch, and that must run the gates and stop.
+    # workflow_dispatch on main releases — a manual trigger that ran the gates
     # and then declined to publish would be useless for the case it exists for.
     if: >-
       github.ref == 'refs/heads/main' &&
