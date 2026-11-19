@@ -1,12 +1,12 @@
 name: CI
 
-# GitHub runs this on merges to main, as the release run, and on Dependabot's
-# pull requests, which nobody checks locally. Every other pull request runs no
-# checks here: its gates run locally first, in the wp-plugin-ci container
+# GitHub runs the gates (`ci`) on Dependabot's pull requests only, which nobody
+# checks locally, and the release on merges to main. Every other pull request's
+# gates run locally, in the wp-plugin-ci container
 # (C:\Data\dev\wp-dev-tools\ci\ci-local.ps1), which reads this file's `ci` job
-# and runs the same steps. They still run here before every release, which
-# needs them, so a merge that was never checked locally still cannot publish a
-# broken zip; it just finds out at merge time instead.
+# and runs the same steps. The release does not re-run them: a merge is only as
+# checked as its local run, so run ci-local before merging. That keeps a merge
+# to the official zip at about a minute.
 
 on:
   push:
@@ -38,9 +38,9 @@ concurrency:
 jobs:
   ci:
     name: PHP ${{ matrix.php }}
-    # On a pull request, only Dependabot's: everyone else's gates run locally
-    # (ci-local.ps1) before the merge, and again here on main.
-    if: github.event_name != 'pull_request' || github.event.pull_request.user.login == 'dependabot[bot]'
+    # Dependabot's pull requests only. Everyone else's gates run locally
+    # (ci-local.ps1) before the merge, and main runs only the release.
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
 
     # 8.4 is the declared floor and 8.5 the current release, so both are
@@ -151,8 +151,9 @@ jobs:
         # Running it on both legs has them scanning the same ref and uploading
         # to Semgrep Cloud concurrently, and the blocking determination races.
         if: matrix.php == '8.4'
-        # A gate on the release: release has `needs: ci`, so a critical or
-        # high finding means no version is raised and no zip is published.
+        # Where this job runs: Dependabot's pull requests (no secrets there, so
+        # it skips) and locally with ci-local -Semgrep. Main no longer runs it
+        # before a release; semgrep.yml scans main weekly.
         #
         # Gated on severity, not on semgrep's own exit code. `semgrep ci` only
         # marks a finding "blocking" in a pull_request context — measured on
@@ -362,15 +363,15 @@ jobs:
   # step between "tests pass" and "there is something installable", and the zip
   # only ever existed in C:\Data\Plugins on one machine.
   #
-  # Now the gates pass, CI raises the version, builds the archive from merged
+  # Now CI raises the version, builds the archive from merged
   # code and publishes it as a GitHub Release. /deploy pulls the asset from
   # there. Nothing is bumped or built by hand — and this plugin must therefore
   # be in bump.ps1's $ciReleased list, or a second version gets raised on top.
   firebase:
     name: Firebase rules & functions
-    # On a pull request, only Dependabot's: everyone else's gates run locally
-    # (ci-local.ps1) before the merge, and again here on main.
-    if: github.event_name != 'pull_request' || github.event.pull_request.user.login == 'dependabot[bot]'
+    # Dependabot's pull requests only. Everyone else's gates run locally
+    # (ci-local.ps1) before the merge, and main runs only the release.
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -432,11 +433,11 @@ jobs:
 
   release:
     name: Release
-    # Every gate must pass first: needs: ci makes the whole release conditional
-    # on a green run, so a failing test can never publish a zip.
-    needs: [ci, firebase]
-    # main only. A pull request (Dependabot's) and a workflow_dispatch pointed
-    # at another branch run the gates and stop.
+    # No `needs:` on the gates. On main they are skipped (they run on
+    # Dependabot's pull requests only), and a release waiting on a skipped job
+    # is skipped too. The gates ran locally, with ci-local.ps1, before the merge.
+    # main only. A pull request (Dependabot's) runs the gates and stops; a
+    # workflow_dispatch on another branch runs nothing.
     # workflow_dispatch on main releases — a manual trigger that ran the gates
     # and then declined to publish would be useless for the case it exists for.
     if: >-
