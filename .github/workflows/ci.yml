@@ -1,14 +1,20 @@
 name: CI
 
-# GitHub runs this on merges to main only, as the release run. Pull requests
-# run no checks here: the gates run locally first, in the wp-plugin-ci
-# container (C:\Data\dev\wp-dev-tools\ci\ci-local.ps1), which reads this file's
-# `ci` job and runs the same steps. They still run here before every release,
-# which needs them, so a merge that was never checked locally still cannot
-# publish a broken zip; it just finds out at merge time instead.
+# GitHub runs this on merges to main, as the release run, and on Dependabot's
+# pull requests, which nobody checks locally. Every other pull request runs no
+# checks here: its gates run locally first, in the wp-plugin-ci container
+# (C:\Data\dev\wp-dev-tools\ci\ci-local.ps1), which reads this file's `ci` job
+# and runs the same steps. They still run here before every release, which
+# needs them, so a merge that was never checked locally still cannot publish a
+# broken zip; it just finds out at merge time instead.
 
 on:
   push:
+    branches: [ main ]
+  # Dependabot's pull requests only: the jobs below skip at once for anyone
+  # else's (see their `if:`). Dependabot runs get no Actions secrets, so the
+  # Semgrep scan skips there; the merge to main scans.
+  pull_request:
     branches: [ main ]
   # A merge is the release, so without this there is no way to cut one when the
   # merge's own run does not survive. Added after the 2026-08-06 Actions outage
@@ -19,17 +25,22 @@ on:
   workflow_dispatch:
 
 concurrency:
-  # Every run gets a group of its own (run_id is unique) and therefore queues
-  # behind nothing — a run that never *starts* must not be able to block every
-  # run after it, which is what a single shared group allowed. Nothing is
-  # cancelled: each run is a release. Releases still serialise, on the release
-  # job's own group; the gates never needed to.
-  group: ${{ github.workflow }}-${{ github.run_id }}
-  cancel-in-progress: false
+  # A pull request run (Dependabot's) shares one group per ref, so a rebase
+  # cancels the superseded run. Every other run gets a group of its own
+  # (run_id is unique) and therefore queues behind nothing — a run that never
+  # *starts* must not be able to block every run after it, which is what a
+  # single shared group allowed. Nothing on main is cancelled: each run there
+  # is a release. Releases still serialise, on the release job's own group;
+  # the gates never needed to.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ci:
     name: PHP ${{ matrix.php }}
+    # On a pull request, only Dependabot's: everyone else's gates run locally
+    # (ci-local.ps1) before the merge, and again here on main.
+    if: github.event_name != 'pull_request' || github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
 
     # 8.4 is the declared floor and 8.5 the current release, so both are
@@ -146,8 +157,9 @@ jobs:
         # Gated on severity, not on semgrep's own exit code. `semgrep ci` only
         # marks a finding "blocking" in a pull_request context — measured on
         # sentinel #50: 3 blocking in a PR run, 0 in a full scan of the same
-        # tree — and this workflow no longer runs on pull requests, so the
-        # exit code would never fail anything. The scheduled full scan
+        # tree — and this workflow no longer gates pull requests, bar
+        # Dependabot's, which get no secrets and so skip the scan — so the exit
+        # code would never fail anything. The scheduled full scan
         # (semgrep.yml) found the same and gates the same way; ci-local's
         # -Semgrep applies this gate before a merge, without uploading.
         #
@@ -356,6 +368,9 @@ jobs:
   # be in bump.ps1's $ciReleased list, or a second version gets raised on top.
   firebase:
     name: Firebase rules & functions
+    # On a pull request, only Dependabot's: everyone else's gates run locally
+    # (ci-local.ps1) before the merge, and again here on main.
+    if: github.event_name != 'pull_request' || github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -420,8 +435,8 @@ jobs:
     # Every gate must pass first: needs: ci makes the whole release conditional
     # on a green run, so a failing test can never publish a zip.
     needs: [ci, firebase]
-    # main only. Every trigger is main now, but a workflow_dispatch can still
-    # be pointed at another branch, and that must run the gates and stop.
+    # main only. A pull request (Dependabot's) and a workflow_dispatch pointed
+    # at another branch run the gates and stop.
     # workflow_dispatch on main releases — a manual trigger that ran the gates
     # and then declined to publish would be useless for the case it exists for.
     if: >-
