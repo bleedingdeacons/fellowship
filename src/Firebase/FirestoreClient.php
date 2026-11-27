@@ -14,7 +14,8 @@ use Fellowship\Logger\HasLogger;
 use Fellowship\Push\ServiceAccount;
 
 /**
- * Reads and writes Firestore over REST, as the service account.
+ * Reads Firestore over REST, as the service account. The account may only read: what
+ * the site changes goes through the admin Functions.
  *
  * <b>This bypasses the security rules</b>, because the service account does. So
  * only Fellowship's own code calls it, with paths it built itself.
@@ -71,32 +72,6 @@ final class FirestoreClient
         }
 
         return self::decodeFields($body['fields'] ?? []);
-    }
-
-    /**
-     * Write these integer fields, leaving the document's others alone.
-     *
-     * @param array<string, int> $fields
-     *
-     * @throws FirebaseUnavailable When Firestore couldn't be asked.
-     */
-    public function setIntegers(string $path, array $fields): void
-    {
-        $query = implode('&', array_map(
-            static fn(string $name): string => 'updateMask.fieldPaths=' . rawurlencode($name),
-            array_keys($fields),
-        ));
-
-        $encoded = [];
-        foreach ($fields as $name => $value) {
-            $encoded[$name] = ['integerValue' => (string) $value];
-        }
-
-        [$status] = $this->request('PATCH', $this->documentUrl($path) . '?' . $query, ['fields' => $encoded]);
-
-        if ($status !== 200) {
-            throw $this->unavailable('write', $status);
-        }
     }
 
     /**

@@ -9,8 +9,8 @@ if (!defined('ABSPATH')) {
 }
 
 use Fellowship\Core\Settings;
+use Fellowship\Firebase\AdminFunctions;
 use Fellowship\Firebase\FirebaseUnavailable;
-use Fellowship\Firebase\FirestoreClient;
 use Fellowship\Logger\HasLogger;
 
 /**
@@ -19,12 +19,13 @@ use Fellowship\Logger\HasLogger;
  * The `sweep` Function reads `config/messaging`, and treats no value as keep for
  * ever. So this runs on saving and again every day: a save that couldn't reach
  * Firebase corrects itself, and a new project gets its value without anyone saving.
+ *
+ * It goes through `adminSetRetention`, because the site's service account can read
+ * Firestore but not write it.
  */
 final class RetentionSync
 {
     use HasLogger;
-
-    public const DOCUMENT = 'config/messaging';
 
     protected static function logChannel(): string
     {
@@ -33,19 +34,19 @@ final class RetentionSync
 
     public function __construct(
         private readonly Settings $settings,
-        private readonly FirestoreClient $firestore,
+        private readonly AdminFunctions $functions,
     ) {
     }
 
     /** True when Firebase now has the value. Never throws: see the class remarks. */
     public function push(): bool
     {
-        if (!$this->firestore->isConfigured()) {
+        if (!$this->functions->isConfigured()) {
             return false;
         }
 
         try {
-            $this->firestore->setIntegers(self::DOCUMENT, ['retentionDays' => $this->settings->getRetentionDays()]);
+            $this->functions->setRetention($this->settings->getRetentionDays());
 
             return true;
         } catch (FirebaseUnavailable) {

@@ -10,7 +10,7 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 import * as admin from './admin';
 import { countReceipt, pushInboxEntry, sweep as runSweep } from './background';
 import { googleCertificates, verifiedAttestations } from './attestation';
-import { KILL_SWITCH_ACCOUNT, REGION, SERVICE_ACCOUNT } from './config';
+import { KILL_SWITCH_ACCOUNT, REGION, RUNTIME_ACCOUNT, SITE_ACCOUNTS } from './config';
 import { Deps } from './deps';
 import * as devices from './devices';
 import { BudgetAlert, checkReadiness, detachBilling, overBudget } from './killSwitch';
@@ -36,7 +36,7 @@ function deps(): Deps {
 // client slows down rather than running up a bill.
 const common = {
   region: REGION,
-  serviceAccount: SERVICE_ACCOUNT,
+  serviceAccount: RUNTIME_ACCOUNT,
   memory: '256MiB',
   maxInstances: 5,
 } as const;
@@ -54,8 +54,9 @@ export const sendMessage = onCall(common, (request) => messaging.sendMessage(dep
 
 // ── What Fellowship's admin screens call ──
 
+// Cloud Run refuses anyone else's ID token before any of this runs.
 function adminFunction(handler: (deps: Deps, data: Record<string, unknown>) => Promise<unknown>) {
-  return onRequest({ ...common, invoker: SERVICE_ACCOUNT }, async (request, response) => {
+  return onRequest({ ...common, invoker: [...SITE_ACCOUNTS] }, async (request, response) => {
     if (request.method !== 'POST') {
       response.status(405).json({ reason: 'fellowship_bad_request' });
       return;
@@ -82,6 +83,7 @@ export const adminRemove = adminFunction(admin.adminRemove);
 export const adminRevokeMember = adminFunction(admin.adminRevokeMember);
 export const adminResolve = adminFunction(admin.adminResolve);
 export const adminSend = adminFunction(admin.adminSend);
+export const adminSetRetention = adminFunction(admin.adminSetRetention);
 
 // ── What runs on its own ──
 

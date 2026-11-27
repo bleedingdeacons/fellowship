@@ -2,11 +2,28 @@
 export const REGION = 'europe-west2';
 
 /**
- * Who the Functions run as: the service account Fellowship holds. Fellowship signs
- * what a phone carries here with its key, and it is the only caller allowed to
- * invoke the admin functions.
+ * Who the Functions run as. It has no key: it signs a phone's custom token through
+ * Google's IAM API, as itself, and nothing outside Google holds its credentials.
  */
-export const SERVICE_ACCOUNT = 'firebase-adminsdk-fbsvc@fellowship-510917.iam.gserviceaccount.com';
+export const RUNTIME_ACCOUNT = 'fellowship-functions@fellowship-510917.iam.gserviceaccount.com';
+
+/**
+ * The service account Fellowship holds, whose key is on the WordPress server.
+ * Fellowship signs what a phone carries here with that key, and it is the only
+ * caller allowed to invoke the admin functions. Beyond that it can only read
+ * Firestore, so the key alone can't write there, send a push or manage sign-ins.
+ */
+export const SITE_ACCOUNT = 'fellowship-site@fellowship-510917.iam.gserviceaccount.com';
+
+/**
+ * The account Fellowship held before, which the Functions also ran as. Trusted
+ * like the one above only while the site moves to the new key: once it has, take
+ * this out, deploy, and delete this account's keys.
+ */
+export const RETIRING_SITE_ACCOUNT = 'firebase-adminsdk-fbsvc@fellowship-510917.iam.gserviceaccount.com';
+
+/** Whose statements are believed, and who may call the admin functions. */
+export const SITE_ACCOUNTS: readonly string[] = [SITE_ACCOUNT, RETIRING_SITE_ACCOUNT];
 
 /** Who Fellowship signs a statement for. See AttestationSigner::audience(). */
 export const ATTESTATION_AUDIENCE = 'fellowship-functions:fellowship-510917';
@@ -16,8 +33,8 @@ export const ATTESTATION_MAX_LIFETIME_SECONDS = 300;
 
 /**
  * Who the kill switch runs as. It holds Billing Account Administrator, the one
- * role here that reaches beyond this project, so it is kept away from the account
- * above, whose key sits on the WordPress server. It has no key of its own.
+ * role here that reaches beyond this project, so it is kept away from the site's
+ * account, whose key sits on the WordPress server. It has no key of its own.
  */
 export const KILL_SWITCH_ACCOUNT = 'budget-kill-switch@fellowship-510917.iam.gserviceaccount.com';
 
