@@ -10,7 +10,7 @@ Fellowship's `/attest/*` routes sign, and Fellowship's admin screens call the
 **The member list stays in WordPress.** Nothing about a member is copied here.
 Fellowship decides who is a member and who a message reaches, and signs its answer
 as opaque ids. The phone fetches it and passes it on as `data.attestation`, and the
-Functions check the signature against the service account's public keys at Google.
+Functions check the signature against the site account's public keys at Google.
 They never call the site: its host challenges Google Cloud's shared addresses.
 
 **Messages are end-to-end encrypted.** A phone asks who a message reaches, seals
@@ -65,10 +65,36 @@ npx firebase-tools@15 deploy --only firestore,functions --project fellowship-510
 `--force` also keeps the cleanup policy on old container images, so they don't
 build up storage charges.
 
-The Functions run as the service account Fellowship holds, and only a statement
-signed with that account's key is believed. See `SERVICE_ACCOUNT` and
-`ATTESTATION_AUDIENCE` in `src/config.ts`. Fellowship needs the account's JSON with
-its `private_key_id`, which names the key Google publishes.
+### Two service accounts
+
+WordPress and the Functions don't share an account, so the key on the WordPress
+server can't do what the Functions do. See `src/config.ts`.
+
+| Account | Key | Roles | What it's for |
+| --- | --- | --- | --- |
+| `fellowship-functions@` (`RUNTIME_ACCOUNT`) | None | Cloud Datastore User, Firebase Authentication Admin, Firebase Cloud Messaging API Admin, Eventarc Event Receiver, Cloud Run Invoker, Logs Writer, and Service Account Token Creator on itself | Every function except `budgetAlert` runs as it. Token Creator lets it sign custom tokens through the IAM API, with no key file. |
+| `fellowship-site@` (`SITE_ACCOUNT`) | One, pasted into Fellowship's settings | Cloud Datastore Viewer | Signs the statements a phone carries, invokes the admin functions (their `invoker`), and reads Firestore. It can't write there, send a push or manage sign-ins: what the site changes goes through an admin function, `adminSetRetention` included. |
+
+Fellowship needs the site account's JSON with its `private_key_id`, which names the
+key Google publishes. Only a statement whose `iss` is in `SITE_ACCOUNTS` is
+believed, checked against that account's keys at Google.
+
+The organisation blocks new service-account keys
+(`iam.disableServiceAccountKeyCreation`). Rotating the site key means lifting it for
+this project, creating the key and putting it back:
+
+```bash
+gcloud resource-manager org-policies disable-enforce iam.disableServiceAccountKeyCreation --project fellowship-510917
+gcloud iam service-accounts keys create fellowship-site.json --iam-account fellowship-site@fellowship-510917.iam.gserviceaccount.com
+gcloud resource-manager org-policies delete iam.disableServiceAccountKeyCreation --project fellowship-510917
+```
+
+**While the site moves to this key**, `SITE_ACCOUNTS` also holds
+`RETIRING_SITE_ACCOUNT`, `firebase-adminsdk-fbsvc@`, which held both jobs before. Once
+Fellowship has the new key, take it out, deploy, delete that account's keys and
+remove the two roles granted to it by hand. Don't delete the account: Firebase uses
+it. Legacy pushes from WordPress (`FcmTransport`) stop then, because the site account
+can't send them.
 
 ### What a new project needs first
 
@@ -78,8 +104,8 @@ service accounts broad roles, so these two have to be granted by hand:
 | Account | Role | Without it |
 | --- | --- | --- |
 | `<project number>-compute@developer.gserviceaccount.com` | Cloud Build Service Account | Every function fails to build. |
-| `firebase-adminsdk-fbsvc@<project>.iam.gserviceaccount.com` | Eventarc Event Receiver | The Firestore triggers fail with `eventarc.events.receiveEvent` denied. |
-| `firebase-adminsdk-fbsvc@<project>.iam.gserviceaccount.com` | Cloud Run Invoker | **Deploys cleanly, then every event is refused with a 403.** No pushes, no tick counts and no sweep, with nothing to say so except the function's request log. |
+| `fellowship-functions@<project>.iam.gserviceaccount.com` | Eventarc Event Receiver | The Firestore triggers fail with `eventarc.events.receiveEvent` denied. |
+| `fellowship-functions@<project>.iam.gserviceaccount.com` | Cloud Run Invoker | **Deploys cleanly, then every event is refused with a 403.** No pushes, no tick counts and no sweep, with nothing to say so except the function's request log. |
 
 The CLI gives the compute account Eventarc Event Receiver and Cloud Run Invoker by
 itself, which is easy to mistake for these grants. It isn't, because the Functions
@@ -97,7 +123,7 @@ two confusing failures on the next attempt:
 
 ### What WordPress checks
 
-Fellowship reads Firestore and calls the admin Functions as the same service account.
+Fellowship reads Firestore and calls the admin Functions as the site account.
 A device's ID token is checked by `Devices/FirebaseDevices`, which makes the same
 checks as the rules (a device's token, a live device, not from before it was cut off)
 and then re-runs the member gate, which only WordPress can do. Firebase being
@@ -114,7 +140,7 @@ bad member list shouldn't be able to cut off the fellowship.
 A phone function with no token should answer 401 with `fellowship_unauthenticated`,
 and an admin function with no token should answer a bare 403. A phone function with
 a token but no statement from Fellowship answers `fellowship_bad_attestation`.
-`adminResolve`, called as the service account with `{"memberIds": [<id>],
+`adminResolve`, called as the site account with `{"memberIds": [<id>],
 "audience": "members"}`, lists that member's live devices.
 
 ### SiteGround's anti-bot challenge
@@ -149,7 +175,7 @@ fires. It acts only on actual spend, never on a forecast.
 
 **It runs as its own account**, `budget-kill-switch@`, which needs Billing Account
 Administrator on the whole billing account. That role reaches beyond this project,
-so it is kept away from `firebase-adminsdk-fbsvc@`, whose key is on the WordPress
+so it is kept away from `fellowship-site@`, whose key is on the WordPress
 server. The account has no key, so nothing outside Google can act as it.
 
 It needs setting up by hand, in this order:

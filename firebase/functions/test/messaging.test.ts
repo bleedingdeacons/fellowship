@@ -1,6 +1,6 @@
 import { Timestamp } from 'firebase-admin/firestore';
 import { beforeEach, describe, expect, test } from 'vitest';
-import { adminRemove, adminResolve, adminRevoke, adminRevokeMember, adminSend } from '../src/admin';
+import { adminRemove, adminResolve, adminRevoke, adminRevokeMember, adminSend, adminSetRetention } from '../src/admin';
 import { countReceipt, pushInboxEntry, sweep } from '../src/background';
 import type { Caller, Deps } from '../src/deps';
 import { enrol } from '../src/devices';
@@ -536,6 +536,35 @@ describe('the retention sweep', () => {
     await sweep(deps);
 
     expect((await db.collection('messages').doc('old').get()).exists).toBe(true);
+  });
+
+  test('is told its window by Fellowship', async () => {
+    const { deps } = fake();
+    await db.collection('config').doc('messaging').set({ retentionDays: 180, other: 'kept' });
+
+    await adminSetRetention(deps, { retentionDays: 45 });
+
+    expect((await db.collection('config').doc('messaging').get()).data()).toEqual({ retentionDays: 45, other: 'kept' });
+  });
+
+  test('can be told to keep messages for ever', async () => {
+    const { deps } = fake();
+
+    await adminSetRetention(deps, { retentionDays: 0 });
+
+    expect((await db.collection('config').doc('messaging').get()).get('retentionDays')).toBe(0);
+  });
+
+  test.each([
+    ['nothing', undefined],
+    ['a negative window', -1],
+    ['part of a day', 1.5],
+    ['a string', '45'],
+  ])('refuses %s as a window', async (_name, retentionDays) => {
+    const { deps } = fake();
+
+    expect(await reasonOf(adminSetRetention(deps, { retentionDays }))).toBe('fellowship_bad_request');
+    expect((await db.collection('config').doc('messaging').get()).exists).toBe(false);
   });
 
   test('forgets spent sign-ins once they have expired', async () => {

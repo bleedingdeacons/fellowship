@@ -84,6 +84,16 @@ final class AdminFunctions implements MessageDelivery
         $this->call('adminRemove', ['deviceId' => $deviceId]);
     }
 
+    /**
+     * How many days Firebase keeps messages. Zero keeps them for ever.
+     *
+     * @throws FirebaseUnavailable When the function couldn't be called or refused.
+     */
+    public function setRetention(int $days): void
+    {
+        $this->call('adminSetRetention', ['retentionDays' => $days]);
+    }
+
     public function resolve(array $audience): array
     {
         $answer = $this->call('adminResolve', $audience);

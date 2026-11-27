@@ -4,7 +4,7 @@ import { DecodedIdToken, getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { HttpsError } from 'firebase-functions/v2/https';
 import { verifiedAttestations } from '../src/attestation';
-import { ATTESTATION_AUDIENCE, SERVICE_ACCOUNT } from '../src/config';
+import { ATTESTATION_AUDIENCE, SITE_ACCOUNT } from '../src/config';
 import { Caller, Deps } from '../src/deps';
 
 export const PROJECT = 'demo-fellowship';
@@ -34,7 +34,7 @@ export function newPublicKey(): string {
   return publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
 }
 
-/** Stands in for the service account's key, which only Fellowship and Google hold. */
+/** Stands in for the site account's key, which only Fellowship and Google hold. */
 const signingKey = generateKeyPairSync('rsa', { modulusLength: 2048 });
 export const SIGNING_KID = 'test-key';
 
@@ -47,7 +47,7 @@ export const certificates = async () => ({
 export function sign(claims: Record<string, unknown>, options: { kid?: string; key?: 'genuine' | 'forged' } = {}): string {
   const now = Math.floor(Date.now() / 1000);
   const payload = Object.fromEntries(
-    Object.entries({ iss: SERVICE_ACCOUNT, aud: ATTESTATION_AUDIENCE, iat: now, exp: now + 300, ...claims })
+    Object.entries({ iss: SITE_ACCOUNT, aud: ATTESTATION_AUDIENCE, iat: now, exp: now + 300, ...claims })
       .filter(([, value]) => value !== undefined),
   );
 

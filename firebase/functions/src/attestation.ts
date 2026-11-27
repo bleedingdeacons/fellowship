@@ -1,7 +1,7 @@
 import { createPublicKey, createVerify, KeyObject } from 'node:crypto';
 import * as logger from 'firebase-functions/logger';
 import { HttpsError } from 'firebase-functions/v2/https';
-import { ATTESTATION_AUDIENCE, ATTESTATION_MAX_LIFETIME_SECONDS, CLOCK_SKEW_SECONDS, SERVICE_ACCOUNT } from './config';
+import { ATTESTATION_AUDIENCE, ATTESTATION_MAX_LIFETIME_SECONDS, CLOCK_SKEW_SECONDS, SITE_ACCOUNTS } from './config';
 
 /**
  * What Fellowship has decided, signed, and carried here by the phone.
@@ -12,10 +12,10 @@ import { ATTESTATION_AUDIENCE, ATTESTATION_MAX_LIFETIME_SECONDS, CLOCK_SKEW_SECO
  * Fellowship's `/attest/*` routes and passes on what they sign. Nothing here calls
  * the site.
  *
- * A statement is a JWT signed RS256 by the service account Fellowship holds, which
- * is also who these Functions run as. It is checked against that account's public
- * keys at Google, and it is good for five minutes, for one sign-in or one device:
- * `sub` has to be the caller's own uid.
+ * A statement is a JWT signed RS256 by the service account Fellowship holds. Its
+ * `iss` names that account, and has to be one of the few trusted here: only then
+ * are that account's public keys fetched from Google to check it. It is good for
+ * five minutes, for one sign-in or one device: `sub` has to be the caller's own uid.
  */
 
 export interface MemberStatement {
@@ -38,8 +38,8 @@ export interface Attestations {
   audience(token: unknown, deviceId: string): Promise<AudienceStatement>;
 }
 
-/** Key id to PEM, as Google publishes a service account's certificates. */
-export type Certificates = (refresh: boolean) => Promise<Record<string, string>>;
+/** Key id to PEM, as Google publishes an account's certificates. */
+export type Certificates = (account: string, refresh: boolean) => Promise<Record<string, string>>;
 
 /** More than a fellowship has members, so a list this long is a mistake. */
 const MAX_MEMBER_IDS = 5000;
@@ -47,7 +47,7 @@ const MAX_MEMBER_IDS = 5000;
 export function verifiedAttestations(
   certificates: Certificates,
   now: () => number,
-  issuer: string = SERVICE_ACCOUNT,
+  issuers: readonly string[] = SITE_ACCOUNTS,
   audience: string = ATTESTATION_AUDIENCE,
 ): Attestations {
   async function claims(token: unknown, kind: string, subject: string): Promise<Record<string, unknown>> {
@@ -66,7 +66,14 @@ export function verifiedAttestations(
       throw badAttestation();
     }
 
-    const key = await keyFor(header.kid);
+    // Read before the signature is checked, but only to choose whose keys check it:
+    // an account not on the list is never asked about.
+    const issuer = payload.iss;
+    if (typeof issuer !== 'string' || !issuers.includes(issuer)) {
+      throw badAttestation();
+    }
+
+    const key = await keyFor(issuer, header.kid);
     const signature = Buffer.from(parts[2], 'base64url');
     const genuine = createVerify('RSA-SHA256').update(`${parts[0]}.${parts[1]}`).verify(key, signature);
     if (!genuine) {
@@ -77,8 +84,7 @@ export function verifiedAttestations(
     const { iat, exp } = payload;
 
     if (
-      payload.iss !== issuer
-      || payload.aud !== audience
+      payload.aud !== audience
       || payload.kind !== kind
       || payload.sub !== subject
       || typeof iat !== 'number'
@@ -93,9 +99,9 @@ export function verifiedAttestations(
     return payload;
   }
 
-  async function keyFor(kid: string): Promise<KeyObject> {
-    let pem = (await fetchCertificates(false))[kid];
-    pem ??= (await fetchCertificates(true))[kid];
+  async function keyFor(account: string, kid: string): Promise<KeyObject> {
+    let pem = (await fetchCertificates(account, false))[kid];
+    pem ??= (await fetchCertificates(account, true))[kid];
 
     if (pem === undefined) {
       throw badAttestation();
@@ -104,11 +110,11 @@ export function verifiedAttestations(
     return createPublicKey(pem);
   }
 
-  async function fetchCertificates(refresh: boolean): Promise<Record<string, string>> {
+  async function fetchCertificates(account: string, refresh: boolean): Promise<Record<string, string>> {
     try {
-      return await certificates(refresh);
+      return await certificates(account, refresh);
     } catch (error) {
-      logger.error('Could not fetch the service account\'s public keys', { error: String(error) });
+      logger.error('Could not fetch the service account\'s public keys', { account, error: String(error) });
 
       throw new HttpsError('unavailable', 'Please try again.', { reason: 'fellowship_unavailable' });
     }
@@ -139,33 +145,32 @@ export function verifiedAttestations(
 }
 
 /**
- * The service account's certificates from Google, kept for as long as Google says.
- * Asked again early only when a key id isn't among them, at most once a minute.
+ * An account's certificates from Google, kept for as long as Google says. Asked
+ * again early only when a key id isn't among them, at most once a minute.
  */
-export function googleCertificates(account: string = SERVICE_ACCOUNT): Certificates {
-  const url = `https://www.googleapis.com/robot/v1/metadata/x509/${encodeURIComponent(account)}`;
-  let cached: Record<string, string> | undefined;
-  let fetchedAt = 0;
-  let expiresAt = 0;
+export function googleCertificates(): Certificates {
+  const accounts = new Map<string, { keys: Record<string, string>; fetchedAt: number; expiresAt: number }>();
 
-  return async (refresh) => {
+  return async (account, refresh) => {
     const now = Date.now();
-    const stale = cached === undefined || now >= expiresAt || (refresh && now - fetchedAt > 60_000);
+    const cached = accounts.get(account);
 
-    if (stale) {
-      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-      if (!response.ok) {
-        throw new Error(`Google answered ${response.status}`);
-      }
-
-      const maxAge = /max-age=(\d+)/.exec(response.headers.get('cache-control') ?? '')?.[1];
-
-      cached = (await response.json()) as Record<string, string>;
-      fetchedAt = now;
-      expiresAt = now + (maxAge === undefined ? 300 : Number(maxAge)) * 1000;
+    if (cached !== undefined && now < cached.expiresAt && !(refresh && now - cached.fetchedAt > 60_000)) {
+      return cached.keys;
     }
 
-    return cached as Record<string, string>;
+    const url = `https://www.googleapis.com/robot/v1/metadata/x509/${encodeURIComponent(account)}`;
+    const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) {
+      throw new Error(`Google answered ${response.status}`);
+    }
+
+    const maxAge = /max-age=(\d+)/.exec(response.headers.get('cache-control') ?? '')?.[1];
+    const keys = (await response.json()) as Record<string, string>;
+
+    accounts.set(account, { keys, fetchedAt: now, expiresAt: now + (maxAge === undefined ? 300 : Number(maxAge)) * 1000 });
+
+    return keys;
   };
 }
 

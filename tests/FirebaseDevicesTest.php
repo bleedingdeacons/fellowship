@@ -336,31 +336,41 @@ test('a token response with nothing usable gives no token', function () {
 
 // ── Retention ────────────────────────────────────────────────────
 
-test('the retention setting reaches Firebase', function () {
+test('the retention setting reaches Firebase through its admin Function', function () {
     $settings = new Settings();
     $settings->setRetentionDays(45);
-    FakeWpHttp::pushResponse(200, '{"access_token":"google-access-token"}');
+    FakeWpHttp::pushResponse(200, '{"id_token":"google-id-token"}');
     FakeWpHttp::pushResponse(200, '{}');
 
-    expect((new RetentionSync($settings, test()->firestore))->push())->toBeTrue();
+    expect((new RetentionSync($settings, test()->functions))->push())->toBeTrue();
 
-    expect(FakeWpHttp::sentArgs(1)['method'])->toBe('PATCH');
-    expect(FakeWpHttp::sentUrl(1))->toEndWith('/documents/config/messaging?updateMask.fieldPaths=retentionDays');
-    expect(json_decode(FakeWpHttp::sentArgs(1)['body'], true))
-        ->toBe(['fields' => ['retentionDays' => ['integerValue' => '45']]]);
+    expect(FakeWpHttp::sentUrl(1))->toEndWith('.cloudfunctions.net/adminSetRetention');
+    expect(FakeWpHttp::sentArgs(1)['headers']['Authorization'])->toBe('Bearer google-id-token');
+    expect(json_decode(FakeWpHttp::sentArgs(1)['body'], true))->toBe(['retentionDays' => 45]);
+});
+
+test('the site never writes the retention setting to Firestore itself', function () {
+    FakeWpHttp::pushResponse(200, '{"id_token":"google-id-token"}');
+    FakeWpHttp::pushResponse(200, '{}');
+
+    (new RetentionSync(new Settings(), test()->functions))->push();
+
+    foreach (range(0, FakeWpHttp::callCount() - 1) as $call) {
+        expect(FakeWpHttp::sentUrl($call))->not->toContain('firestore.googleapis.com');
+    }
 });
 
 test('a retention push that fails does not throw', function () {
-    FakeWpHttp::pushResponse(200, '{"access_token":"google-access-token"}');
+    FakeWpHttp::pushResponse(200, '{"id_token":"google-id-token"}');
     FakeWpHttp::pushResponse(503, '{}');
 
-    expect((new RetentionSync(new Settings(), test()->firestore))->push())->toBeFalse();
+    expect((new RetentionSync(new Settings(), test()->functions))->push())->toBeFalse();
 });
 
 test('with no service account there is nothing to push', function () {
     test()->account = null;
 
-    expect((new RetentionSync(new Settings(), test()->firestore))->push())->toBeFalse();
+    expect((new RetentionSync(new Settings(), test()->functions))->push())->toBeFalse();
     expect(FakeWpHttp::callCount())->toBe(0);
 });
 
@@ -393,42 +403,42 @@ test('a deletion that cannot reach Firebase does not throw', function () {
 });
 
 test('the daily check revokes a member the gate refuses, and only them', function () {
+    firebaseDevicesRetentionPushed();
     FakeWpHttp::pushResponse(200, '{"access_token":"google-access-token"}');
-    FakeWpHttp::pushResponse(200, '{}');
     FakeWpHttp::pushResponse(200, firebaseDevicesLive([7, 8, 9, 9]));
     FakeWpHttp::pushResponse(200, '{"id_token":"google-id-token"}');
     FakeWpHttp::pushResponse(200, '{"revoked":2}');
 
     firebaseDevicesWatch()->daily();
 
-    expect(FakeWpHttp::callCount())->toBe(5);
-    expect(json_decode(FakeWpHttp::sentArgs(4)['body'], true))->toBe(['memberId' => 9, 'remove' => false]);
+    expect(FakeWpHttp::callCount())->toBe(6);
+    expect(json_decode(FakeWpHttp::sentArgs(5)['body'], true))->toBe(['memberId' => 9, 'remove' => false]);
 });
 
 test('the daily check changes nothing when everyone is still admitted', function () {
+    firebaseDevicesRetentionPushed();
     FakeWpHttp::pushResponse(200, '{"access_token":"google-access-token"}');
-    FakeWpHttp::pushResponse(200, '{}');
     FakeWpHttp::pushResponse(200, firebaseDevicesLive([7, 8]));
 
     firebaseDevicesWatch()->daily();
 
-    expect(FakeWpHttp::callCount())->toBe(3);
+    expect(FakeWpHttp::callCount())->toBe(4);
 });
 
 test('the daily check will not cut off an implausible share of members', function () {
     // Unity answers with almost nobody for a moment, and revoking is final.
+    firebaseDevicesRetentionPushed();
     FakeWpHttp::pushResponse(200, '{"access_token":"google-access-token"}');
-    FakeWpHttp::pushResponse(200, '{}');
     FakeWpHttp::pushResponse(200, firebaseDevicesLive([101, 102, 103, 104, 105, 106, 7, 8]));
 
     firebaseDevicesWatch()->daily();
 
-    expect(FakeWpHttp::callCount())->toBe(3);
+    expect(FakeWpHttp::callCount())->toBe(4);
 });
 
 test('a few are always allowed, however small the fellowship', function () {
+    firebaseDevicesRetentionPushed();
     FakeWpHttp::pushResponse(200, '{"access_token":"google-access-token"}');
-    FakeWpHttp::pushResponse(200, '{}');
     FakeWpHttp::pushResponse(200, firebaseDevicesLive([9, 101]));
     FakeWpHttp::pushResponse(200, '{"id_token":"google-id-token"}');
     FakeWpHttp::pushResponse(200, '{}');
@@ -436,22 +446,22 @@ test('a few are always allowed, however small the fellowship', function () {
 
     firebaseDevicesWatch()->daily();
 
-    expect(FakeWpHttp::callCount())->toBe(6);
+    expect(FakeWpHttp::callCount())->toBe(7);
 });
 
 test('the daily check does nothing when it cannot read devices', function () {
+    firebaseDevicesRetentionPushed();
     FakeWpHttp::pushResponse(200, '{"access_token":"google-access-token"}');
-    FakeWpHttp::pushResponse(200, '{}');
     FakeWpHttp::pushResponse(503, '{}');
 
     firebaseDevicesWatch()->daily();
 
-    expect(FakeWpHttp::callCount())->toBe(3);
+    expect(FakeWpHttp::callCount())->toBe(4);
 });
 
 test('one refused revocation does not stop the rest', function () {
+    firebaseDevicesRetentionPushed();
     FakeWpHttp::pushResponse(200, '{"access_token":"google-access-token"}');
-    FakeWpHttp::pushResponse(200, '{}');
     FakeWpHttp::pushResponse(200, firebaseDevicesLive([9, 101]));
     FakeWpHttp::pushResponse(200, '{"id_token":"google-id-token"}');
     FakeWpHttp::pushResponse(500, '{"reason":"fellowship_internal"}');
@@ -459,7 +469,7 @@ test('one refused revocation does not stop the rest', function () {
 
     firebaseDevicesWatch()->daily();
 
-    expect(FakeWpHttp::callCount())->toBe(6);
+    expect(FakeWpHttp::callCount())->toBe(7);
 });
 
 test('the admin call says when it fails', function () {
@@ -471,6 +481,13 @@ test('the admin call says when it fails', function () {
 
 // ── Helpers ──────────────────────────────────────────────────────
 
+/** The daily check starts by sending the retention setting: an ID token, then the call. */
+function firebaseDevicesRetentionPushed(): void
+{
+    FakeWpHttp::pushResponse(200, '{"id_token":"google-id-token"}');
+    FakeWpHttp::pushResponse(200, '{}');
+}
+
 function firebaseDevicesWatch(): MemberWatch
 {
     return new MemberWatch(
@@ -478,7 +495,7 @@ function firebaseDevicesWatch(): MemberWatch
         test()->gate,
         test()->firestore,
         test()->functions,
-        new RetentionSync(new Settings(), test()->firestore),
+        new RetentionSync(new Settings(), test()->functions),
     );
 }
 

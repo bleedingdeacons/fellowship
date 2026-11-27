@@ -1,6 +1,7 @@
 import { HttpsError } from 'firebase-functions/v2/https';
 import { describe, expect, test } from 'vitest';
 import { verifiedAttestations } from '../src/attestation';
+import { RETIRING_SITE_ACCOUNT, RUNTIME_ACCOUNT, SITE_ACCOUNT } from '../src/config';
 import { certificates, reasonOf, sign } from './support';
 
 /**
@@ -23,6 +24,10 @@ describe('a membership statement', () => {
     expect(await attestations.member(member(), 'uid-1')).toEqual({ memberId: 7 });
   });
 
+  test('is believed from the account the site held before, while it moves to the new one', async () => {
+    expect(await attestations.member(member({ iss: RETIRING_SITE_ACCOUNT }), 'uid-1')).toEqual({ memberId: 7 });
+  });
+
   test.each([
     ['missing', undefined],
     ['not a string', 42],
@@ -31,6 +36,8 @@ describe('a membership statement', () => {
     ['about an audience', member({ kind: 'audience' })],
     ['for another project', member({ aud: 'fellowship-functions:somebody-else' })],
     ['from another account', member({ iss: 'someone@elsewhere.iam.gserviceaccount.com' })],
+    ['from the account the Functions run as', member({ iss: RUNTIME_ACCOUNT })],
+    ['from nobody', member({ iss: undefined })],
     ['expired', member({ iat: now - 900, exp: now - 600 })],
     ['from the future', member({ iat: now + 600, exp: now + 900 })],
     ['longer-lived than Fellowship signs', member({ exp: now + 3600 })],
@@ -81,9 +88,37 @@ describe('an audience statement', () => {
 });
 
 describe('Google\'s keys', () => {
+  test('are those of the account the statement names', async () => {
+    const asked: string[] = [];
+    const recording = verifiedAttestations(async (account) => {
+      asked.push(account);
+
+      return certificates();
+    }, () => Date.now());
+
+    await recording.member(member(), 'uid-1');
+    await recording.member(member({ iss: RETIRING_SITE_ACCOUNT }), 'uid-1');
+
+    expect(asked).toEqual([SITE_ACCOUNT, RETIRING_SITE_ACCOUNT]);
+  });
+
+  test('are never asked for when the account is not trusted', async () => {
+    const asked: string[] = [];
+    const recording = verifiedAttestations(async (account) => {
+      asked.push(account);
+
+      return certificates();
+    }, () => Date.now());
+
+    const token = member({ iss: 'someone@elsewhere.iam.gserviceaccount.com' });
+
+    expect(await reasonOf(recording.member(token, 'uid-1'))).toBe('fellowship_bad_attestation');
+    expect(asked).toEqual([]);
+  });
+
   test('are asked again once when a key id is new', async () => {
     const asked: boolean[] = [];
-    const rotating = verifiedAttestations(async (refresh) => {
+    const rotating = verifiedAttestations(async (_account, refresh) => {
       asked.push(refresh);
 
       return refresh ? certificates() : {};

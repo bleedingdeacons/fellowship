@@ -82,9 +82,9 @@ final class SettingsPage
 
         echo '<h2>' . esc_html__('Push notifications', 'fellowship') . '</h2>';
         echo '<table class="form-table" role="presentation"><tbody>';
-        echo '<tr><th scope="row"><label for="fcm_service_account">' . esc_html__('Firebase service account', 'fellowship') . '</label></th><td>';
+        echo '<tr><th scope="row"><label for="fcm_service_account">' . esc_html__('Site service account', 'fellowship') . '</label></th><td>';
         echo '<textarea name="fcm_service_account" id="fcm_service_account" rows="6" class="large-text code" placeholder="'
-            . esc_attr__('Paste the service-account JSON to replace what is stored', 'fellowship') . '"></textarea>';
+            . esc_attr__('Paste the fellowship-site service-account JSON to replace what is stored', 'fellowship') . '"></textarea>';
         echo '<p class="description">' . esc_html($this->fcmStatus()) . '</p>';
         echo '<label><input type="checkbox" name="clear_fcm" value="1"> '
             . esc_html__('Clear the stored service account', 'fellowship') . '</label>';
@@ -226,8 +226,9 @@ final class SettingsPage
         }
 
         return sprintf(
-            /* translators: %s: Firebase project id */
-            __('A service account for project "%s" is stored.', 'fellowship'),
+            /* translators: 1: service account email, 2: Firebase project id */
+            __('The service account %1$s for project "%2$s" is stored.', 'fellowship'),
+            $account->clientEmail,
             $account->projectId,
         );
     }

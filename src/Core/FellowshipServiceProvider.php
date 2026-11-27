@@ -360,7 +360,7 @@ final class FellowshipServiceProvider
         });
         $container->register(RetentionSync::class, fn(ContainerInterface $c) => new RetentionSync(
             $c->get(Settings::class),
-            $c->get(FirestoreClient::class),
+            $c->get(AdminFunctions::class),
         ));
         $container->register(MemberWatch::class, fn(ContainerInterface $c) => new MemberWatch(
             $c->get(MemberRepository::class),

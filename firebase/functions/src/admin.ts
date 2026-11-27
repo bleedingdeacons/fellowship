@@ -6,7 +6,8 @@ import { Audience, deliver, reachOf, summary } from './messaging';
 
 /**
  * What Fellowship's admin screens call. Only its service account can invoke
- * these, which Cloud Run enforces before any of this runs.
+ * these, which Cloud Run enforces before any of this runs. That account can read
+ * Firestore but not write it, so every change Fellowship makes comes through here.
  *
  * Compose seals in PHP, so these never see a message either. Fellowship works out
  * who it reaches, and sends the member ids and the kind of audience; with only
@@ -58,6 +59,21 @@ export async function adminSend(deps: Deps, data: Data) {
   const senderMemberId = Number.isInteger(data.senderMemberId) ? (data.senderMemberId as number) : 0;
 
   return deliver(deps, adminAudience(data), senderMemberId, data.id, data.envelopes);
+}
+
+/**
+ * How long messages are kept, from Fellowship's settings. The sweep reads it, and
+ * zero keeps them for ever.
+ */
+export async function adminSetRetention(deps: Deps, data: Data) {
+  const days = data.retentionDays;
+  if (typeof days !== 'number' || !Number.isSafeInteger(days) || days < 0) {
+    throw new HttpsError('invalid-argument', 'How many days?', { reason: 'fellowship_bad_request' });
+  }
+
+  await deps.db.collection('config').doc('messaging').set({ retentionDays: days }, { merge: true });
+
+  return {};
 }
 
 function adminAudience(data: Data): Audience {
