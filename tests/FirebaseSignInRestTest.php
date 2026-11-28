@@ -164,17 +164,6 @@ test('a native sign-in as somebody else cannot replace this handset key', functi
     expect($response->get_error_code())->toBe('fellowship_wrong_member');
 });
 
-test('both routes declare the token unsanitised', function () {
-    firebaseRestController()->registerRoutes();
-
-    foreach (WpState::$restRoutes as $route) {
-        if (in_array($route['route'], ['/auth/device/exchange', '/auth/device/key'], true)) {
-            expect($route['args']['args'])->toHaveKey('firebase_token');
-            expect($route['args']['args']['firebase_token'])->not->toHaveKey('sanitize_callback');
-        }
-    }
-});
-
 function firebaseRestController(bool $withFirebase = true): DeviceAuthController
 {
     $gate = new MemberGate(test()->members);

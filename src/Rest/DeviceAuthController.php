@@ -131,27 +131,11 @@ final class DeviceAuthController
 
     public function registerRoutes(): void
     {
-        register_rest_route(self::NAMESPACE, '/auth/device/start', [
-            'methods'             => WP_REST_Server::READABLE,
-            'callback'            => [$this, 'start'],
-            'permission_callback' => '__return_true',
-            'args'                => [
-                'provider' => [
-                    'type'              => 'string',
-                    'required'          => true,
-                    'sanitize_callback' => 'sanitize_key',
-                ],
-                // Deliberately NOT sanitize_text_field: it strips
-                // characters a URI legitimately contains. The value is
-                // validated as a whole against the allow-list instead,
-                // which is a stronger check than sanitising parts of it.
-                'redirect_uri' => [
-                    'type'     => 'string',
-                    'required' => false,
-                ],
-            ],
-        ]);
-
+        // Only what is still called. Link signs in through Firebase now, so the
+        // old device routes (start, exchange, password, push, key, key-fault,
+        // session, sign-out) are not registered: each was a way in that nothing
+        // uses. The callback stays for other audiences' browser sign-ins, such
+        // as Freedom's, and the password routes for setting a Link password.
         register_rest_route(self::NAMESPACE, '/auth/callback', [
             'methods'             => WP_REST_Server::READABLE,
             'callback'            => [$this, 'callback'],
@@ -160,53 +144,6 @@ final class DeviceAuthController
                 'code'  => ['type' => 'string', 'required' => false],
                 'state' => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
                 'error' => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
-            ],
-        ]);
-
-        register_rest_route(self::NAMESPACE, '/auth/device/exchange', [
-            'methods'             => WP_REST_Server::CREATABLE,
-            'callback'            => [$this, 'exchange'],
-            'permission_callback' => '__return_true',
-            'args'                => [
-                // The Google path sends this: the one-time device code
-                // the browser carried back into the app.
-                'code' => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
-                // The Apple path sends these instead.
-                'state'    => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
-                'id_token' => ['type' => 'string', 'required' => false],
-                // And native Google sign-in sends this alone. Not
-                // sanitized: a JWT is checked byte for byte against its
-                // signature, so altering it could only break a good one.
-                'firebase_token' => ['type' => 'string', 'required' => false],
-                // Not sanitized as text: base64 survives it, but a future
-                // key format need not, and the value is validated properly
-                // by DevicePublicKey either way.
-                'public_key'    => ['type' => 'string', 'required' => true],
-                'label'         => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
-                'platform'      => ['type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_key'],
-                'push_provider' => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_key'],
-                'push_token'    => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
-            ],
-        ]);
-
-        // Password sign-in. Enrols exactly as the OAuth paths do; only
-        // the proof differs.
-        register_rest_route(self::NAMESPACE, '/auth/device/password', [
-            'methods'             => WP_REST_Server::CREATABLE,
-            'callback'            => [$this, 'password'],
-            'permission_callback' => '__return_true',
-            'args'                => [
-                'email' => ['type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_email'],
-                // Deliberately not sanitized. A password is an arbitrary
-                // string of printable characters, spaces and Unicode
-                // included, and WordPress's sanitisers would silently
-                // alter a chosen password into one that never matches.
-                'password'      => ['type' => 'string', 'required' => true],
-                'public_key'    => ['type' => 'string', 'required' => true],
-                'label'         => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
-                'platform'      => ['type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_key'],
-                'push_provider' => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_key'],
-                'push_token'    => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
             ],
         ]);
 
@@ -229,55 +166,6 @@ final class DeviceAuthController
                 'token'    => ['type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_text_field'],
                 'password' => ['type' => 'string', 'required' => true],
             ],
-        ]);
-
-        register_rest_route(self::NAMESPACE, '/auth/device/push', [
-            'methods'             => WP_REST_Server::CREATABLE,
-            'callback'            => [$this, 'updatePush'],
-            'permission_callback' => '__return_true',
-            'args'                => [
-                'push_provider' => ['type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_key'],
-                'push_token'    => ['type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_text_field'],
-            ],
-        ]);
-
-        register_rest_route(self::NAMESPACE, '/auth/device/key', [
-            'methods'             => WP_REST_Server::CREATABLE,
-            'callback'            => [$this, 'rotateKey'],
-            'permission_callback' => '__return_true',
-            'args'                => [
-                'public_key' => ['type' => 'string', 'required' => true],
-                // And a credential, of whichever shape this member signs
-                // in with. The same three the exchange accepts: a device
-                // token alone no longer rotates a key.
-                'code'     => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
-                'state'    => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field'],
-                'id_token' => ['type' => 'string', 'required' => false],
-                'firebase_token' => ['type' => 'string', 'required' => false],
-                'email'    => ['type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_email'],
-                // Deliberately not sanitized, as on the password route: a
-                // password is an arbitrary string and sanitising it would
-                // quietly alter one into a value that never matches.
-                'password' => ['type' => 'string', 'required' => false],
-            ],
-        ]);
-
-        register_rest_route(self::NAMESPACE, '/auth/device/key-fault', [
-            'methods'             => WP_REST_Server::CREATABLE,
-            'callback'            => [$this, 'reportKeyFault'],
-            'permission_callback' => '__return_true',
-        ]);
-
-        register_rest_route(self::NAMESPACE, '/auth/device/session', [
-            'methods'             => WP_REST_Server::READABLE,
-            'callback'            => [$this, 'session'],
-            'permission_callback' => '__return_true',
-        ]);
-
-        register_rest_route(self::NAMESPACE, '/auth/device', [
-            'methods'             => WP_REST_Server::DELETABLE,
-            'callback'            => [$this, 'signOut'],
-            'permission_callback' => '__return_true',
         ]);
     }
 
@@ -381,9 +269,11 @@ final class DeviceAuthController
         }
 
         // Whoever started this sign-in decides where its code may go and
-        // who may have one -- Link, or another plugin that registered an
-        // audience with the IdentityBroker. See SignInAudience.
-        $audience = $this->audiences->get($stored['audience']);
+        // who may have one: another plugin that registered an audience with
+        // the IdentityBroker. See SignInAudience. Never Link any more: it
+        // signs in through Firebase, and handing a code to link:// would give
+        // it to whichever app on the phone claimed that scheme.
+        $audience = $stored['audience'] === LinkAudience::NAME ? null : $this->audiences->get($stored['audience']);
         if ($audience === null) {
             return $this->refused(
                 new WP_Error('fellowship_bad_state', 'That sign-in has expired. Please try again.', ['status' => 400]),

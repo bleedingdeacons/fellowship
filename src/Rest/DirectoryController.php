@@ -9,7 +9,6 @@ if (!defined('ABSPATH')) {
 }
 
 use Fellowship\Core\Settings;
-use Fellowship\Devices\CurrentDevice;
 use Fellowship\Devices\DeviceResolution;
 use Fellowship\Devices\FirebaseDeviceResolution;
 use Fellowship\Devices\FirebaseDevices;
@@ -44,7 +43,6 @@ final class DirectoryController
     public const NAMESPACE = 'fellowship/v1';
 
     public function __construct(
-        private readonly CurrentDevice $currentDevice,
         private readonly DirectoryPresenter $presenter,
         private readonly Settings $settings,
         private readonly AuditLogger $auditLogger,
@@ -77,33 +75,10 @@ final class DirectoryController
             return $this->firebaseIndex($firebase);
         }
 
-        $resolved = $this->currentDevice->resolve($request);
-        $device = $resolved->device;
-        if ($device === null) {
-            // Same split as the inbox, for the same reason: a caller
-            // holding a live token is owed the one refusal it can act on.
-            return $resolved->refusal === DeviceResolution::NOT_A_MEMBER
-                ? new WP_Error(
-                    'fellowship_not_a_member',
-                    'That address no longer matches a member record.',
-                    ['status' => 403],
-                )
-                : new WP_Error('fellowship_unauthenticated', 'This device is not signed in.', ['status' => 401]);
-        }
-
-        $directory = $this->presenter->forApp($this->settings->allowsCommitteeSendFromApp());
-
-        $this->auditLogger->log(
-            AuditLogger::ACTION_VIEW,
-            AuditLogger::ENTITY_MEMBER,
-            $device->memberId,
-            'directory',
-            'Link directory read;members:' . count($directory['members'])
-                . ';committees:' . count($directory['committees'])
-                . ';device:' . $device->id,
-        );
-
-        return new WP_REST_Response($directory, 200);
+        // Only a Firebase ID token reads the directory. The old WordPress device
+        // tokens are refused: Link no longer has one, and the only ones still
+        // issued are another audience's, such as Register's tablets.
+        return new WP_Error('fellowship_unauthenticated', 'This device is not signed in.', ['status' => 401]);
     }
 
     /** The outcome when this request carries a Firebase ID token, or null when it doesn't. */

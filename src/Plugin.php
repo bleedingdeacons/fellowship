@@ -26,7 +26,6 @@ use Fellowship\Messaging\RecipientRepository;
 use Fellowship\Rest\DeviceAuthController;
 use Fellowship\Rest\DirectoryController;
 use Fellowship\Rest\FirebaseIdentityController;
-use Fellowship\Rest\MessageController;
 use Fellowship\Rest\AttestationController;
 use Psr\Container\ContainerInterface;
 use RuntimeException;
@@ -94,7 +93,8 @@ final class Plugin
         self::$initialized = true;
 
         $container->get(DeviceAuthController::class)->register();
-        $container->get(MessageController::class)->register();
+        // MessageController is not registered: Link sends through Firebase, and
+        // its routes stored messages in plain text and skipped the sending limits.
         $container->get(DirectoryController::class)->register();
         $container->get(FirebaseIdentityController::class)->register();
         $container->get(AttestationController::class)->register();
