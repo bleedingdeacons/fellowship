@@ -3,8 +3,8 @@ Contributors: thebleedingdeacons
 Requires at least: 6.1
 Tested up to: 7.1.1
 Requires PHP: 8.4
-Stable tag: 1.19.8
-Build date: 2026/11/28 16:21:45
+Stable tag: 1.19.9
+Build date: 2026/11/28 16:53:21
 License: MIT (Modified)
 
 Server side of the Link messaging app. Decides which members may use Link, signs what each phone carries to Link's Firebase back end, and runs Link's password sign-in and admin screens. Requires Unity and Scrutiny.
