@@ -11,239 +11,110 @@
 
 The WordPress half of a messaging system for an AA intergroup. The other
 half is [Link](https://github.com/bleedingdeacons/link), a .NET MAUI app
-for Android and iOS.
+for Android and iOS, and between them sits a Firebase project: Firestore,
+Firebase Auth, FCM and a set of Cloud Functions, in [`firebase/`](firebase/README.md).
 
-Fellowship holds the messages and pushes them. Link reads them.
+**Fellowship decides who may use Link; Firebase carries the messages.** The
+member list stays in WordPress, in Unity, and never leaves it. Fellowship
+answers the questions only it can, as short signed statements a phone carries
+to the Functions: is this sign-in a member, and which members does this
+message reach. It also runs Link's password sign-in, the admin screens
+(Devices, Messages, Compose) and the member watch that cuts off devices whose
+member has gone.
 
 It is built on **Unity** for member and committee data and **Scrutiny**
-for GDPR audit logging, and it is deliberately shaped like
-**Reach**/**Hand** — the same suite's helpline alerting pair — because
-that pair already solved device enrolment, sealed push payloads and
-device revocation, and there was nothing to gain from solving them
-differently.
+for GDPR audit logging.
 
 ## What it does
 
-A member installs Link and signs in with Google or Apple. Fellowship
-verifies the ID token against the provider's published keys, looks the
-verified address up in Unity, and enrols the handset only if the address
-belongs to a member. OAuth proves the person controls an address; Unity
-decides whether that address is a member's. Neither half is sufficient
-alone, which is why enrolment needs both.
+A member installs Link and signs in: with Google or Apple through Firebase
+Auth, or with a Unity password through `/auth/identity/password`, which
+answers a Firebase custom token. The phone then asks `/attest/member` for a
+statement that this sign-in is a member, generates a keypair in its platform
+keystore, and enrols with the `enrol` Function, sending the statement and the
+public half. The private half never leaves the device.
 
-At the same moment the handset generates a keypair in its platform
-keystore and sends the public half. The private half never leaves the
-device.
-
-Messages are addressed to named members or to a whole committee, from the
-app or from WordPress admin, and can be replied to. A message written in
-WordPress admin is sent under the name of the member who wrote it, matched
-on their WordPress email, so a reply from the app goes back to them; a
-WordPress user who is not a member sends as the intergroup, under the
-site's name.
+Messages are addressed to named members, a committee or the GSRs, from the
+app or from WordPress admin. A phone asks `/attest/audience` who a message
+reaches, gets their devices' public keys from the Functions, seals one
+envelope per device and hands them to `sendMessage`. A message written in
+WordPress admin is sealed here in the same way and sent through `adminSend`,
+under the name of the member who wrote it when the WordPress user is one, so
+a reply from the app goes back to them.
 
 ## The encryption, stated precisely
 
-**Fellowship can read your messages.** They are stored in plain text in
-`wp_fellowship_messages`. This is not end-to-end encryption and must not
-be described as such.
+**Messages are end-to-end encrypted.** Each is sealed on the sending phone,
+or in WordPress for an admin Compose, to each recipient device's public key.
+Neither Fellowship nor Firebase holds a private key, so neither can read a
+message. Compose sees the text only because somebody typed it there, and
+doesn't keep it.
 
-That was a decision, not an oversight. Server-readable bodies are what
-make three things possible: an admin composing to a committee, the
-message log, and Scrutiny auditing what was sent to whom. True
-end-to-end would have cost all three, and would additionally have meant
-that a lost phone loses a member's whole history with no recovery.
+**Scrutiny records an admin send's subject, never its body.** An audit entry
+saying only that a message reached eleven people can't answer the question it
+exists to answer, *which* message. A subject is member-typed text and may
+carry personal data, so it is treated as hostile: delimiters stripped,
+newlines flattened, length capped. See `Messaging\AuditDetail`.
 
-**Scrutiny records the subject, and never the body.** An audit entry
-saying only that a message reached eleven people cannot answer the
-question it exists to answer — *which* message — without opening the
-message table, which is exactly what an auditor reviewing access should
-not have to do. The subject is the shortest thing that identifies a
-message and the line its recipients saw first; the body is where the
-substance is, and it is already in a table with its own retention
-window.
-
-A subject is member-typed text and may carry personal data, so this
-relaxes the AuditLogger contract's "no raw PII in the detail" for
-exactly one field, deliberately. What follows from that: the subject is
-treated as hostile text — delimiters stripped so it cannot forge a
-field, newlines flattened, length capped so the structured fields
-always survive the column — and it inherits the audit log's retention
-rather than the message table's. Both send paths, admin and handset,
-build their detail through `Messaging\AuditDetail`, so they cannot
-disagree about it.
-
-**Passwords are Unity's, not Fellowship's.** Fellowship kept its own
-`wp_fellowship_credentials` table and Reach kept an identical
-`wp_reach_credentials` one, so a member who set a password in one could
-not sign into the other with it and a reset in one left the other stale
-with nothing to say so. A member has one password. It lives in
-`wp_unity_credentials` now. Unity declares the contract,
-`Unity\Auth\Interfaces\PasswordCredentialRepository`, and binds nothing
-to it as it does for every repository; tsml-for-unity supplies the table
-and the implementation, and migrates the old rows on the first page load
-after the upgrade.
-
-**What the server does not hold is any handset's private key.** It is
-generated on the device at enrolment and only the public half is sent, so
-a payload Fellowship sealed and pushed yesterday is one it cannot open
-today — not with the database, and not with `wp-config.php` either. That
-is the one respect in which this is stronger than Reach, which issues its
-handsets a symmetric key and keeps a copy.
-
-What the encryption buys is that a message is unreadable everywhere
-between this server and the handset it is addressed to:
-
-| Where | Protected by |
-| --- | --- |
-| Browser/app to server | HTTPS, enforced — every route refuses a plaintext request |
-| Server at rest | Ordinary database protection, plus a retention window |
-| Server to Google to handset | Sealed to that handset's own public key |
-| Notification tray / lock screen | Nothing readable is there — the tray shows "New message" |
-
-Because the retention window is the only thing limiting how long
-readable personal data accumulates, it is a real control rather than
-housekeeping. It defaults to 180 days.
+**Passwords are Unity's, not Fellowship's.** A member has one password, in
+`wp_unity_credentials`. Unity declares the contract and tsml-for-unity
+supplies the table.
 
 ### How a message is sealed
 
-RSA-2048 with OAEP encrypts 214 bytes — less than one paragraph — so the
-scheme is hybrid:
+RSA-2048 with OAEP encrypts 214 bytes, so the scheme is hybrid:
 
 1. A fresh 32-byte content key per message per device.
 2. The payload JSON is gzipped, then sealed with AES-256-GCM under that
-   key. Envelope: 12-byte nonce, 16-byte tag, ciphertext, base64. Field
-   `p`.
+   key. Envelope: 12-byte nonce, 16-byte tag, ciphertext, base64. Field `p`.
 3. The content key is encrypted to the device's public key with RSA-OAEP,
    base64. Field `k`.
 
-A fresh key every time is not caution for its own sake: GCM fails
-catastrophically if a key and nonce are ever reused, and the surest way
-never to reuse one is never to keep one.
-
 **OAEP uses SHA-1, deliberately.** PHP's `openssl_public_encrypt()` with
-`OPENSSL_PKCS1_OAEP_PADDING` uses SHA-1 for the OAEP hash and MGF1, with
-no way to request SHA-256 through the API PHP exposes. Link matches it
-with `RSAEncryptionPadding.OaepSHA1`. SHA-1's collision weakness is a
-*signature* problem; OAEP relies on preimage resistance, which is intact.
-Choosing SHA-256 here and finding the mismatch on a handset — where the
-symptom is a message that arrives and will not open — is the more
-expensive mistake.
+`OPENSSL_PKCS1_OAEP_PADDING` uses SHA-1 for the OAEP hash and MGF1, and Link
+matches it with `RSAEncryptionPadding.OaepSHA1`. SHA-1's collision weakness
+is a signature problem; OAEP relies on preimage resistance, which is intact.
 
-The gzip is load-bearing. FCM caps a data message at 4KB and the wrapped
-key alone is 344 base64 characters of it. `MessageRequest`'s caps are
-what make the worst case a known quantity, and
-`MessageSealerTest::testTheWorstCasePayloadTheApiAcceptsFitsInsideAnFcmDataMessage`
-is what will tell you if a new field breaks it.
+The gzip is load-bearing. FCM caps a data message at 4KB and the wrapped key
+alone is 344 base64 characters of it. `MessageRequest`'s caps keep the worst
+case a known size, and `MessageSealerTest` will tell you if a new field breaks
+it. Everything is inside the envelope: subject, body, sender, id.
 
-**Everything is inside the envelope** — subject, body, sender, id.
-Nothing travels beside it for the handset to read first, because it does
-not need anything first: it holds one key, it opens one blob, and what is
-inside tells it what it has. Reach arrived at this the hard way, having
-once left the alert id and priority in the clear.
-
-### How that is actually verified
-
-The format is written out twice on purpose, and **each side's test does
-the other side's job**. `MessageSealerTest` here generates a keypair,
-seals with the shipping sealer, and then opens the envelope in PHP the
-way the app opens one. In the Link solution, `Sealing.cs` is this sealer
-transcribed into C# and `MessagePayloadCipherTests` opens what it
-produces with the shipping cipher. Drift on either side turns the test on
-the opposite side red.
-
-No fixture is committed, and that is deliberate: a fixture would have to
-carry the private key that opens it, and a private key in a public
-repository is what push protection blocks and Semgrep flags.
-
-## Push is the fast path, not the reliable one
-
-Every message is stored before any push is attempted, and Link polls as
-well as listening. A phone in a tunnel catches up when it surfaces; a
-handset whose FCM token silently rotated still gets its messages; a site
-with no Firebase service account configured still delivers everything.
-
-When FCM answers that a token is `UNREGISTERED` (the app was reinstalled,
-its data cleared, or a rotation never reached the server), Fellowship
-clears that token from the device row instead of trying it again on every
-message. The handset then shows in the admin list and the log as "no push
-token yet", which is accurate, until its next launch or rotation reports a
-live token. The clear only applies while the row still holds the dead
-token, so a fresh one reported mid-send is not thrown away. A bare 404 is
-not read as a dead token: a wrong project id produces one as well.
-
-The polling route returns the *same sealed envelope* the push carries,
-rather than plain JSON over TLS. It would have been easy to do the
-latter — but then one message exists in two forms and the app needs two
-readers, and how a message arrived becomes something the app has to care
-about.
+The format is written out twice on purpose, and **each side's test does the
+other side's job**. `MessageSealerTest` here opens what the sealer produces
+the way the app does; Link's `MessagePayloadCipherTests` opens what a C#
+transcription of this sealer produces. Drift on either side turns the other
+side's test red.
 
 ## Identity, and what the app never learns
 
-The directory Link shows when composing contains **anonymous names,
-opaque member ids, a home group and whether the member is a GSR**. No
-email addresses, no telephone numbers. A member picks a recipient and
-Fellowship does the addressing server-side, so a stolen handset yields a
-list of first names rather than the intergroup's contact database — and a
-message cannot be addressed to a non-member by inventing an address.
+The directory Link shows when composing (`GET /directory`, with a Firebase
+ID token) contains **anonymous names, opaque member ids, a home group,
+whether the member is a GSR, and whether they have Link**. No email
+addresses, no telephone numbers, so a stolen handset yields a list of first
+names rather than the intergroup's contact database.
 
-The home group is there because a first name identifies nobody in an
-intergroup with several Daves, and GSR because it is the reason a member
-is most often written to. Neither is a contact detail, and a test asserts
-that adding them did not become a way round the paragraph above.
+Everybody the gate admits is listed, whether or not they use Link; a member
+without a live device on Firebase is shown but can't be chosen.
 
-**Everybody authorised is listed, whether or not they use Link.** The
-only test is the gate below — has this member a usable email address,
-that is, *could* they enrol — not whether they have. Someone who has
-never installed the app can still be written to; the message waits and
-arrives when they enrol. A list that showed only enrolled handsets would
-change shape as people came and went, and would quietly make somebody
-unreachable for the ordinary reason that they had not got round to
-installing anything.
+`MemberGate` is the single answer to "may this person use Link?": a Unity
+member with a usable personal email. It is consulted at sign-in, when a
+statement is signed, when an audience is resolved, and by the member watch.
 
-`showMemberProfile()` plays no part in messaging: a member is listed
-whatever it says.
+## Devices, revoking and removing
 
-`MemberGate` is the single answer to "may this person use Link?",
-consulted at enrolment, on every authenticated request, when resolving an
-audience, and when fanning out a push. One object rather than a rule
-written out four times, because a gate that disagreed with itself between
-enrolment and delivery would enrol people who never receive anything.
+Devices live in Firestore. The Devices screen reads them there and acts
+through the admin Functions:
 
-The gate is deliberately thin — a Unity member with a valid personal
-email. Link is the fellowship's address book, not a privileged tool.
+- *Revoke* (`adminRevoke`) is the answer to a lost phone: the device stops
+  working at once and its record stays.
+- *Remove* (`adminRemove`) deletes the record and its inbox, for test
+  enrolments and erasure requests.
 
-## Revoke and remove are different
-
-*Revoke* is the answer to a lost phone: the token stops working
-immediately — the repository's lookup refuses revoked rows, so it is
-indistinguishable from an unknown token — and the row stays, so the
-Devices screen can still show the device existed and when it was cut off.
-
-*Remove* deletes the row. It is for test enrolments and erasure requests,
-and it destroys the evidence the device ever existed. It is offered
-second and confirmed, because revoke is almost always what was meant.
-
-A handset can also revoke itself, which is what signing out does.
-
-## Replacing a key, and the key-fault report
-
-A platform invalidates a keystore entry for reasons that have nothing to
-do with this app: the screen lock changed, a backup was restored,
-biometrics were re-enrolled. Making that a full re-enrolment would cost
-the member their place in the device list and tell them nothing useful,
-so `POST /auth/device/key` lets a handset present a new public key and
-keep its row.
-
-**Messages already sent stay unreadable, and here that is a fact rather
-than a policy.** They were sealed to content keys wrapped to the old
-public key, and this server never held the private half — so it could not
-re-seal them if it wanted to. The app clears what it cannot open.
-
-`POST /auth/device/key-fault` is the handset saying it cannot open its
-messages. It has to be reported rather than inferred: from the server a
-handset with a lost private key looks perfectly healthy right up until a
-message it cannot read. The Devices screen shows it in red.
+The member watch (`Sync\MemberWatch`) removes a deleted member's devices at
+once, and each day revokes the devices of anyone the gate now refuses, unless
+that would be an implausible share of members. Signing out of Link revokes
+that phone through the `signOut` Function.
 
 ## REST API
 
@@ -251,79 +122,25 @@ Everything is under `fellowship/v1` and everything requires HTTPS.
 
 | Route | Auth | What |
 | --- | --- | --- |
-| `GET /auth/device/start` | none | Begin sign-in. Answers an authorization URL (Google) or a nonce (Apple). |
-| `GET /auth/callback` | none | Browser leg. Redirects into the app with a one-time code. |
-| `POST /auth/device/exchange` | none | Register the public key, mint the device token. |
-| `POST /auth/device/push` | device | Update the FCM registration token. |
-| `POST /auth/device/key` | device | Present a replacement public key. |
-| `POST /auth/device/key-fault` | device | "I cannot open my messages." |
-| `GET /auth/device/session` | device | Who am I. |
-| `DELETE /auth/device` | device | Sign out (self-revoke). |
-| `GET /messages?since=&limit=` | device | Sealed inbox above `since`, oldest first, paged by message id; `more` says whether another page is waiting. |
-| `POST /messages` | device | Send. |
-| `POST /messages/{id}/read` | device | Mark read. Marks it received too, if it was not. |
-| `POST /messages/received` | device | `ids`: messages this handset has opened. Ids not addressed to the member are ignored. |
-| `GET /messages/receipts` | device | `ids`: the member's own sent messages. Answers recipients, received and read counts for each; ids they did not send are left out. |
-| `GET /directory` | device, or a device's Firebase ID token | Address book. |
-
-Four more are for Link on Firebase:
-
-| Route | Auth | What |
-| --- | --- | --- |
-| `GET /backend` | none | Which back end Link should use here: `fellowship`, or `firebase` once a site is switched. |
 | `POST /auth/identity/password` | none | Check a Unity password and answer a five-minute Firebase custom token, uid `pw_<member id>`. Enrols nothing. |
+| `POST /auth/password/request` | none | Email a set-or-reset code. Answers the same whoever the address belongs to. |
+| `POST /auth/password/complete` | none | Set the password with that code. |
 | `POST /attest/member` | a Firebase sign-in under five minutes old | Answers `attestation`: this sign-in is this member. For `enrol`, `replaceKey` and `takeOverDevice`. |
 | `POST /attest/audience` | a live device's Firebase ID token | `memberIds`, `committees` or `gsrs`: answers `attestation`, the member ids the message reaches, sender left out. For `resolveAudience` and `sendMessage`. |
+| `GET /directory` | a live device's Firebase ID token | Address book. |
+| `GET /auth/callback` | none | The browser leg of another plugin's sign-in; see below. |
 
-**The member list stays in WordPress**, so Link's Cloud Functions need its
-answers without holding a copy. They can't ask for them: SiteGround challenges
-calls from Google Cloud's shared addresses. So the phone asks here and carries
-the answer to them, as a JWT signed RS256 by the service account under
-Settings, `aud` `fellowship-functions:<project>`, five minutes long, and naming
-the sign-in or device it was issued to. The Functions check it against the
-account's public keys at Google and call nobody. Google and Apple sign-ins need
-a verified address. A password sign-in is the custom token above.
+**Why the phone carries the answers.** The Functions need WordPress's answers
+without holding a copy of the member list, and can't ask for them: SiteGround
+challenges calls from Google Cloud's shared addresses. So the phone asks here
+and carries the answer, as a JWT signed RS256 by the site's service account,
+`aud` `fellowship-functions:<project>`, five minutes long, naming the sign-in
+or device it was issued to. The Functions check it against that account's
+public keys at Google.
 
-Two sign-in flows meet at one exchange:
-
-**Google (server-side).** `start` → browser → `callback` exchanges the
-authorization code with Google, verifies the ID token, and redirects to
-`link://auth?code=…` with a one-time device code → `exchange` spends it.
-The browser is never trusted with the device token itself: it would land
-in browser history, in any redirect logging in between, and in the app's
-launch intent. The code is worthless two minutes later and worthless once
-used.
-
-**Apple (client-side).** `start` → the app runs the platform sheet with
-the nonce it was given → `exchange` with the state and the ID token.
-There is no browser leg and no client secret.
-
-**Google, native (Android and iOS).** No `start`. The app shows the
-platform's own account picker (Credential Manager, GoogleSignIn), signs in
-to Firebase Auth with the Google credential, and sends the Firebase ID token
-to `exchange` as `firebase_token` — or to `key`, to prove the member before
-a replacement key. The token must be for the Firebase project named by the
-FCM service account under Settings, signed in with `google.com`, under five
-minutes old, and is accepted once. With no service account the route answers
-503 and Link falls back to the browser leg, which stays for that, for
-Microsoft and Facebook, and for builds older than this.
-
-## Link's log shipping
-
-Not here any more. Until 2026-09-30 Link's Better Stack endpoint and source
-token were set under *Link logging* on this plugin's settings screen and
-handed to signed-in handsets by `GET /logging`. Link now takes them from
-the [Freedom](https://github.com/bleedingdeacons/freedom) plugin: an
-application called `link`, keys `betterstack.endpoint` and
-`betterstack.source_token`, signed in to by handing over the handset's
-Fellowship session (see *Signing in on behalf of another plugin*). That is
-where every app's settings live now, Register's included.
-
-The route, the settings fields and their accessors are gone. Schema
-version 4 removes the two stored values from the settings rows on update —
-the token was a credential, and is not left encrypted in a row nothing
-reads. A Link build from before the change asks a route that answers 404,
-which it treats as no answer: it keeps shipping with what it last stored.
+Link's old WordPress back end is gone: its device routes, its `/messages`
+routes, the tables they used and the push code behind them. Link signs in and
+sends only through Firebase.
 
 ## Sending from another plugin
 
@@ -361,13 +178,9 @@ which is in the container. There is no second copy of the OAuth classes,
 and Google's console is unchanged: Fellowship's own HTTPS `/auth/callback`
 is still the only registered redirect.
 
-Two of the browser leg's rules used to be Link's alone:
-
-- it would only redirect to `link://auth`;
-- it would only issue a code to a member.
-
-Those rules now belong to an **audience**, a `SignInAudience`. A plugin
-registers its own on `fellowship/loaded`:
+The browser leg's two rules, where a code may be redirected and who may have
+one, belong to an **audience**, a `SignInAudience`. A plugin registers its own
+on `fellowship/loaded`:
 
 ```php
 add_action('fellowship/loaded', function ($container) {
@@ -375,25 +188,27 @@ add_action('fellowship/loaded', function ($container) {
 });
 ```
 
+`link` is reserved and serves nothing. It was Link's own browser sign-in,
+which ended when Link moved to Firebase: a code for it would have gone to
+whichever app on the phone claimed `link://`.
+
 - **`begin($provider, $audience, $context, $redirectUri)`** starts the
   browser leg for that audience and answers `{state, authorization_url}`.
   `$context` is at most 512 bytes. It is the plugin's own opaque data, and
   it comes back when the code is redeemed.
 - **At the callback**, the audience decides whether the redirect is
-  allowed and whether this person is admitted. Link's audience still
-  refuses non-members with `not_a_member`.
+  allowed and whether this person is admitted.
 - **`redeem($code, $audience)`** spends the one-time code. A code is
   issued for one audience and refused by every other. Presenting it at the
   wrong one still spends it.
-- **`sessionFor($linkDeviceToken)`** accepts a live Link enrolment in
-  place of a second sign-in. That token was minted after a Google sign-in,
-  and the member gate is re-run on it, so it proves what another trip
-  through the browser would have.
+- **`sessionFor($firebaseIdToken)`** accepts a live Link enrolment in
+  place of a second sign-in. The device is checked live in Firestore and the
+  member gate is re-run on it, so it proves what another trip through the
+  browser would have.
 - **`isLive($deviceId)`** lets the plugin stop the moment Link's enrolment
   stops.
 
-Sign-ins already in flight when this deploys keep working: a state or a
-code written before audiences existed reads as Link's.
+A state or code stored without an audience was Link's, and is refused.
 
 **An audience may bring its own OAuth client.** By default every browser
 sign-in uses the one client in Fellowship's settings, so a Register tablet
@@ -407,13 +222,15 @@ permission model: a provider Fellowship did not register stays
 unreachable, and anything doubtful falls back to Fellowship's own client.
 Each such client registers Fellowship's callback,
 `/wp-json/fellowship/v1/auth/callback`, as an authorized redirect URI.
-Link brings none, so its sign-in is unchanged.
 
 **Must agree.** Freedom now depends on these classes. Changing any of
 them changes a second plugin:
 
 - `IdentityBroker`, `SignInAudience`, `BrokeredIdentity`, `LinkSession`,
   `VerifiedIdentity`
+- `FirebaseDeviceLookup`, through which the broker finds a Link device, and
+  `tests/Support/InMemoryFirebaseDevices`, which Freedom's tests stand one in
+  with
 - `BringsOwnClient` and `ProviderClient`, through which an audience signs
   its people in with its own OAuth client (see below)
 - `MemberGate`
@@ -426,8 +243,7 @@ this contract too: Fellowship and Freedom's `require-dev` move together.
 
 `VerifiedIdentity` stayed Fellowship's own type when the providers moved to
 Guardian, precisely because it is on this list: a provider's answer is
-converted at the callback and the ID-token exchange, and nothing an audience
-sees changed.
+converted at the callback, and nothing an audience sees changed.
 
 ## Conventions
 
@@ -441,13 +257,11 @@ the [Guardian](https://github.com/bleedingdeacons/guardian) library, which
 Fellowship requires through Composer and ships in its own `vendor/`. Reach
 bundles it too; whichever plugin loads it first supplies it to both, so the
 two move to a new Guardian major together. What stays here is everything
-Link-specific: the device-code exchange, the audiences, the member gate and
-enrolment.
+Fellowship's own: the one-time codes, the audiences and the member gate.
 
 ## Link on Firebase
 
-Link's back end is moving to Firebase, while the member list stays here. The
-Firestore rules and Cloud Functions are in [`firebase/`](firebase/README.md),
+The Firestore rules and Cloud Functions are in [`firebase/`](firebase/README.md),
 in this repo because they and the `/attest/*` routes have to agree. They are
 not in the plugin zip.
 

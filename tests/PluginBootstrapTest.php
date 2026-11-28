@@ -10,13 +10,7 @@ use function Brain\Monkey\Functions\when;
 use function Brain\Monkey\Actions\expectAdded;
 use Brain\Monkey\Filters;
 use Fellowship\Core\Settings;
-use Fellowship\Devices\DeviceRepository;
-use Fellowship\Messaging\MessageRepository;
-use Fellowship\Messaging\RecipientRepository;
 use Fellowship\Plugin;
-use Fellowship\Tests\Support\InMemoryDeviceRepository;
-use Fellowship\Tests\Support\InMemoryMessageRepository;
-use Fellowship\Tests\Support\InMemoryRecipientRepository;
 use Fellowship\Tests\Support\RecordingWpdb;
 use PHPUnit\Framework\TestCase;
 use ReflectionProperty;
@@ -31,7 +25,7 @@ use WP_REST_Response;
 /**
  * What the plugin does when it boots.
  *
- * <b>Three of these hooks are the only place a rule exists</b>, and none
+ * <b>Some of these hooks are the only place a rule exists</b>, and none
  * of them is reachable by calling a method — they are closures registered
  * on WordPress hooks, so the test has to take the callback back out and
  * invoke it. Brain Monkey owns add_action and add_filter and must keep
@@ -47,13 +41,6 @@ use WP_REST_Response;
  *    logged-in WP users, so without this filter a member's sealed inbox
  *    could be cached by SiteGround or Cloudflare and served to whoever
  *    asked next.
- *  - <b>The retention sweep deletes recipients before messages.</b> The
- *    other order strands recipient rows against message ids that no
- *    longer exist, and a stranded row here is orphaned personal data.
- *  - <b>Deleting a member takes their handsets and delivery records.</b>
- *    Their devices would fail the gate on the next request anyway, but
- *    until then they are live rows the dispatcher still counts as push
- *    targets.
  */
 
 covers(\Fellowship\Plugin::class);
@@ -72,9 +59,6 @@ beforeEach(function () {
     when('wp_next_scheduled')->justReturn(false);
     when('wp_schedule_event')->justReturn(true);
 
-    $this->devices = new InMemoryDeviceRepository();
-    $this->recipients = new InMemoryRecipientRepository();
-    $this->messages = new InMemoryMessageRepository();
     $this->settings = new Settings();
 
     $this->container = new FakeContainer([
@@ -91,9 +75,6 @@ beforeEach(function () {
 
     // The in-memory halves, primed so the hooks act on something the
     // test can read back.
-    $this->container->prime(DeviceRepository::class, $this->devices);
-    $this->container->prime(RecipientRepository::class, $this->recipients);
-    $this->container->prime(MessageRepository::class, $this->messages);
     $this->container->prime(Settings::class, $this->settings);
 
     pluginBootstrapCapture($this);
@@ -110,7 +91,7 @@ afterEach(function () {
 });
 
 test('a fellowship response is never cached', function () {
-    $response = pluginBootstrapDispatch('/fellowship/v1/messages');
+    $response = pluginBootstrapDispatch('/fellowship/v1/directory');
 
     expect($response)->not->toBeNull();
     expect((string) ($response->get_headers()['Cache-Control'] ?? ''))->toContain('no-store');
@@ -124,132 +105,6 @@ test('another plugins route is left alone', function () {
 
     expect($response)->not->toBeNull();
     expect($response->get_headers())->not->toHaveKey('Cache-Control');
-});
-
-test('the retention sweep removes recipients before messages', function () {
-    // The order is the point: messages first would strand recipient
-    // rows against ids that no longer exist, and a stranded row here
-    // is orphaned personal data.
-    $this->settings->setRetentionDays(30);
-
-    $order = [];
-    $this->recipients = new class ($order) extends InMemoryRecipientRepository {
-        /** @param list<string> $order */
-        public function __construct(private array &$order)
-        {
-        }
-
-        public function purgeForMessagesBefore(int $before): int
-        {
-            $this->order[] = 'recipients';
-
-            return 0;
-        }
-    };
-
-    // Re-prime and re-init so the closure closes over the recorder.
-    $this->container->prime(RecipientRepository::class, $this->recipients);
-    resetPlugin();
-    $this->actions = [];
-    pluginBootstrapCapture($this);
-    Plugin::init($this->container);
-
-    pluginBootstrapFire('fellowship_purge_messages');
-
-    expect($order)->toBe(['recipients']);
-});
-
-test('a sweep with retention off deletes nothing', function () {
-    // Zero means keep indefinitely, chosen on the settings screen.
-    $this->settings->setRetentionDays(0);
-
-    $this->messages->create(
-        'uuid-1',
-        'dave@example.org',
-        7,
-        'Dave B',
-        'Old',
-        'Ancient.',
-        'members',
-        '',
-        1,
-        0,
-        0,
-    );
-
-    pluginBootstrapFire('fellowship_purge_messages');
-
-    expect($this->messages->rows)->toHaveCount(1);
-});
-
-test('deleting a member revokes their handsets', function () {
-    $this->devices->create(
-        'hash-1',
-        PLUGIN_BOOTSTRAP_MEMBER,
-        7,
-        'Pixel 6a',
-        'android',
-        'spki',
-        'fcm',
-        'token-1',
-        1788000000,
-    );
-
-    pluginBootstrapFire('unity/member_deleted', 42, new MemberStub(id: 7, personalEmail: PLUGIN_BOOTSTRAP_MEMBER));
-
-    expect($this->devices->rows[1]->isRevoked())->toBeTrue();
-});
-
-test('deleting a member removes their delivery records', function () {
-    $this->recipients->addMany(9, [['email' => PLUGIN_BOOTSTRAP_MEMBER, 'member_id' => 7]], 1788000000);
-
-    pluginBootstrapFire('unity/member_deleted', 42, new MemberStub(id: 7, personalEmail: PLUGIN_BOOTSTRAP_MEMBER));
-
-    expect($this->recipients->rows)->toBe([]);
-});
-
-test('deleting a member leaves the messages themselves', function () {
-    // A message sent to a committee is a record of what the
-    // intergroup said, not of who received it. Removing one member
-    // should not rewrite it; the recipient rows naming them are the
-    // part that is theirs.
-    $this->messages->create(
-        'uuid-1',
-        'dave@example.org',
-        7,
-        'Dave B',
-        'Intergroup moved',
-        'Now the 14th.',
-        'committee',
-        'steering',
-        1788000000,
-        0,
-        0,
-    );
-
-    pluginBootstrapFire('unity/member_deleted', 42, new MemberStub(id: 7, personalEmail: PLUGIN_BOOTSTRAP_MEMBER));
-
-    expect($this->messages->rows)->toHaveCount(1);
-});
-
-test('a member deletion with no member is ignored', function () {
-    // Unity fires this with a null member in some paths; acting on it
-    // would mean revoking devices for an empty address.
-    $this->devices->create(
-        'hash-1',
-        PLUGIN_BOOTSTRAP_MEMBER,
-        7,
-        'Pixel 6a',
-        'android',
-        'spki',
-        'fcm',
-        'token-1',
-        1788000000,
-    );
-
-    pluginBootstrapFire('unity/member_deleted', 42, null);
-
-    expect($this->devices->rows[1]->isRevoked())->toBeFalse();
 });
 
 // ── Booting twice, and not at all ─────────────────────────────────
@@ -292,50 +147,6 @@ test('the admin screens are registered only in the admin', function () {
     Plugin::init($this->container);
 });
 
-// ── The retention sweep ───────────────────────────────────────────
-
-test('a site keeping messages indefinitely sweeps nothing', function () {
-    // Zero is a deliberate choice on the settings screen, not an
-    // unset value, and the sweep reads it as "do nothing".
-    $this->settings->setRetentionDays(0);
-
-    pluginBootstrapFire('fellowship_purge_messages');
-
-    expect($this->recipients->rows)->toBe([]);
-});
-
-test('a sweep that deleted nothing says nothing', function () {
-    $this->settings->setRetentionDays(30);
-
-    // The sweep ran without a message to delete; reaching the end
-    // without a fault is the assertion, alongside fire()'s own check
-    // that the hook was registered at all.
-    pluginBootstrapFire('fellowship_purge_messages');
-});
-
-test('the sweep runs against a container that has gone away', function () {
-    // Cron fires on its own request. If the plugin stood itself down
-    // in between — a kill switch, a deactivated Unity — the callback
-    // is still registered and must not fatal.
-    resetPlugin();
-
-    pluginBootstrapFire('fellowship_purge_messages');
-
-    expect($this->recipients->rows)->toBe([]);
-});
-
-// ── Erasure ───────────────────────────────────────────────────────
-
-test('a member with no address is not erased by address', function () {
-    // Every device row would match an empty address, so acting on
-    // one would revoke the whole fleet.
-    $this->devices->create('hash-1', PLUGIN_BOOTSTRAP_MEMBER, 7, 'Pixel 6a', 'android', 'spki', 'fcm', 'token-1', 1788000000);
-
-    pluginBootstrapFire('unity/member_deleted', 42, new MemberStub(id: 7, personalEmail: '   '));
-
-    expect($this->devices->rows[1]->isRevoked())->toBeFalse();
-});
-
 // ── The build date ────────────────────────────────────────────────
 
 test('the build date comes from the shipped readme', function () {
@@ -376,15 +187,6 @@ function pluginBootstrapCapture(TestCase $test): void
             $test->filters['rest_post_dispatch'][] = $callback;
         }
     );
-}
-
-function pluginBootstrapFire(string $hook, mixed ...$args): void
-{
-    expect(test()->actions[$hook] ?? [])->not->toBeEmpty($hook . ' was never registered.');
-
-    foreach (test()->actions[$hook] as $callback) {
-        $callback(...$args);
-    }
 }
 
 function pluginBootstrapDispatch(string $route): ?WP_REST_Response

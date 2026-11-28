@@ -9,7 +9,6 @@ if (!defined('ABSPATH')) {
 }
 
 use Fellowship\Core\Settings;
-use Fellowship\Devices\DeviceResolution;
 use Fellowship\Devices\FirebaseDeviceResolution;
 use Fellowship\Devices\FirebaseDevices;
 use Fellowship\Directory\DirectoryPresenter;
@@ -107,7 +106,7 @@ final class DirectoryController
                     'The address book could not be read just now. Please try again.',
                     ['status' => 503],
                 ),
-                DeviceResolution::NOT_A_MEMBER => new WP_Error(
+                FirebaseDeviceResolution::NOT_A_MEMBER => new WP_Error(
                     'fellowship_not_a_member',
                     'That address no longer matches a member record.',
                     ['status' => 403],

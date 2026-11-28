@@ -8,10 +8,8 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-use Fellowship\Devices\CurrentDevice;
-use Fellowship\Devices\DeviceRepository;
+use Fellowship\Devices\FirebaseDeviceLookup;
 use Fellowship\Devices\FirebaseDevices;
-use Fellowship\Devices\MemberGate;
 use Fellowship\Rest\DeviceAuthController;
 use Guardian\ProviderRegistry;
 use WP_Error;
@@ -39,10 +37,9 @@ use function rest_url;
  *   spends the code; this only guarantees the code it gets back was
  *   issued for it.
  * - {@see sessionFor()}: a handset already signed in to Link presents its
- *   Link device token, or its Firebase ID token, instead of signing in again.
- *   That token was minted
- *   after a Google sign-in and the member gate is re-run on it here, so
- *   it proves exactly what a second trip through the browser would have,
+ *   Firebase ID token instead of signing in again. The device behind it is
+ *   checked live in Firestore and the member gate is re-run on it, so it
+ *   proves exactly what a second trip through the browser would have,
  *   without putting the member through one.
  *
  * Every class this names is on the must-agree list in the README: a
@@ -61,15 +58,11 @@ final class IdentityBroker
         ProviderRegistry $providers,
         private readonly StateStore $stateStore,
         private readonly DeviceCodeStore $codes,
-        private readonly CurrentDevice $currentDevice,
-        private readonly DeviceRepository $devices,
-        private readonly MemberGate $gate,
+        private readonly ?FirebaseDeviceLookup $firebaseDevices = null,
         ?AudienceProviders $clients = null,
-        private readonly ?FirebaseDevices $firebaseDevices = null,
     ) {
-        // Defaulted, and last, so a caller written before audiences could
-        // bring a client -- Freedom's test harness builds this -- still
-        // compiles, and gets Fellowship's providers only.
+        // Defaulted, so a caller that brings no client gets Fellowship's
+        // providers only.
         $this->clients = $clients ?? AudienceProviders::withoutOverrides($providers);
     }
 
@@ -89,13 +82,6 @@ final class IdentityBroker
      */
     public function begin(string $provider, string $audience, string $context, string $redirectUri): array|WP_Error
     {
-        if ($audience === LinkAudience::NAME) {
-            // Link starts at /auth/device/start. Starting it here would
-            // skip nothing, but it would be a second way in to keep in
-            // step with the first.
-            return new WP_Error('fellowship_wrong_audience', 'Link signs in through its own route.', ['status' => 400]);
-        }
-
         $target = $this->audiences->get($audience);
         if ($target === null) {
             return new WP_Error('fellowship_unknown_audience', 'Unknown sign-in audience.', ['status' => 400]);
@@ -148,58 +134,41 @@ final class IdentityBroker
     }
 
     /**
-     * The live Link enrolment a device token belongs to, or null.
+     * The live Link enrolment a Firebase ID token belongs to, or null.
      *
-     * Null for anything Link itself would refuse: a malformed, unknown or
-     * revoked token, or one whose member the gate no longer admits.
+     * Null for anything Link itself would refuse: a malformed or unverifiable
+     * token, a device that isn't live, or one whose member the gate no longer
+     * admits. Link's old WordPress device tokens are gone, so nothing else is
+     * a session.
      */
     public function sessionFor(string $deviceToken): ?LinkSession
     {
-        if ($this->firebaseDevices !== null && FirebaseDevices::looksLikeIdToken($deviceToken)) {
-            $device = $this->firebaseDevices->resolve($deviceToken)->device;
-
-            return $device === null
-                ? null
-                : new LinkSession($device->id, $device->email, $device->memberId, $device->platform);
-        }
-
-        $device = $this->currentDevice->resolveToken($deviceToken)->device;
-        if ($device === null) {
+        if ($this->firebaseDevices === null || !FirebaseDevices::looksLikeIdToken($deviceToken)) {
             return null;
         }
 
-        $member = $this->gate->authorisedMember($device->memberEmail);
-        if ($member === null) {
-            return null;
-        }
+        $device = $this->firebaseDevices->resolve($deviceToken)->device;
 
-        return new LinkSession($device->id, $device->memberEmail, (int) $member->getId(), $device->platform);
+        return $device === null
+            ? null
+            : new LinkSession($device->id, $device->email, $device->memberId, $device->platform);
     }
 
     /**
-     * Whether a Link enrolment is still one Link would accept a request
-     * from: the row exists, is not revoked, and its member is still
-     * admitted. For a plugin that accepted {@see sessionFor()} once and
-     * must stop when Link's enrolment stops.
+     * Whether a Link enrolment is still one Link would accept a request from:
+     * the device is live on Firebase and its member is still admitted. For a
+     * plugin that accepted {@see sessionFor()} once and must stop when Link's
+     * enrolment stops.
+     *
+     * A number was a device in Fellowship's own table, which is gone, so it
+     * is never live.
      */
     public function isLive(int|string $deviceId): bool
     {
-        // A string id that isn't a number is a device on Firebase. A column that
-        // stores both hands back a numeric string for one of Fellowship's own.
-        if (is_string($deviceId) && !ctype_digit($deviceId)) {
-            return $this->firebaseDevices?->isLive($deviceId) ?? false;
-        }
-
-        $deviceId = (int) $deviceId;
-        if ($deviceId <= 0) {
+        if (!is_string($deviceId) || $deviceId === '' || ctype_digit($deviceId)) {
             return false;
         }
 
-        $device = $this->devices->findById($deviceId);
-        if ($device === null || $device->isRevoked()) {
-            return false;
-        }
-
-        return $this->gate->authorisedMember($device->memberEmail) !== null;
+        return $this->firebaseDevices?->isLive($deviceId) ?? false;
     }
 }

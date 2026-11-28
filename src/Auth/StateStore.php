@@ -46,7 +46,7 @@ final class StateStore
         string $provider,
         string $deviceRedirect,
         ?string $codeVerifier = null,
-        string $audience = LinkAudience::NAME,
+        string $audience = AudienceRegistry::RESERVED,
         string $context = '',
     ): array {
         return $this->store->issue($provider, $codeVerifier, [
@@ -83,7 +83,7 @@ final class StateStore
             'nonce'           => $stored['nonce'],
             'device_redirect' => is_string($redirect) ? $redirect : '',
             'code_verifier'   => $stored['code_verifier'],
-            'audience'        => is_string($audience) && $audience !== '' ? $audience : LinkAudience::NAME,
+            'audience'        => is_string($audience) && $audience !== '' ? $audience : AudienceRegistry::RESERVED,
             'context'         => is_string($context) ? $context : '',
         ];
     }

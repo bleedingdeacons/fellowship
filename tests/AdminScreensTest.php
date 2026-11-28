@@ -20,7 +20,6 @@ use Fellowship\Directory\DirectoryPresenter;
 use Fellowship\Crypto\MessageSealer;
 use Fellowship\Messaging\MessageApi;
 use Fellowship\Messaging\RecipientResolver;
-use Fellowship\Tests\Support\InMemoryDeviceRepository;
 use Fellowship\Tests\Support\InMemoryLinkDevices;
 use Fellowship\Tests\Support\InMemoryMessageLog;
 use Fellowship\Tests\Support\RecordingDelivery;
@@ -72,7 +71,6 @@ beforeEach(function () {
     when('paginate_links')->justReturn('');
 
     $this->log = new InMemoryMessageLog();
-    $this->devices = new InMemoryDeviceRepository();
     $this->linkDevices = new InMemoryLinkDevices();
     $this->audit = new SpyAuditLogger();
 
@@ -246,7 +244,7 @@ function adminScreensComposePage(): ComposePage
         ),
         new InMemoryCommitteeRepository(),
         $gate,
-        new DirectoryPresenter(test()->members, new InMemoryCommitteeRepository(), $gate, test()->devices),
+        new DirectoryPresenter(test()->members, new InMemoryCommitteeRepository(), $gate),
     );
 }
 

@@ -16,13 +16,9 @@ use Fellowship\Cli\DirectoryCli;
 use Fellowship\Core\Capabilities;
 use Fellowship\Core\FellowshipServiceProvider;
 use Fellowship\Core\Schema;
-use Fellowship\Core\Settings;
-use Fellowship\Devices\DeviceRepository;
 use Fellowship\Logger\HasLogger;
 use Fellowship\Messaging\MessageApi;
 use Fellowship\Sync\MemberWatch;
-use Fellowship\Messaging\MessageRepository;
-use Fellowship\Messaging\RecipientRepository;
 use Fellowship\Rest\DeviceAuthController;
 use Fellowship\Rest\DirectoryController;
 use Fellowship\Rest\FirebaseIdentityController;
@@ -45,7 +41,7 @@ final class Plugin
 {
     use HasLogger;
 
-    /** Daily sweep that deletes messages past the retention window. */
+    /** The old messages table's daily purge, no longer scheduled. Cleared on load and on deactivation. */
     public const PURGE_CRON_HOOK = 'fellowship_purge_messages';
 
     protected static function logChannel(): string
@@ -93,8 +89,6 @@ final class Plugin
         self::$initialized = true;
 
         $container->get(DeviceAuthController::class)->register();
-        // MessageController is not registered: Link sends through Firebase, and
-        // its routes stored messages in plain text and skipped the sending limits.
         $container->get(DirectoryController::class)->register();
         $container->get(FirebaseIdentityController::class)->register();
         $container->get(AttestationController::class)->register();
@@ -112,7 +106,12 @@ final class Plugin
             \WP_CLI::add_command('fellowship directory', $container->get(DirectoryCli::class));
         }
 
-        self::registerPurge();
+        // The old messages table had a daily purge. Link's messages live in
+        // Firestore now, where the sweep Function keeps the retention window,
+        // so a site that scheduled it drops it on its next load.
+        if (wp_next_scheduled(self::PURGE_CRON_HOOK)) {
+            wp_clear_scheduled_hook(self::PURGE_CRON_HOOK);
+        }
 
         // Everything under fellowship/v1 is per-device and authorised by
         // a bearer token, which shared caches (SiteGround, Cloudflare,
@@ -132,7 +131,6 @@ final class Plugin
             return $response;
         }, 10, 3);
 
-        self::registerErasure();
         $container->get(MemberWatch::class)->register();
 
         if (is_admin()) {
@@ -159,97 +157,6 @@ final class Plugin
         }
 
         return self::$container;
-    }
-
-    /**
-     * Daily deletion of messages past the retention window.
-     *
-     * Scheduled here rather than on activation so an install upgraded
-     * into this version picks it up on its next load without being
-     * reactivated.
-     */
-    private static function registerPurge(): void
-    {
-        if (!wp_next_scheduled(self::PURGE_CRON_HOOK)) {
-            wp_schedule_event(time() + HOUR_IN_SECONDS, 'daily', self::PURGE_CRON_HOOK);
-        }
-
-        add_action(self::PURGE_CRON_HOOK, static function (): void {
-            $container = self::$container;
-            if ($container === null) {
-                return;
-            }
-
-            $days = $container->get(Settings::class)->getRetentionDays();
-            if ($days <= 0) {
-                // Zero means keep indefinitely — a deliberate choice, made
-                // on the settings screen. Nothing to do.
-                return;
-            }
-
-            $before = time() - ($days * DAY_IN_SECONDS);
-
-            // Recipients first: they are found by joining to the messages,
-            // so deleting the messages first would strand every recipient
-            // row against an id that no longer exists — and a stranded row
-            // here is orphaned personal data, which is the one kind this
-            // stack must not leave lying about.
-            $recipients = $container->get(RecipientRepository::class)->purgeForMessagesBefore($before);
-            $messages   = $container->get(MessageRepository::class)->purgeBefore($before);
-
-            if ($messages > 0 || $recipients > 0) {
-                self::logInfo('Retention sweep completed', [
-                    'messages'   => $messages,
-                    'recipients' => $recipients,
-                    'days'       => $days,
-                ]);
-            }
-        });
-    }
-
-    /**
-     * GDPR erasure: when Unity deletes a member, take their handsets and
-     * their delivery records with them.
-     *
-     * The devices would fail their next request anyway — CurrentDevice
-     * re-runs the gate on every call — but that leaves live rows the
-     * dispatcher still counts as push targets in the meantime, and a
-     * message briefly addressed to somebody who has been removed is
-     * exactly what the gate exists to prevent.
-     *
-     * Message *bodies* are deliberately not deleted here. A message sent
-     * to a committee is a record of what the intergroup said, not of who
-     * received it, and removing one member should not rewrite it. The
-     * recipient rows naming them do go, which is the part that is theirs.
-     */
-    private static function registerErasure(): void
-    {
-        $container = self::$container;
-        if ($container === null) {
-            return;
-        }
-
-        $devices = $container->get(DeviceRepository::class);
-        $recipients = $container->get(RecipientRepository::class);
-
-        add_action('unity/member_deleted', static function ($postId, $member = null) use ($devices, $recipients): void {
-            if ($member === null) {
-                return;
-            }
-
-            $email = strtolower(trim((string) $member->getPersonalEmail()));
-            if ($email === '') {
-                return;
-            }
-
-            $revoked = $devices->revokeAllForMember($email, time());
-            $removed = $recipients->deleteForMember($email);
-
-            self::logInfo('Member deleted: handsets revoked and delivery records removed', [
-                'devices'    => $revoked,
-                'recipients' => $removed,
-            ]);
-        }, 10, 2);
     }
 
     /**

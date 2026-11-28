@@ -19,17 +19,11 @@ use Fellowship\Crypto\MessageSealer;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Directory\DirectoryPresenter;
 use Fellowship\Messaging\MessageApi;
-use Fellowship\Messaging\MessageDispatcher;
 use Fellowship\Messaging\RecipientResolver;
-use Fellowship\Push\FcmClient;
-use Fellowship\Push\FcmTransport;
-use Fellowship\Tests\Support\InMemoryDeviceRepository;
 use Fellowship\Tests\Support\InMemoryLinkDevices;
 use Fellowship\Tests\Support\InMemoryMessageLog;
 use Fellowship\Tests\Support\RecordingDelivery;
-use Fellowship\Tests\Support\InMemoryMessageRepository;
 use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
-use Fellowship\Tests\Support\InMemoryRecipientRepository;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;
 use Unity\Testing\Doubles\InMemoryCommitteeRepository;
 use Unity\Testing\Doubles\InMemoryMemberRepository;
@@ -70,9 +64,6 @@ beforeEach(function () {
     when('add_submenu_page')->justReturn('fellowship_page_x');
     when('wp_generate_uuid4')->alias(static fn(): string => '11111111-2222-4333-8444-555555555555');
 
-    $this->messages = new InMemoryMessageRepository();
-    $this->recipients = new InMemoryRecipientRepository();
-    $this->devices = new InMemoryDeviceRepository();
     $this->audit = new SpyAuditLogger();
 
     $this->members = new InMemoryMemberRepository([
@@ -229,7 +220,7 @@ function adminNoticesComposePage(): ComposePage
         adminNoticesApi(),
         new InMemoryCommitteeRepository(),
         $gate,
-        new DirectoryPresenter(test()->members, new InMemoryCommitteeRepository(), $gate, test()->devices),
+        new DirectoryPresenter(test()->members, new InMemoryCommitteeRepository(), $gate),
     );
 }
 

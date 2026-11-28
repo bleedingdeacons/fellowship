@@ -34,7 +34,7 @@ use function add_action;
  * the member who wrote it, when they are one, so that it is credited to
  * them and a reply from the app can be addressed back to them — which a
  * message from the site's name cannot be. A send from a handset goes
- * through {@see \Fellowship\Rest\MessageController} instead.
+ * through the Functions instead, with a statement from {@see \Fellowship\Rest\AttestationController}.
  *
  * <b>Sealed here, and kept nowhere.</b> A send works out here who the message reaches,
  * asks Firebase for their devices, seals one envelope to each, and hands the envelopes

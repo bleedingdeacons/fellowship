@@ -17,8 +17,7 @@ use WP_Error;
  * payload a known size, and the sealed payload has to fit inside FCM's
  * 4KB data-message limit alongside a 344-character wrapped key. Without a
  * ceiling on the body, the largest messages the API accepts would be
- * accepted, stored, and then silently fail to push — arriving only on
- * the next poll, or on a handset that never polls, not at all. See
+ * accepted and then silently fail to push. See
  * {@see \Fellowship\Crypto\MessageSealer} for the measurement.
  *
  * Raising {@see BODY_MAX} means re-measuring against incompressible

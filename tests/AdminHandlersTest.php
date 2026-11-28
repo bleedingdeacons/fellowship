@@ -225,24 +225,16 @@ test('committee sending is off when the box is unticked', function () {
 
 // ── The schema ────────────────────────────────────────────────────
 
-test('every table is installed', function () {
-    $wpdb = new RecordingWpdb();
+test('no table is installed', function () {
+    // Link's devices and messages live in Firestore. Credentials are
+    // Unity's table, and Unity installs it on its own version change:
+    // installing it from here as well would give two plugins a claim on
+    // one schema.
+    $GLOBALS['__fellowship_dbdelta'] = [];
 
-    Schema::install($wpdb);
+    Schema::install(new RecordingWpdb());
 
-    $sql = implode(' ', $GLOBALS['__fellowship_dbdelta'] ?? []);
-
-    foreach (['devices', 'messages', 'recipients'] as $table) {
-        expect($sql)->toContain('fellowship_' . $table);
-    }
-
-    // Credentials are Unity's table now, and Unity installs it on its
-    // own version change. Asserted rather than merely dropped from the
-    // list above: installing it from here as well would give two
-    // plugins a claim on one schema, and the one that lost a race
-    // would be the one whose dbDelta ran against a table it did not
-    // define.
-    expect($sql)->not->toContain('credentials');
+    expect($GLOBALS['__fellowship_dbdelta'])->toBe([]);
 });
 
 test('installing is skipped when the schema is current', function () {

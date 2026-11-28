@@ -8,21 +8,16 @@ use function Brain\Monkey\Functions\when;
 use Fellowship\Auth\AudienceProviders;
 use Fellowship\Auth\AudienceRegistry;
 use Fellowship\Auth\DeviceCodeStore;
-use Fellowship\Auth\DeviceRedirectValidator;
-use Fellowship\Auth\DeviceTokenMinter;
 use Fellowship\Auth\FixedCredentials;
 use Fellowship\Auth\IdentityBroker;
-use Fellowship\Auth\LinkAudience;
 use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
 use Fellowship\Auth\ProviderClient;
 use Fellowship\Auth\StateStore;
 use Fellowship\Core\RateLimiter;
-use Fellowship\Devices\CurrentDevice;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Rest\DeviceAuthController;
-use Fellowship\Tests\Support\InMemoryDeviceRepository;
 use Fellowship\Tests\Support\StubAudience;
 use Fellowship\Tests\Support\StubClientAudience;
 use Fellowship\Tests\Support\StubProvider;
@@ -83,14 +78,12 @@ beforeEach(function () {
     };
     $this->clients = new AudienceProviders($this->registry, $this->build);
 
-    $this->devices = new InMemoryDeviceRepository();
-    $this->minter = new DeviceTokenMinter();
     $this->states = new StateStore();
     $this->codes = new DeviceCodeStore();
     $this->gate = new MemberGate(new InMemoryMemberRepository([
         new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: 'member@example.org'),
     ]));
-    $this->audiences = new AudienceRegistry(new LinkAudience(new DeviceRedirectValidator(), $this->gate));
+    $this->audiences = new AudienceRegistry();
     $this->freedom = new StubClientAudience();
     $this->audiences->register($this->freedom);
 });
@@ -243,9 +236,7 @@ function audienceClientBroker(): IdentityBroker
         test()->registry,
         test()->states,
         test()->codes,
-        new CurrentDevice(test()->devices, test()->minter, test()->gate),
-        test()->devices,
-        test()->gate,
+        null,
         new AudienceProviders(test()->registry, test()->build),
     );
 }
@@ -262,14 +253,10 @@ function audienceClientCallback(string $state): string
 function audienceClientCallbackResponse(string $state): WP_REST_Response|WP_Error
 {
     $controller = new DeviceAuthController(
-        test()->devices,
-        test()->minter,
-        test()->codes,
-        new DeviceRedirectValidator(),
-        test()->gate,
-        new CurrentDevice(test()->devices, test()->minter, test()->gate),
         test()->registry,
         test()->states,
+        test()->codes,
+        test()->gate,
         new RateLimiter(),
         new SpyAuditLogger(),
         new PasswordAuthenticator(

@@ -29,7 +29,7 @@ use Unity\Members\Interfaces\MemberRepository;
  * <b>A device's address isn't kept anywhere near it.</b> Firebase holds a member
  * id, and the email is read from Unity when needed.
  */
-final class FirebaseDevices
+final class FirebaseDevices implements FirebaseDeviceLookup
 {
     use HasLogger;
 

@@ -7,31 +7,20 @@ namespace Fellowship\Tests;
 use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Admin\MessagesPage;
-use Fellowship\Auth\DeviceTokenMinter;
-use Fellowship\Devices\CurrentDevice;
-use Fellowship\Devices\MemberGate;
 use Fellowship\Messaging\LoggedMessage;
-use Fellowship\Tests\Support\InMemoryDeviceRepository;
 use Fellowship\Tests\Support\InMemoryMessageLog;
 use Unity\Testing\Doubles\InMemoryMemberRepository;
 use Unity\Testing\Doubles\MemberStub;
-use WP_REST_Request;
 
 /**
- * The admin message log, and who the server thinks is calling.
+ * The admin message log.
  *
  * <b>The log can't show what a message said.</b> Messages are end-to-end
  * encrypted, so it shows who sent one, the kind of audience, and how far it
  * got. The delivery counts are what make "this went nowhere" noticeable.
- *
- * <b>CurrentDevice is the single answer to "who is calling?"</b> Every
- * authenticated route runs through it, and it re-runs the member gate on
- * every request rather than trusting the token alone — so a member who
- * stops qualifying is refused on their next call rather than at their
- * next enrolment.
  */
 
-covers(\Fellowship\Admin\MessagesPage::class, \Fellowship\Devices\CurrentDevice::class);
+covers(\Fellowship\Admin\MessagesPage::class);
 
 const MESSAGE_LOG_MEMBER = 'member@example.org';
 
@@ -43,8 +32,6 @@ beforeEach(function () {
     when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
 
     $this->log = new InMemoryMessageLog();
-    $this->devices = new InMemoryDeviceRepository();
-    $this->minter = new DeviceTokenMinter();
 
     $this->members = new InMemoryMemberRepository([
         new MemberStub(id: 7, anonymousName: 'Dave P', personalEmail: MESSAGE_LOG_MEMBER),
@@ -144,97 +131,9 @@ test('the log asks for one more than a page, to know if there is a next one', fu
     expect(substr_count(messageLogRender(), '<tr>'))->toBe(26);
 });
 
-// ── Who is calling ────────────────────────────────────────────────
-
-test('an enrolled handset is recognised', function () {
-    $token = messageLogEnrol();
-
-    $device = messageLogCurrentDevice()->fromRequest(messageLogRequest($token));
-
-    expect($device)->not->toBeNull();
-    expect($device->memberEmail)->toBe(MESSAGE_LOG_MEMBER);
-});
-
-test('a request with no header is nobody', function () {
-    expect(messageLogCurrentDevice()->fromRequest(messageLogRequest()))->toBeNull();
-});
-
-test('something that is not a token is nobody', function () {
-    // Refused on shape before it ever reaches the database, so a
-    // malformed header costs no query.
-    expect(messageLogCurrentDevice()->fromRequest(messageLogRequest('not-a-token')))->toBeNull();
-});
-
-test('a revoked handset is nobody', function () {
-    $token = messageLogEnrol();
-    $this->devices->revoke(1, time());
-
-    expect(messageLogCurrentDevice()->fromRequest(messageLogRequest($token)))->toBeNull();
-});
-
-test('a member who no longer qualifies is refused on their next call', function () {
-    // The gate is re-run on every request rather than trusted from
-    // enrolment, so somebody removed from Unity stops being able to
-    // call immediately rather than at their next sign-in.
-    $token = messageLogEnrol();
-
-    $this->members = new InMemoryMemberRepository([]);
-
-    expect(messageLogCurrentDevice()->fromRequest(messageLogRequest($token)))->toBeNull();
-});
-
-test('the member behind a device is resolved through the same gate', function () {
-    // So the answer cannot disagree with whether the request was
-    // allowed at all.
-    $token = messageLogEnrol();
-    $current = messageLogCurrentDevice();
-
-    $device = $current->fromRequest(messageLogRequest($token));
-
-    expect($device)->not->toBeNull();
-    expect($current->memberFor($device))->not->toBeNull();
-});
-
 // ── Fixtures ──────────────────────────────────────────────────────
 
 function messageLogRender(): string
 {
     return captureOutput(fn() => (new MessagesPage(test()->log, test()->members))->render());
-}
-
-function messageLogCurrentDevice(): CurrentDevice
-{
-    $gate = new MemberGate(test()->members);
-
-    return new CurrentDevice(test()->devices, test()->minter, $gate, test()->members);
-}
-
-function messageLogEnrol(): string
-{
-    $token = test()->minter->mint();
-
-    test()->devices->create(
-        test()->minter->hash($token),
-        MESSAGE_LOG_MEMBER,
-        7,
-        'Pixel 6a',
-        'android',
-        'spki',
-        'fcm',
-        'token-1',
-        1788000000,
-    );
-
-    return $token;
-}
-
-function messageLogRequest(string $token = ''): WP_REST_Request
-{
-    $request = new WP_REST_Request();
-
-    if ($token !== '') {
-        $request->set_header('authorization', 'Bearer ' . $token);
-    }
-
-    return $request;
 }

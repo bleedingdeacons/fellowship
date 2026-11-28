@@ -10,7 +10,7 @@ if (!defined('ABSPATH')) {
 
 /**
  * The one-time code handed back to the app after a browser sign-in, and
- * exchanged by the app for a device token.
+ * exchanged by the app, through its own plugin, for its own credential.
  *
  * <b>Why there is a code at all.</b> The OAuth callback arrives in the
  * system browser, which cannot be trusted with a long-lived credential
@@ -24,8 +24,8 @@ if (!defined('ABSPATH')) {
  * usable code either.
  *
  * <b>A code is issued for one audience and spendable only there.</b>
- * Link's exchange redeems for `link`, Freedom's for `freedom`, and a code
- * presented to the wrong one is spent and refused — spent first, so that
+ * Freedom's exchange redeems for `freedom`, and a code presented to the
+ * wrong audience is spent and refused — spent first, so that
  * trying it at the wrong door cannot be followed by trying it at the
  * right one. See {@see SignInAudience}.
  */
@@ -38,7 +38,7 @@ final class DeviceCodeStore
 
     public function issue(
         VerifiedIdentity $identity,
-        string $audience = LinkAudience::NAME,
+        string $audience,
         string $context = '',
     ): string {
         $code = bin2hex(random_bytes(32));
@@ -56,15 +56,6 @@ final class DeviceCodeStore
         );
 
         return $code;
-    }
-
-    /**
-     * The identity a Link code was issued for. Kept for Link's callers;
-     * a code issued to any other audience is refused.
-     */
-    public function consume(string $code): ?VerifiedIdentity
-    {
-        return $this->redeem($code, LinkAudience::NAME)?->identity;
     }
 
     /**
@@ -92,9 +83,10 @@ final class DeviceCodeStore
             return null;
         }
 
-        // A code written before audiences existed was Link's.
+        // A code written before audiences existed was Link's, which nothing
+        // redeems any more.
         $issuedFor = (string) ($stored['audience'] ?? '');
-        if (!hash_equals($issuedFor !== '' ? $issuedFor : LinkAudience::NAME, $audience)) {
+        if ($issuedFor === '' || $issuedFor === AudienceRegistry::RESERVED || !hash_equals($issuedFor, $audience)) {
             return null;
         }
 

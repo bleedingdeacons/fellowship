@@ -19,15 +19,10 @@ use Guardian\Providers\FacebookProvider;
 use Guardian\Providers\GoogleProvider;
 use Guardian\Providers\MicrosoftProvider;
 use Fellowship\Core\FellowshipServiceProvider;
-use Fellowship\Devices\DeviceRepository;
 use Fellowship\Messaging\MessageApi;
-use Fellowship\Messaging\MessageRepository;
-use Fellowship\Messaging\RecipientRepository;
-use Fellowship\Push\FcmTransport;
 use Fellowship\Rest\DeviceAuthController;
 use Fellowship\Rest\DirectoryController;
 use Fellowship\Rest\FirebaseIdentityController;
-use Fellowship\Rest\MessageController;
 use Fellowship\Rest\AttestationController;
 use Fellowship\Tests\Support\RecordingWpdb;
 use Unity\Testing\Doubles\FakeContainer;
@@ -90,7 +85,6 @@ test('every service can be built', function (string $service) {
     expect($this->container->get($service))->toBeInstanceOf($service);
 })->with([
     [DeviceAuthController::class],
-    [MessageController::class],
     [DirectoryController::class],
     [FirebaseIdentityController::class],
     [AttestationController::class],
@@ -99,12 +93,8 @@ test('every service can be built', function (string $service) {
     [MessagesPage::class],
     [ComposePage::class],
     [DevicesPage::class],
-    [DeviceRepository::class],
-    [MessageRepository::class],
-    [RecipientRepository::class],
     [PasswordCredentialRepository::class],
     [PasswordAuthenticator::class],
-    [FcmTransport::class],
     [\Fellowship\Auth\IdentityBroker::class],
     [\Fellowship\Auth\AudienceRegistry::class],
     [\Fellowship\Auth\AudienceProviders::class],
@@ -175,11 +165,11 @@ test('an unknown provider is not invented', function () {
 });
 
 test('the same instance comes back each time', function () {
-    // The repositories hold no state, but the container's contract is
-    // one instance per id, and a factory that ignored it would give
-    // the admin screens a different device repository from the REST
-    // controllers.
-    expect($this->container->get(DeviceRepository::class))->toBe($this->container->get(DeviceRepository::class));
+    // The container's contract is one instance per id, and a factory that
+    // ignored it would give the broker and the callback different audience
+    // registries.
+    expect($this->container->get(\Fellowship\Auth\AudienceRegistry::class))
+        ->toBe($this->container->get(\Fellowship\Auth\AudienceRegistry::class));
 });
 
 test('an audience registered through the broker reaches the controller callback', function () {
