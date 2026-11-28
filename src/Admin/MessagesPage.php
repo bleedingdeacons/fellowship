@@ -135,7 +135,7 @@ final class MessagesPage
      *
      * <b>Delivered is a handset's word, never FCM's.</b> It comes from
      * the receipt a handset sends once it has the message open, counting
-     * a read as one — see {@see \Fellowship\Messaging\Recipient::isReceived()}.
+     * a read as one.
      * FCM accepting a push is not shown at all: it says nothing about
      * whether a handset got it, and this column is looked at precisely
      * when somebody says a message did not arrive.

@@ -8,24 +8,17 @@ use function Brain\Monkey\Functions\when;
 use function Brain\Monkey\Actions\expectAdded;
 use Fellowship\Auth\AudienceRegistry;
 use Fellowship\Auth\DeviceCodeStore;
-use Fellowship\Auth\DeviceRedirectValidator;
-use Fellowship\Auth\DeviceTokenMinter;
-use Fellowship\Auth\LinkAudience;
 use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
 use Guardian\ProviderRegistry;
 use Fellowship\Auth\StateStore;
 use Fellowship\Core\RateLimiter;
-use Fellowship\Devices\CurrentDevice;
-use Fellowship\Devices\Device;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Rest\DeviceAuthController;
-use Fellowship\Tests\Support\InMemoryDeviceRepository;
 use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
 use Fellowship\Tests\Support\StubAudience;
 use Fellowship\Tests\Support\StubProvider;
-use RuntimeException;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;
 use Unity\Testing\Doubles\InMemoryMemberRepository;
 use Unity\Testing\Doubles\MemberStub;
@@ -61,9 +54,7 @@ beforeEach(function () {
 
     $_SERVER['REMOTE_ADDR'] = '203.0.113.4';
 
-    $this->devices = new InMemoryDeviceRepository();
     $this->credentials = new InMemoryPasswordCredentialRepository();
-    $this->minter = new DeviceTokenMinter();
     $this->states = new StateStore();
 
     $this->members = new InMemoryMemberRepository([
@@ -77,19 +68,15 @@ test('every route refuses a plain request', function (string $route) {
     when('is_ssl')->justReturn(false);
 
     $controller = insecureAndLimitedController();
-    $token = insecureAndLimitedEnrol();
 
-    $response = $controller->{$route}(insecureAndLimitedRequest(['email' => INSECURE_AND_LIMITED_MEMBER], $token));
+    $response = $controller->{$route}(insecureAndLimitedRequest(['email' => INSECURE_AND_LIMITED_MEMBER]));
 
     expect($response)->toBeInstanceOf(WP_Error::class, $route . ' answered a plain request.');
     expect($response->get_error_code())->toBe('fellowship_insecure_transport', $route . ' refused for the wrong reason.');
 })->with([
-    'start' => ['start'],
     'callback' => ['callback'],
-    'password' => ['password'],
     'requestPassword' => ['requestPassword'],
     'completePassword' => ['completePassword'],
-    'session' => ['session'],
 ]);
 
 // ── Too many attempts ─────────────────────────────────────────────
@@ -116,8 +103,6 @@ test('every credential route counts the attempt', function (string $route, array
 
     expect($limited)->toBeTrue($route . ' never rate-limited a repeated caller.');
 })->with([
-    'start' => ['start', ['provider' => 'google', 'redirect' => 'link://auth']],
-    'password' => ['password', ['email' => INSECURE_AND_LIMITED_MEMBER, 'password' => 'wrong', 'public_key' => 'spki', 'platform' => 'android']],
     'requestPassword' => ['requestPassword', ['email' => INSECURE_AND_LIMITED_MEMBER]],
     'completePassword' => ['completePassword', ['token' => 'never-issued', 'password' => 'correct horse battery staple']],
 ]);
@@ -180,53 +165,6 @@ test('a callback the member declined sends the app back too', function () {
     expect($response)->not->toBeInstanceOf(WP_Error::class);
 });
 
-test('a handset that cannot be stored is five hundred rather than a fatal', function () {
-    when('is_ssl')->justReturn(true);
-
-    $issued = insecureAndLimitedStates()->issue('apple', '');
-
-    $controller = insecureAndLimitedController(
-        new StubProvider('apple', serverSide: false),
-        throwingDevices(),
-    );
-
-    $response = $controller->exchange(insecureAndLimitedRequest([
-        'state' => $issued['state'],
-        'id_token' => 'eyJ.header.sig',
-        'public_key' => insecureAndLimitedPublicKey(),
-        'platform' => 'ios',
-    ]));
-
-    expect($response)->toBeInstanceOf(WP_Error::class);
-    expect($response->get_error_code())->toBe('fellowship_enrolment_failed');
-});
-
-test('a key that cannot be stored is reported rather than silently dropped', function () {
-    // Answering "ok" here would leave a handset holding a private
-    // key the server has no public half for — it would receive
-    // messages it could never open, indefinitely.
-    when('is_ssl')->justReturn(true);
-
-    $token = insecureAndLimitedEnrol();
-    $this->devices->rows = [];
-
-    $response = insecureAndLimitedController()->rotateKey(insecureAndLimitedRequest(['public_key' => insecureAndLimitedPublicKey()], $token));
-
-    expect($response)->toBeInstanceOf(WP_Error::class);
-});
-
-test('updating a push token without a token is refused', function () {
-    when('is_ssl')->justReturn(true);
-
-    expect(insecureAndLimitedController()->updatePush(insecureAndLimitedRequest(['push_token' => 'fcm-2'])))->toBeInstanceOf(WP_Error::class);
-});
-
-test('signing out without a token is refused', function () {
-    when('is_ssl')->justReturn(true);
-
-    expect(insecureAndLimitedController()->signOut(insecureAndLimitedRequest([])))->toBeInstanceOf(WP_Error::class);
-});
-
 // ── Fixtures ──────────────────────────────────────────────────────
 
 /**
@@ -240,25 +178,18 @@ function insecureAndLimitedStates(): StateStore
     return test()->states;
 }
 
-function insecureAndLimitedController(
-    ?StubProvider $provider = null,
-    ?InMemoryDeviceRepository $devices = null,
-): DeviceAuthController {
-    $devices ??= test()->devices;
+function insecureAndLimitedController(?StubProvider $provider = null): DeviceAuthController
+{
     $gate = new MemberGate(test()->members);
 
     $registry = new ProviderRegistry();
     $registry->register($provider ?? new StubProvider('google', serverSide: true));
 
     return new DeviceAuthController(
-        $devices,
-        test()->minter,
-        new DeviceCodeStore(),
-        new DeviceRedirectValidator(),
-        $gate,
-        new CurrentDevice($devices, test()->minter, $gate, test()->members),
         $registry,
         insecureAndLimitedStates(),
+        new DeviceCodeStore(),
+        $gate,
         new RateLimiter(),
         new SpyAuditLogger(),
         new PasswordAuthenticator(
@@ -267,55 +198,17 @@ function insecureAndLimitedController(
             new PasswordResetMailer(),
             new PasswordPolicy(),
         ),
-        insecureAndLimitedAudiences($gate),
+        insecureAndLimitedAudiences(),
     );
 }
 
-/** Link's audience, as Fellowship always holds it, and a stand-in for Freedom's: the callback serves only the latter. */
-function insecureAndLimitedAudiences(MemberGate $gate): AudienceRegistry
+/** A stand-in for Freedom's audience, which is what the callback serves. */
+function insecureAndLimitedAudiences(): AudienceRegistry
 {
-    $audiences = new AudienceRegistry(new LinkAudience(new DeviceRedirectValidator(), $gate));
+    $audiences = new AudienceRegistry();
     $audiences->register(new StubAudience('freedom', INSECURE_AND_LIMITED_APP));
 
     return $audiences;
-}
-
-function throwingDevices(): InMemoryDeviceRepository
-{
-    return new class extends InMemoryDeviceRepository {
-        public function create(
-            string $tokenHash,
-            string $memberEmail,
-            int $memberId,
-            string $label,
-            string $platform,
-            string $publicKey,
-            string $pushProvider,
-            string $pushToken,
-            int $now,
-        ): Device {
-            throw new RuntimeException('The devices table is gone.');
-        }
-    };
-}
-
-function insecureAndLimitedEnrol(): string
-{
-    $token = test()->minter->mint();
-
-    test()->devices->create(
-        test()->minter->hash($token),
-        INSECURE_AND_LIMITED_MEMBER,
-        7,
-        'Pixel 6a',
-        'android',
-        'spki',
-        'fcm',
-        'token-1',
-        1788000000,
-    );
-
-    return $token;
 }
 
 /**
@@ -334,27 +227,4 @@ function insecureAndLimitedRequest(array $params, string $token = ''): WP_REST_R
     }
 
     return $request;
-}
-
-function insecureAndLimitedPublicKey(): string
-{
-    static $key = null;
-
-    if ($key === null) {
-        $resource = openssl_pkey_new([
-            'private_key_bits' => 2048,
-            'private_key_type' => OPENSSL_KEYTYPE_RSA,
-        ]);
-
-        if ($resource === false) {
-            test()->markTestSkipped('OpenSSL could not generate a keypair. Set OPENSSL_CONF.');
-        }
-
-        $details = openssl_pkey_get_details($resource);
-        expect($details)->toBeArray();
-
-        $key = preg_replace('/\s+|-----[^-]*-----/', '', (string) $details['key']) ?? '';
-    }
-
-    return $key;
 }

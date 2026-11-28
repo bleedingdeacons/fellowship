@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Fellowship\Tests;
 
 use BleedingDeacons\WpMocks\WpState;
-use Fellowship\Auth\LinkAudience;
+use Fellowship\Auth\AudienceRegistry;
 use Fellowship\Auth\StateStore;
 
 /**
@@ -67,7 +67,7 @@ test('the audience and its context come back, and default to Link', function () 
 
     expect($brokered['audience'] ?? null)->toBe('freedom');
     expect($brokered['context'] ?? null)->toBe('ctx-1');
-    expect($link['audience'] ?? null)->toBe(LinkAudience::NAME);
+    expect($link['audience'] ?? null)->toBe(AudienceRegistry::RESERVED);
     expect($link['context'] ?? null)->toBe('');
 });
 
@@ -86,7 +86,7 @@ test('a state written before the move to Guardian still reads back', function ()
         'nonce'           => 'n-1',
         'device_redirect' => 'link://auth',
         'code_verifier'   => null,
-        'audience'        => LinkAudience::NAME,
+        'audience'        => AudienceRegistry::RESERVED,
         'context'         => '',
     ]);
 });

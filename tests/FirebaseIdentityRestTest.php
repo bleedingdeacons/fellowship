@@ -158,42 +158,17 @@ test('the route is registered, for POST only', function () {
 
     expect($routes)->toBe([
         'fellowship/v1/auth/identity/password' => 'POST',
-        'fellowship/v1/backend'                => 'GET',
     ]);
 });
 
-test('a site uses Fellowship until it is told otherwise', function () {
-    $response = identityRestController()->backend(new WP_REST_Request());
+test('the retired backend setting is dropped on upgrade', function () {
+    // Link only ever signs in through Firebase now, so the setting that chose
+    // between back ends has nothing left to choose.
+    update_option(Settings::OPTION_PUBLIC, ['link_backend' => 'firebase', 'retention_days' => '30']);
 
-    expect($response->get_data())->toBe(['backend' => 'fellowship']);
-});
+    Settings::dropRetired();
 
-test('a site switched to Firebase says so', function () {
-    $settings = new Settings();
-    $settings->setLinkBackend(Settings::LINK_BACKEND_FIREBASE);
-
-    expect(identityRestController()->backend(new WP_REST_Request())->get_data())->toBe(['backend' => 'firebase']);
-
-    $settings->setLinkBackend(Settings::LINK_BACKEND_FELLOWSHIP);
-
-    expect(identityRestController()->backend(new WP_REST_Request())->get_data())->toBe(['backend' => 'fellowship']);
-});
-
-test('anything but an exact firebase reads as Fellowship', function () {
-    $settings = new Settings();
-    $settings->setLinkBackend('something else');
-
-    expect($settings->getLinkBackend())->toBe('fellowship');
-
-    update_option(Settings::OPTION_PUBLIC, ['link_backend' => 'FIREBASE']);
-
-    expect($settings->getLinkBackend())->toBe('fellowship');
-});
-
-test('asking over plain http is refused', function () {
-    when('is_ssl')->justReturn(false);
-
-    expect(identityRestController()->backend(new WP_REST_Request()))->toBeInstanceOf(WP_Error::class);
+    expect(get_option(Settings::OPTION_PUBLIC))->toBe(['retention_days' => '30']);
 });
 
 function identityRestController(): FirebaseIdentityController
@@ -211,7 +186,6 @@ function identityRestController(): FirebaseIdentityController
         $gate,
         new FirebaseCustomTokenMinter(static fn(): ?ServiceAccount => $account),
         new RateLimiter(),
-        new Settings(),
     );
 }
 

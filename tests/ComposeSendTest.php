@@ -13,7 +13,7 @@ use Fellowship\Directory\DirectoryPresenter;
 use Fellowship\Firebase\FirebaseUnavailable;
 use Fellowship\Messaging\MessageApi;
 use Fellowship\Messaging\RecipientResolver;
-use Fellowship\Tests\Support\InMemoryDeviceRepository;
+use Fellowship\Tests\Support\MembersWithLink;
 use Fellowship\Tests\Support\RecordingDelivery;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;
 use Unity\Testing\Doubles\CommitteeStub;
@@ -52,7 +52,7 @@ beforeEach(function () {
 
     $this->delivery = new RecordingDelivery();
     $this->audit = new SpyAuditLogger();
-    $this->devices = new InMemoryDeviceRepository();
+    $this->withLink = [];
     $this->committees = new InMemoryCommitteeRepository();
 
     $this->members = new InMemoryMemberRepository([
@@ -108,7 +108,7 @@ test('the reason waits in a transient rather than the query string', function ()
     // naming the key here would only restate the implementation.
     expect(WpState::$transients)->not->toBe([]);
 
-    $stored = implode('|', array_map('strval', WpState::$transients));
+    $stored = implode('|', array_map('strval', array_filter(WpState::$transients, 'is_string')));
 
     expect($stored)->not->toBe('');
 });
@@ -219,7 +219,7 @@ test('a refusal from Firebase reaches the screen in its own words', function () 
     $_POST['body'] = 'Attached.';
 
     expect(composeSendPage()->sendFromRequest())->toBe('error');
-    expect(implode('|', array_map('strval', WpState::$transients)))->toContain('None of those members have Link yet.');
+    expect(implode('|', array_map('strval', array_filter(WpState::$transients, 'is_string'))))->toContain('None of those members have Link yet.');
 });
 
 test('an audience the form does not offer is refused rather than sent to everyone', function (string $audience) {
@@ -303,11 +303,11 @@ function composeSendListedMembers(bool $withAuthor = false): void
 
     if ($withAuthor) {
         $members[] = new MemberStub(id: 9, anonymousName: 'Jo B', showMemberProfile: true, personalEmail: (new \WP_User())->user_email);
-        test()->devices->create('hash-9', (new \WP_User())->user_email, 9, 'iPhone', 'ios', 'spki', 'fcm', 'token-9', 1788000000);
+        test()->withLink = [...test()->withLink, 9];
     }
 
     test()->members = new InMemoryMemberRepository($members);
-    test()->devices->create('hash-8', 'sue@example.org', 8, 'Pixel 6a', 'android', 'spki', 'fcm', 'token-8', 1788000000);
+    test()->withLink = [...test()->withLink, 8];
 }
 
 /**
@@ -337,6 +337,6 @@ function composeSendPage(): ComposePage
         ),
         test()->committees,
         $gate,
-        new DirectoryPresenter(test()->members, test()->committees, $gate, test()->devices),
+        new DirectoryPresenter(test()->members, test()->committees, $gate, null, null, MembersWithLink::of(...test()->withLink)),
     );
 }

@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 /**
  * A device on Firebase that has presented a good token, and the member behind it.
  *
- * Its id is a string, so this isn't a {@see Device}, which is a row in WordPress.
+ * Its id is Firebase's, a string such as `d_…`.
  */
 final class FirebaseDevice
 {

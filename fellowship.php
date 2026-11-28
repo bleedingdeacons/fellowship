@@ -2,7 +2,7 @@
 
 /**
  * Plugin Name: Fellowship
- * Description: Server side of the Link messaging app. Enrols Android and iOS handsets against Unity members by OAuth-verified email, exchanges a device public key at enrolment, and delivers messages to individuals and committees as encrypted push notifications. Requires Unity and Scrutiny.
+ * Description: Server side of the Link messaging app. Decides which Unity members may use Link, signs what each phone carries to Link's Firebase back end, and runs Link's password sign-in and admin screens. Requires Unity and Scrutiny.
  * Version: 1.19.7
  * Requires at least: 6.1
  * Requires PHP: 8.4
@@ -133,7 +133,7 @@ if (!function_exists('fellowship_send_message')) {
 add_action('unity/loaded', function ($container) {
     try {
         // The kill switch stands Fellowship down without deactivating it:
-        // no routes, no admin pages, no push. Set FELLOWSHIP_KILL in
+        // no routes and no admin pages. Set FELLOWSHIP_KILL in
         // wp-config.php.
         //
         // Enrolled handsets are deliberately left alone. Nothing
@@ -195,7 +195,7 @@ add_action('plugins_loaded', function () {
     }
 }, 20);
 
-// Activation: ensure Unity and Scrutiny are present, and install tables.
+// Activation: ensure Unity and Scrutiny are present, and run the schema upgrades.
 register_activation_hook(__FILE__, function () {
     if (!function_exists('scrutiny')) {
         deactivate_plugins(plugin_basename(__FILE__));
@@ -206,12 +206,11 @@ register_activation_hook(__FILE__, function () {
         );
     }
 
-    // Every table. Schema owns the list and each installer is an
-    // idempotent dbDelta, so this is safe on every activation including
-    // upgrades. Activation is not the only path that creates tables —
-    // see Fellowship\Core\Schema, which also runs on load when the
-    // stored version is behind, because an update over an active plugin
-    // never fires this hook at all.
+    // Fellowship creates no tables of its own any more; Schema runs the
+    // one-off clean-ups an upgrade needs, and is idempotent. Activation is
+    // not the only path that runs it: see Fellowship\Core\Schema, which
+    // also runs on load when the stored version is behind, because an
+    // update over an active plugin never fires this hook at all.
     global $wpdb;
     \Fellowship\Core\Schema::install($wpdb);
     \Fellowship\Core\Schema::markInstalled();

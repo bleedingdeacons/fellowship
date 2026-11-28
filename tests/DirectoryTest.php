@@ -6,14 +6,12 @@ namespace Fellowship\Tests;
 
 use function Brain\Monkey\Functions\when;
 use Fellowship\Auth\DeviceCodeStore;
-use Fellowship\Auth\DeviceTokenMinter;
 use Fellowship\Auth\VerifiedIdentity;
 use Fellowship\Core\Settings;
-use Fellowship\Devices\CurrentDevice;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Directory\DirectoryPresenter;
 use Fellowship\Rest\DirectoryController;
-use Fellowship\Tests\Support\InMemoryDeviceRepository;
+use Fellowship\Tests\Support\MembersWithLink;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;
 use Unity\Testing\Doubles\InMemoryCommitteeRepository;
 use Unity\Testing\Doubles\GroupStub;
@@ -24,7 +22,6 @@ use Unity\Testing\Doubles\MemberStub;
 use Unity\Testing\Doubles\PositionStub;
 use WP_Error;
 use WP_REST_Request;
-use WP_REST_Response;
 
 /**
  * The address book the app is given, and the one-time codes that get a
@@ -47,11 +44,14 @@ covers(\Fellowship\Directory\DirectoryPresenter::class, \Fellowship\Rest\Directo
 
 const DIRECTORY_MEMBER = 'member@example.org';
 
+/** The shape of Link's old WordPress device tokens, which nothing issues any more. */
+const DIRECTORY_OLD_TOKEN = 'fdt_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+
 beforeEach(function () {
     when('is_ssl')->justReturn(true);
 
-    $this->devices = new InMemoryDeviceRepository();
-    $this->minter = new DeviceTokenMinter();
+    // Who has Link on Firebase. Nobody, unless a test says otherwise.
+    $this->withLink = [];
     $this->audit = new SpyAuditLogger();
     $this->settings = new Settings();
 
@@ -152,7 +152,7 @@ test('all gsrs is not offered when there are none', function () {
 test('an old WordPress device token gets no directory', function () {
     // Link has none any more, and the only ones still issued belong to
     // another audience, such as Register's tablets.
-    $response = directoryController()->index(directoryRequest(directoryEnrol()));
+    $response = directoryController()->index(directoryRequest(DIRECTORY_OLD_TOKEN));
 
     expect($response)->toBeInstanceOf(WP_Error::class);
     expect($response->get_error_data()['status'])->toBe(401);
@@ -169,7 +169,7 @@ test('an unauthenticated request gets no directory', function () {
 test('plain HTTP gets no directory', function () {
     when('is_ssl')->justReturn(false);
 
-    expect(directoryController()->index(directoryRequest(directoryEnrol())))->toBeInstanceOf(WP_Error::class);
+    expect(directoryController()->index(directoryRequest(DIRECTORY_OLD_TOKEN)))->toBeInstanceOf(WP_Error::class);
 });
 
 // ── The one-time code ─────────────────────────────────────────────
@@ -177,8 +177,8 @@ test('plain HTTP gets no directory', function () {
 test('a code carries the identity it was issued for', function () {
     $store = new DeviceCodeStore();
 
-    $code = $store->issue(new VerifiedIdentity(DIRECTORY_MEMBER, 'google', 'sub-1'));
-    $identity = $store->consume($code);
+    $code = $store->issue(new VerifiedIdentity(DIRECTORY_MEMBER, 'google', 'sub-1'), 'freedom');
+    $identity = $store->redeem($code, 'freedom')?->identity;
 
     expect($identity)->not->toBeNull();
     expect($identity->email)->toBe(DIRECTORY_MEMBER);
@@ -191,15 +191,15 @@ test('a code is worthless twice', function () {
     // scheme.
     $store = new DeviceCodeStore();
 
-    $code = $store->issue(new VerifiedIdentity(DIRECTORY_MEMBER, 'google', 'sub-1'));
+    $code = $store->issue(new VerifiedIdentity(DIRECTORY_MEMBER, 'google', 'sub-1'), 'freedom');
 
-    expect($store->consume($code))->not->toBeNull();
-    expect($store->consume($code))->toBeNull();
+    expect($store->redeem($code, 'freedom'))->not->toBeNull();
+    expect($store->redeem($code, 'freedom'))->toBeNull();
 });
 
 test('a code nobody issued is worthless', function () {
-    expect((new DeviceCodeStore())->consume('never-issued'))->toBeNull();
-    expect((new DeviceCodeStore())->consume(''))->toBeNull();
+    expect((new DeviceCodeStore())->redeem('never-issued', 'freedom'))->toBeNull();
+    expect((new DeviceCodeStore())->redeem('', 'freedom'))->toBeNull();
 });
 
 // ── Fixtures ──────────────────────────────────────────────────────
@@ -379,9 +379,9 @@ test('no address travels with the position either', function () {
 
 // ── Whether a member has a device ─────────────────────────────────
 
-test('a member with a live device is marked as having one', function () {
+test('a member with a live device on Firebase is marked as having one', function () {
     // The app lets a member be chosen only when this is true.
-    directoryEnrol();
+    $this->withLink = [7];
 
     $members = directoryPresenter()->forApp(false)['members'];
 
@@ -397,32 +397,14 @@ test('a member with no device is still listed', function () {
     expect(array_column($members, 'hasDevice'))->toBe([false, false]);
 });
 
-test('a revoked device does not count', function () {
-    // A revoked handset will never receive anything, so it cannot be
-    // what makes a member reachable.
-    directoryEnrol();
-    $this->devices->revoke(1, time());
-
-    expect(directoryPresenter()->forApp(false)['members'][0]['hasDevice'])->toBeFalse();
-});
-
-test('a device with no member id is matched by email', function () {
-    $this->devices->create('hash', 'SUE@example.org', 0, 'Galaxy', 'android', 'spki', 'fcm', 'token-2', 1788000000);
+test('when Firebase cannot be asked, everyone can be chosen', function () {
+    // Unknown isn't nobody: greying out the whole address book would stop
+    // anyone trying, and a send still reports who it couldn't reach.
+    $this->withLink = null;
 
     $members = directoryPresenter()->forApp(false)['members'];
 
-    expect(array_column($members, 'hasDevice'))->toBe([false, true]);
-});
-
-test('nothing about the device travels with the flag', function () {
-    // A bool and no more: the label, platform and push token stay on
-    // the server.
-    directoryEnrol();
-
-    $encoded = (string) json_encode(directoryPresenter()->forApp(false));
-
-    expect($encoded)->not->toContain('Pixel 6a');
-    expect($encoded)->not->toContain('token-1');
+    expect(array_column($members, 'hasDevice'))->toBe([true, true]);
 });
 
 function directoryPresenter(
@@ -433,9 +415,9 @@ function directoryPresenter(
         test()->members,
         new InMemoryCommitteeRepository(),
         new MemberGate(test()->members),
-        test()->devices,
         $groups,
         $positions,
+        test()->withLink === null ? null : MembersWithLink::of(...test()->withLink),
     );
 }
 
@@ -446,25 +428,6 @@ function directoryController(): DirectoryController
         test()->settings,
         test()->audit,
     );
-}
-
-function directoryEnrol(): string
-{
-    $token = test()->minter->mint();
-
-    test()->devices->create(
-        test()->minter->hash($token),
-        DIRECTORY_MEMBER,
-        7,
-        'Pixel 6a',
-        'android',
-        'spki',
-        'fcm',
-        'token-1',
-        1788000000,
-    );
-
-    return $token;
 }
 
 function directoryRequest(string $token = ''): WP_REST_Request

@@ -7,10 +7,7 @@ namespace Fellowship\Tests;
 use function Brain\Monkey\Functions\when;
 use BleedingDeacons\WpMocks\Doubles\FakeWpHttp;
 use BleedingDeacons\WpMocks\WpState;
-use Fellowship\Auth\DeviceTokenMinter;
 use Fellowship\Core\Settings;
-use Fellowship\Devices\CurrentDevice;
-use Fellowship\Devices\DeviceResolution;
 use Fellowship\Devices\FirebaseDeviceResolution;
 use Fellowship\Devices\FirebaseDevices;
 use Fellowship\Devices\MemberGate;
@@ -24,7 +21,6 @@ use Fellowship\Push\ServiceAccount;
 use Fellowship\Rest\DirectoryController;
 use Fellowship\Sync\MemberWatch;
 use Fellowship\Sync\RetentionSync;
-use Fellowship\Tests\Support\InMemoryDeviceRepository;
 use Guardian\Firebase\FirebaseDeviceTokenVerifier;
 use Guardian\Jwt\JwtVerifier;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;
@@ -123,7 +119,7 @@ test('a token that is not a device\'s is refused without asking Firestore', func
 
     $resolved = test()->devices->resolve(firebaseDevicesToken($claims));
 
-    expect($resolved->refusal)->toBe(DeviceResolution::UNAUTHENTICATED);
+    expect($resolved->refusal)->toBe(FirebaseDeviceResolution::UNAUTHENTICATED);
     expect(FakeWpHttp::callCount())->toBe(1);
 })->with([
     'an identity at enrolment' => [['kind' => 'identity']],
@@ -136,21 +132,21 @@ test('a token that is not a device\'s is refused without asking Firestore', func
 ]);
 
 test('anything that is not a token is refused without asking anybody', function (string $token) {
-    expect(test()->devices->resolve($token)->refusal)->toBe(DeviceResolution::UNAUTHENTICATED);
+    expect(test()->devices->resolve($token)->refusal)->toBe(FirebaseDeviceResolution::UNAUTHENTICATED);
     expect(FakeWpHttp::callCount())->toBe(0);
 })->with(['', 'fdt_abc', 'one.two']);
 
 test('no service account means nothing can be believed', function () {
     test()->account = null;
 
-    expect(test()->devices->resolve(firebaseDevicesToken())->refusal)->toBe(DeviceResolution::UNAUTHENTICATED);
+    expect(test()->devices->resolve(firebaseDevicesToken())->refusal)->toBe(FirebaseDeviceResolution::UNAUTHENTICATED);
     expect(FakeWpHttp::callCount())->toBe(0);
 });
 
 test('a device Firestore does not hold or has cut off is refused', function (array|null $document) {
     firebaseDevicesRespond($document);
 
-    expect(test()->devices->resolve(firebaseDevicesToken())->refusal)->toBe(DeviceResolution::UNAUTHENTICATED);
+    expect(test()->devices->resolve(firebaseDevicesToken())->refusal)->toBe(FirebaseDeviceResolution::UNAUTHENTICATED);
 })->with([
     'removed'  => [null],
     'revoked'  => [['status' => 'revoked', 'memberId' => 7]],
@@ -163,7 +159,7 @@ test('a token from before a takeover is refused while one from after it passes',
     firebaseDevicesRespond(['status' => 'live', 'memberId' => 7, 'tokensValidAfter' => time() - 10]);
 
     expect(test()->devices->resolve(firebaseDevicesToken(['auth_time' => time() - 100]))->refusal)
-        ->toBe(DeviceResolution::UNAUTHENTICATED);
+        ->toBe(FirebaseDeviceResolution::UNAUTHENTICATED);
 
     FakeWpHttp::reset();
     WpState::reset();
@@ -177,7 +173,7 @@ test('a member the gate no longer admits gets the one refusal they can act on', 
 
     $resolved = test()->devices->resolve(firebaseDevicesToken(['memberId' => $memberId]));
 
-    expect($resolved->refusal)->toBe(DeviceResolution::NOT_A_MEMBER);
+    expect($resolved->refusal)->toBe(FirebaseDeviceResolution::NOT_A_MEMBER);
 })->with(['no address' => [9], 'no longer in Unity' => [404]]);
 
 test('a Firestore outage is not a refusal', function (int $status) {
@@ -249,7 +245,7 @@ test('the directory answers each refusal differently', function (array|null $doc
 test('Fellowship\'s own device token no longer reads the directory', function () {
     // Link has none any more; the only ones still issued are another
     // audience's, such as Register's tablets.
-    $response = firebaseDevicesController()->index(firebaseDevicesRequest((new DeviceTokenMinter())->mint()));
+    $response = firebaseDevicesController()->index(firebaseDevicesRequest('fdt_' . str_repeat('ab', 32)));
 
     expect($response)->toBeInstanceOf(WP_Error::class);
     expect($response->get_error_data()['status'])->toBe(401);
@@ -498,7 +494,6 @@ function firebaseDevicesPresenter(): DirectoryPresenter
         test()->members,
         new InMemoryCommitteeRepository(),
         test()->gate,
-        new InMemoryDeviceRepository(),
         null,
         null,
         new LiveMembers(test()->firestore),

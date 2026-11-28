@@ -64,11 +64,6 @@ final class ServiceAccount
         );
     }
 
-    public function sendEndpoint(): string
-    {
-        return 'https://fcm.googleapis.com/v1/projects/' . rawurlencode($this->projectId) . '/messages:send';
-    }
-
     /**
      * A short, stable identifier for this account, used to key the
      * cached access token. Not a secret and not reversible — it exists so

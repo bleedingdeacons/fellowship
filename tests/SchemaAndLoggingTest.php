@@ -9,10 +9,7 @@ use BleedingDeacons\WpMocks\WpState;
 use Fellowship\Core\Capabilities;
 use Fellowship\Core\Schema;
 use Fellowship\Core\Settings;
-use Fellowship\Devices\WpdbDeviceRepository;
 use Fellowship\Logger\HasLogger;
-use Fellowship\Messaging\WpdbMessageRepository;
-use Fellowship\Messaging\WpdbRecipientRepository;
 use Fellowship\Tests\Support\RecordingWpdb;
 
 /**
@@ -55,7 +52,7 @@ use Fellowship\Tests\Support\RecordingWpdb;
  * came to be worth writing.)
  */
 
-covers(\Fellowship\Core\Schema::class, \Fellowship\Core\Settings::class, \Fellowship\Core\Capabilities::class, \Fellowship\Logger\HasLogger::class, \Fellowship\Devices\WpdbDeviceRepository::class, \Fellowship\Messaging\WpdbMessageRepository::class, \Fellowship\Messaging\WpdbRecipientRepository::class);
+covers(\Fellowship\Core\Schema::class, \Fellowship\Core\Settings::class, \Fellowship\Core\Capabilities::class, \Fellowship\Logger\HasLogger::class);
 
 beforeEach(function () {
     $this->wpdb = new RecordingWpdb();
@@ -63,51 +60,14 @@ beforeEach(function () {
     $GLOBALS['__fellowship_dbdelta'] = [];
 });
 
-// ── The tables ────────────────────────────────────────────────────
+// ── The schema version ────────────────────────────────────────────
 
-test('a device token hash is unique', function () {
-    // What makes a bearer token identify one device rather than
-    // whichever row happened to come back first.
-    WpdbDeviceRepository::install($this->wpdb);
-
-    expect(schemaAndLoggingSql())->toMatch('~UNIQUE KEY \w*\s*\(token_hash\)~i');
-});
-
-test('a recipient is unique per message and member', function () {
-    // The arbiter the INSERT IGNORE relies on. Without it two sends
-    // racing on the same committee both write, and a member receives
-    // the same message twice.
-    WpdbRecipientRepository::install($this->wpdb);
-
-    $sql = schemaAndLoggingSql();
-
-    expect($sql)->toContain('message_id');
-    expect($sql)->toContain('member_email');
-    expect($sql)->toMatch('~UNIQUE KEY~i');
-});
-
-test('an address is indexed at a prefix rather than its full length', function () {
-    // A utf8mb4 index entry is four bytes per character, and a
-    // composite key over a full 254 would clear InnoDB's 3072-byte
-    // limit only by luck.
-    WpdbRecipientRepository::install($this->wpdb);
-
-    expect(schemaAndLoggingSql())->toContain('191');
-});
-
-test('a message table is created', function () {
-    WpdbMessageRepository::install($this->wpdb);
-
-    expect(schemaAndLoggingSql())->toContain('fellowship_messages');
-});
-
-test('every table carries the sites charset', function () {
-    // Without it a table is created in the server default, which on an
-    // older host is latin1 — and a message body would lose every
-    // character outside it, silently, on the way in.
+test('Fellowship creates no tables of its own', function () {
+    // Link's devices and messages live in Firestore, and password
+    // credentials are Unity's. A fresh install gets nothing it won't use.
     Schema::install($this->wpdb);
 
-    expect(schemaAndLoggingSql())->toContain('utf8mb4');
+    expect($GLOBALS['__fellowship_dbdelta'])->toBe([]);
 });
 
 test('the schema version is recorded so the next load is cheap', function () {
@@ -123,8 +83,16 @@ test('an older schema is upgraded', function () {
 
     Schema::ensureInstalled();
 
-    expect($GLOBALS['__fellowship_dbdelta'])->not->toBe([]);
     expect(WpState::$options[Schema::OPTION] ?? null)->toBe(Schema::VERSION);
+});
+
+test('the upgrade to version 5 drops the retired backend setting', function () {
+    WpState::$options[Settings::OPTION_PUBLIC] = ['link_backend' => 'firebase', 'retention_days' => '30'];
+    WpState::$options[Schema::OPTION] = 4;
+
+    Schema::ensureInstalled();
+
+    expect(WpState::$options[Settings::OPTION_PUBLIC])->toBe(['retention_days' => '30']);
 });
 
 test('the upgrade to version 4 drops the retired Link logging settings', function () {

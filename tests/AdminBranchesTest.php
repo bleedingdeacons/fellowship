@@ -18,17 +18,10 @@ use Fellowship\Crypto\MessageSealer;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Directory\DirectoryPresenter;
 use Fellowship\Messaging\MessageApi;
-use Fellowship\Messaging\MessageDispatcher;
-use Fellowship\Messaging\MessageRequest;
 use Fellowship\Messaging\RecipientResolver;
-use Fellowship\Push\FcmClient;
-use Fellowship\Push\FcmTransport;
-use Fellowship\Tests\Support\InMemoryDeviceRepository;
 use Fellowship\Tests\Support\InMemoryLinkDevices;
 use Fellowship\Tests\Support\RecordingDelivery;
-use Fellowship\Tests\Support\InMemoryMessageRepository;
 use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
-use Fellowship\Tests\Support\InMemoryRecipientRepository;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;
 use Unity\Testing\Doubles\CommitteeStub;
 use Unity\Testing\Doubles\InMemoryCommitteeRepository;
@@ -46,20 +39,11 @@ use Unity\Testing\Doubles\MemberStub;
  * as a blank cell, and that each says something different from the
  * others — a screen that reports two distinct faults identically is a
  * screen that sends somebody looking in the wrong place.
- *
- * <b>The fan-out records "pushed" per member, not per device.</b> A
- * member with two handsets gets one recipient row, so "at least one of
- * their handsets was told" is the honest claim — see Recipient::$pushedAt
- * on why it is not called delivery.
  */
 
-covers(\Fellowship\Admin\SettingsPage::class, \Fellowship\Admin\DevicesPage::class, \Fellowship\Admin\ComposePage::class, \Fellowship\Messaging\MessageDispatcher::class);
+covers(\Fellowship\Admin\SettingsPage::class, \Fellowship\Admin\DevicesPage::class, \Fellowship\Admin\ComposePage::class);
 
 const ADMIN_BRANCHES_MEMBER = 'member@example.org';
-
-/** FCM's answer for a registration token that no longer belongs to an installation. */
-const ADMIN_BRANCHES_UNREGISTERED = '{"error":{"code":404,"status":"NOT_FOUND","details":['
-    . '{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"UNREGISTERED"}]}}';
 
 beforeEach(function () {
     $_POST = [];
@@ -75,10 +59,7 @@ beforeEach(function () {
     when('wp_date')->alias(static fn(string $f, int $t): string => date($f, $t));
     when('wp_generate_uuid4')->alias(static fn(): string => '1111-' . random_int(1, 999999999));
 
-    $this->devices = new InMemoryDeviceRepository();
     $this->linkDevices = new InMemoryLinkDevices();
-    $this->messages = new InMemoryMessageRepository();
-    $this->recipients = new InMemoryRecipientRepository();
     $this->audit = new SpyAuditLogger();
 
     $this->members = new InMemoryMemberRepository([
@@ -234,174 +215,7 @@ test('a failure with no stored reason still says something', function () {
     expect(captureOutput(fn() => adminBranchesComposePage()->render()))->toContain('could not be sent');
 });
 
-// ── The fan-out ───────────────────────────────────────────────────
-
-test('a member with a handset is marked as pushed to', function () {
-    $settings = new Settings();
-    $settings->setFcmServiceAccount(adminBranchesAccountJson());
-
-    adminBranchesEnrol(adminBranchesPublicKey());
-
-    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-    FakeWpHttp::pushResponse(200, '{}');
-
-    $message = adminBranchesDispatch($settings);
-
-    $recipients = $this->recipients->forMessage($message);
-
-    expect($recipients)->toHaveCount(1);
-    expect($recipients[0]->pushedAt)->not->toBeNull();
-});
-
-test('a member with no handset is still a recipient', function () {
-    // They will read it when they enrol. A recipient row that is
-    // never written is a message they can never see.
-    $settings = new Settings();
-    $settings->setFcmServiceAccount(adminBranchesAccountJson());
-
-    $message = adminBranchesDispatch($settings);
-
-    $recipients = $this->recipients->forMessage($message);
-
-    expect($recipients)->toHaveCount(1);
-    expect($recipients[0]->pushedAt)->toBeNull();
-});
-
-test('a push that fails leaves the recipient unpushed', function () {
-    // Not an error: the handset collects it on its next poll, and
-    // claiming it was pushed would make the log say something untrue.
-    $settings = new Settings();
-    $settings->setFcmServiceAccount(adminBranchesAccountJson());
-
-    adminBranchesEnrol(adminBranchesPublicKey());
-
-    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-    FakeWpHttp::pushResponse(404, '{"error":{"status":"NOT_FOUND"}}');
-
-    $message = adminBranchesDispatch($settings);
-
-    expect($this->recipients->forMessage($message)[0]->pushedAt)->toBeNull();
-    // A 404 on its own is not a dead token, so the token stays put.
-    expect($this->devices->findById(1)?->pushToken)->toBe('token-1');
-});
-
-test('a token FCM no longer recognises is cleared from the handset', function () {
-    // Left in place it would fail the same way for every later message
-    // while the admin list showed the handset as push-capable. Cleared,
-    // the row reads "no push token yet" until the handset reports a
-    // live one.
-    $settings = new Settings();
-    $settings->setFcmServiceAccount(adminBranchesAccountJson());
-
-    adminBranchesEnrol(adminBranchesPublicKey());
-
-    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-    FakeWpHttp::pushResponse(404, ADMIN_BRANCHES_UNREGISTERED);
-
-    $message = adminBranchesDispatch($settings);
-
-    $device = $this->devices->findById(1);
-    expect($device)->not->toBeNull();
-    expect($device?->pushToken)->toBe('');
-    expect($device?->pushBlocker())->toBe('no push token yet');
-    expect($this->recipients->forMessage($message)[0]->pushedAt)->toBeNull();
-});
-
-test('the next message does not try the cleared token again', function () {
-    $settings = new Settings();
-    $settings->setFcmServiceAccount(adminBranchesAccountJson());
-
-    adminBranchesEnrol(adminBranchesPublicKey());
-
-    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-    FakeWpHttp::pushResponse(404, ADMIN_BRANCHES_UNREGISTERED);
-
-    adminBranchesDispatch($settings);
-    $calls = FakeWpHttp::callCount();
-
-    adminBranchesDispatch($settings);
-
-    expect(FakeWpHttp::callCount())->toBe($calls);
-});
-
-test('a token the handset replaced mid-send survives the clear', function () {
-    // The handset reported a new token after the dispatcher read the row
-    // and before FCM answered for the old one. Clearing unconditionally
-    // would throw the live token away.
-    $settings = new Settings();
-    $settings->setFcmServiceAccount(adminBranchesAccountJson());
-
-    adminBranchesEnrol(adminBranchesPublicKey());
-
-    FakeWpHttp::pushResponse(200, '{"access_token":"ya29.token","expires_in":3600}');
-    FakeWpHttp::pushResponse(404, ADMIN_BRANCHES_UNREGISTERED);
-
-    $devices = test()->devices;
-    $request = MessageRequest::fromArray([
-        'subject' => 'Intergroup moved',
-        'body' => 'Now the 14th.',
-        'member_emails' => [ADMIN_BRANCHES_MEMBER],
-    ]);
-    expect($request)->toBeInstanceOf(MessageRequest::class);
-
-    // Hands the dispatcher the row as it was read, then rotates the
-    // token behind it, which is the race in question.
-    $racing = new class ($devices) extends InMemoryDeviceRepository {
-        public function __construct(private readonly InMemoryDeviceRepository $inner)
-        {
-        }
-
-        public function findByMemberEmail(string $memberEmail): array
-        {
-            $read = $this->inner->findByMemberEmail($memberEmail);
-            $this->inner->updatePush(1, 'fcm', 'token-2');
-
-            return $read;
-        }
-
-        public function clearPushToken(int $id, string $deadToken): bool
-        {
-            return $this->inner->clearPushToken($id, $deadToken);
-        }
-    };
-
-    (new MessageDispatcher(
-        test()->messages,
-        test()->recipients,
-        $racing,
-        new FcmTransport(new FcmClient(), $settings, new MessageSealer()),
-    ))->dispatch($request, [['email' => ADMIN_BRANCHES_MEMBER, 'member_id' => 7]], '', 0, 'Intergroup');
-
-    expect($devices->findById(1)?->pushToken)->toBe('token-2');
-});
-
 // ── Fixtures ──────────────────────────────────────────────────────
-
-function adminBranchesDispatch(Settings $settings): int
-{
-    $request = MessageRequest::fromArray([
-        'subject' => 'Intergroup moved',
-        'body' => 'Now the 14th.',
-        'member_emails' => [ADMIN_BRANCHES_MEMBER],
-    ]);
-
-    expect($request)->toBeInstanceOf(MessageRequest::class);
-
-    $dispatcher = new MessageDispatcher(
-        test()->messages,
-        test()->recipients,
-        test()->devices,
-        new FcmTransport(new FcmClient(), $settings, new MessageSealer()),
-    );
-
-    return $dispatcher->dispatch(
-        $request,
-        [['email' => ADMIN_BRANCHES_MEMBER, 'member_id' => 7]],
-        '',
-        0,
-        'Intergroup',
-    )->id;
-}
 
 function adminBranchesDevicesPage(): DevicesPage
 {
@@ -435,22 +249,7 @@ function adminBranchesComposePage(array $committees = []): ComposePage
         ),
         new InMemoryCommitteeRepository($committees),
         $gate,
-        new DirectoryPresenter(test()->members, new InMemoryCommitteeRepository(), $gate, test()->devices),
-    );
-}
-
-function adminBranchesEnrol(string $publicKey = 'spki'): void
-{
-    test()->devices->create(
-        'hash-1',
-        ADMIN_BRANCHES_MEMBER,
-        7,
-        'Pixel 6a',
-        'android',
-        $publicKey,
-        'fcm',
-        'token-1',
-        1788000000,
+        new DirectoryPresenter(test()->members, new InMemoryCommitteeRepository(), $gate),
     );
 }
 
@@ -487,15 +286,4 @@ function adminBranchesPrivateKey(): string
     }
 
     return $pem;
-}
-
-function adminBranchesPublicKey(): string
-{
-    $resource = openssl_pkey_get_private(adminBranchesPrivateKey());
-    expect($resource)->not->toBeFalse();
-
-    $details = openssl_pkey_get_details($resource);
-    expect($details)->toBeArray();
-
-    return preg_replace('/\s+|-----[^-]*-----/', '', (string) $details['key']) ?? '';
 }

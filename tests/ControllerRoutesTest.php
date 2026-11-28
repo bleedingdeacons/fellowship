@@ -7,35 +7,19 @@ namespace Fellowship\Tests;
 use function Brain\Monkey\Functions\when;
 use Fellowship\Auth\AudienceRegistry;
 use Fellowship\Auth\DeviceCodeStore;
-use Fellowship\Auth\DeviceRedirectValidator;
-use Fellowship\Auth\DeviceTokenMinter;
-use Fellowship\Auth\LinkAudience;
 use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
 use Guardian\ProviderRegistry;
 use Fellowship\Auth\StateStore;
-use Fellowship\Auth\VerifiedIdentity;
 use Guardian\VerifiedIdentity as ProviderIdentity;
 use Fellowship\Core\RateLimiter;
-use Fellowship\Core\Settings;
-use Fellowship\Crypto\MessageSealer;
-use Fellowship\Devices\CurrentDevice;
 use Fellowship\Devices\MemberGate;
-use Fellowship\Messaging\MessageDispatcher;
-use Fellowship\Messaging\RecipientResolver;
-use Fellowship\Push\FcmClient;
-use Fellowship\Push\FcmTransport;
 use Fellowship\Rest\DeviceAuthController;
-use Fellowship\Rest\MessageController;
-use Fellowship\Tests\Support\InMemoryDeviceRepository;
 use Fellowship\Tests\Support\StubAudience;
 use Fellowship\Tests\Support\StubProvider;
-use Fellowship\Tests\Support\InMemoryMessageRepository;
 use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
-use Fellowship\Tests\Support\InMemoryRecipientRepository;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;
-use Unity\Testing\Doubles\InMemoryCommitteeRepository;
 use Unity\Testing\Doubles\InMemoryMemberRepository;
 use Unity\Testing\Doubles\MemberStub;
 use WP_Error;
@@ -59,7 +43,7 @@ use WP_REST_Response;
  * wrong is a member staring at a tab that went nowhere.
  */
 
-covers(\Fellowship\Rest\DeviceAuthController::class, \Fellowship\Rest\MessageController::class);
+covers(\Fellowship\Rest\DeviceAuthController::class);
 
 const CONTROLLER_ROUTES_MEMBER = 'member@example.org';
 
@@ -81,9 +65,6 @@ beforeEach(function () {
         }
     );
 
-    $this->devices = new InMemoryDeviceRepository();
-    $this->messages = new InMemoryMessageRepository();
-    $this->recipients = new InMemoryRecipientRepository();
     $this->states = new StateStore();
     $this->codes = new DeviceCodeStore();
     $this->google = new StubProvider('google', serverSide: true);
@@ -124,22 +105,11 @@ test('the old device routes are gone', function (string $route) {
     '/auth/device',
 ]);
 
-test('every message route is registered', function () {
-    routesMessageController()->registerRoutes();
-
-    $registered = array_column($this->routes, 'route');
-
-    expect($registered)->toContain('/messages');
-    expect($registered)->toContain('/messages/received');
-    expect($registered)->toContain('/messages/receipts');
-});
-
 test('every route lives under fellowships own namespace', function () {
     // A route registered into another plugin's namespace would be
     // reachable at a URL the app never calls, and invisible at the
     // one it does.
     routesAuthController()->registerRoutes();
-    routesMessageController()->registerRoutes();
 
     foreach ($this->routes as $route) {
         expect($route['namespace'])->toBe('fellowship/v1');
@@ -262,17 +232,12 @@ function routesAuthController(?StubProvider $provider = null): DeviceAuthControl
     $registry->register($provider ?? test()->google);
 
     $gate = new MemberGate(test()->members);
-    $minter = new DeviceTokenMinter();
 
     return new DeviceAuthController(
-        test()->devices,
-        $minter,
-        test()->codes,
-        new DeviceRedirectValidator(),
-        $gate,
-        new CurrentDevice(test()->devices, $minter, $gate, test()->members),
         $registry,
         test()->states,
+        test()->codes,
+        $gate,
         new RateLimiter(),
         new SpyAuditLogger(),
         new PasswordAuthenticator(
@@ -281,42 +246,17 @@ function routesAuthController(?StubProvider $provider = null): DeviceAuthControl
             new PasswordResetMailer(),
             new PasswordPolicy(),
         ),
-        routesAudiences($gate),
+        routesAudiences(),
     );
 }
 
-/** Link's audience, as Fellowship always holds it, and a stand-in for Freedom's. */
-function routesAudiences(MemberGate $gate): AudienceRegistry
+/** A stand-in for Freedom's audience, which is what the callback serves. */
+function routesAudiences(): AudienceRegistry
 {
-    $audiences = new AudienceRegistry(new LinkAudience(new DeviceRedirectValidator(), $gate));
+    $audiences = new AudienceRegistry();
     $audiences->register(new StubAudience('freedom', CONTROLLER_ROUTES_CALLBACK, [CONTROLLER_ROUTES_MEMBER]));
 
     return $audiences;
-}
-
-function routesMessageController(): MessageController
-{
-    $gate = new MemberGate(test()->members);
-    $settings = new Settings();
-    $sealer = new MessageSealer();
-    $minter = new DeviceTokenMinter();
-
-    return new MessageController(
-        new CurrentDevice(test()->devices, $minter, $gate, test()->members),
-        test()->messages,
-        test()->recipients,
-        new MessageDispatcher(
-            test()->messages,
-            test()->recipients,
-            test()->devices,
-            new FcmTransport(new FcmClient(), $settings, $sealer),
-        ),
-        new RecipientResolver(test()->members, new InMemoryCommitteeRepository(), $gate),
-        $sealer,
-        $settings,
-        new RateLimiter(),
-        new SpyAuditLogger(),
-    );
 }
 
 /**

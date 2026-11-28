@@ -80,7 +80,7 @@ final class SettingsPage
         echo '<h2>' . esc_html__('Sign-in providers', 'fellowship') . '</h2>';
         $this->providerSection()->render();
 
-        echo '<h2>' . esc_html__('Push notifications', 'fellowship') . '</h2>';
+        echo '<h2>' . esc_html__('Firebase', 'fellowship') . '</h2>';
         echo '<table class="form-table" role="presentation"><tbody>';
         echo '<tr><th scope="row"><label for="fcm_service_account">' . esc_html__('Site service account', 'fellowship') . '</label></th><td>';
         echo '<textarea name="fcm_service_account" id="fcm_service_account" rows="6" class="large-text code" placeholder="'
@@ -89,7 +89,7 @@ final class SettingsPage
         echo '<label><input type="checkbox" name="clear_fcm" value="1"> '
             . esc_html__('Clear the stored service account', 'fellowship') . '</label>';
         echo '<p class="description">'
-            . esc_html__('Without a service account, messages are still stored and delivered — handsets collect them on their next poll instead of being woken.', 'fellowship')
+            . esc_html__('Without it Link cannot sign in or send: the site signs what each phone carries to Firebase with this account.', 'fellowship')
             . '</p>';
         echo '</td></tr>';
         echo '</tbody></table>';
@@ -217,12 +217,12 @@ final class SettingsPage
     {
         $stored = $this->settings->getFcmServiceAccount();
         if ($stored === '') {
-            return __('No service account is stored — messages will be delivered by polling only.', 'fellowship');
+            return __('No service account is stored — Link cannot sign in or send.', 'fellowship');
         }
 
         $account = ServiceAccount::fromJson($stored);
         if ($account === null) {
-            return __('A service account is stored but could not be read. Push is not working.', 'fellowship');
+            return __('A service account is stored but could not be read. Link cannot sign in or send.', 'fellowship');
         }
 
         return sprintf(

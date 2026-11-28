@@ -8,14 +8,16 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-use Fellowship\Devices\WpdbDeviceRepository;
 use Fellowship\Logger\HasLogger;
-use Fellowship\Messaging\WpdbMessageRepository;
-use Fellowship\Messaging\WpdbRecipientRepository;
 use wpdb;
 
 /**
- * Owns every table Fellowship creates, and makes sure they exist.
+ * Fellowship's schema version, and the one-off upgrades an update runs.
+ *
+ * <b>Fellowship creates no tables any more.</b> Link's devices and messages
+ * live in Firestore, and password credentials are Unity's. What stays is the
+ * version check: it is the one hook an existing site runs on update, so it is
+ * where a clean-up has to live.
  *
  * <b>Why this is not just the activation hook.</b> That works exactly
  * once — the first time a site activates the plugin — and then quietly
@@ -52,8 +54,11 @@ final class Schema
      *     the settings rows (see Settings::dropRetired()). This is the one
      *     hook an existing site runs on update, so it is where a one-off
      *     clean-up has to live.
+     * 5 — the old Link tables (devices, messages, message recipients) are no
+     *     longer created, and the retired `link_backend` setting is dropped.
+     *     Link signs in and sends through Firebase.
      */
-    public const VERSION = 4;
+    public const VERSION = 5;
 
     public const OPTION = 'fellowship_schema_version';
 
@@ -117,13 +122,10 @@ final class Schema
      */
     public static function install(wpdb $wpdb): void
     {
-        // Password credentials are not here: the table is Unity's, and
-        // Unity installs it on its own version change. See
+        // Fellowship creates no tables of its own any more. Link's devices and
+        // messages live in Firestore, and password credentials are Unity's,
+        // installed on its own version change. See
         // Unity\Auth\WpdbPasswordCredentialRepository.
-        WpdbDeviceRepository::install($wpdb);
-        WpdbMessageRepository::install($wpdb);
-        WpdbRecipientRepository::install($wpdb);
-
         Settings::dropRetired();
     }
 }

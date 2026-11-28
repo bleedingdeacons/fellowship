@@ -8,7 +8,6 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-use Fellowship\Devices\DeviceRepository;
 use Fellowship\Devices\MemberGate;
 use Fellowship\Firebase\LiveMembers;
 use Unity\Committees\Interfaces\CommitteeRepository;
@@ -25,9 +24,8 @@ use Unity\Positions\Interfaces\PositionRepository;
  * never learns anybody's email address or telephone number, so a stolen
  * handset yields a list of first names rather than the intergroup's
  * contact database. That is also why the identifier the app sends back
- * is an opaque member id rather than an address — see
- * {@see \Fellowship\Rest\MessageController}, which resolves ids to
- * addresses server-side.
+ * is an opaque member id rather than an address, which Fellowship resolves
+ * to an address server-side when it signs who a message reaches.
  *
  * <b>`showMemberProfile()` plays no part in messaging.</b> Whether a
  * member appears here does not depend on it, so a member can be written to
@@ -77,22 +75,6 @@ final class DirectoryPresenter
     private ?array $positionTitles = null;
 
     /**
-     * Member ids with at least one live device, keyed for lookup. Built on
-     * first use, like the title maps.
-     *
-     * @var array<int, true>|null
-     */
-    private ?array $enrolledIds = null;
-
-    /**
-     * Lower-cased emails with at least one live device, for device rows that
-     * carry no member id.
-     *
-     * @var array<string, true>|null
-     */
-    private ?array $enrolledEmails = null;
-
-    /**
      * @param GroupRepository|null    $groups    Unity ships headless, so the
      *     group repository is not guaranteed to be bound. Null means the
      *     list is built without home groups rather than not at all.
@@ -104,7 +86,6 @@ final class DirectoryPresenter
         private readonly MemberRepository $members,
         private readonly CommitteeRepository $committees,
         private readonly MemberGate $gate,
-        private readonly DeviceRepository $devices,
         private readonly ?GroupRepository $groups = null,
         private readonly ?PositionRepository $positions = null,
         private readonly ?LiveMembers $firebaseMembers = null,
@@ -194,53 +175,22 @@ final class DirectoryPresenter
     }
 
     /**
-     * Whether any live device is enrolled to this member.
+     * Whether any live device on Firebase belongs to this member.
      *
-     * <b>One query for the whole list, not one per member.</b> The same
-     * reasoning as {@see groupTitle()}: a per-member lookup on an endpoint
-     * that returns the whole address book is an N+1.
+     * <b>One Firestore query for the whole list, not one per member</b>: see
+     * {@see LiveMembers}. A per-member lookup on an endpoint that returns the
+     * whole address book would be an N+1.
      *
-     * Matched on member id, and on email as well. A device row records both,
-     * but the id is what the directory already keys on and the email is the
-     * fallback for any row enrolled without one. Revoked rows never count,
-     * because {@see DeviceRepository::findAllLive()} does not return them.
+     * <b>Unknown isn't nobody.</b> With Firebase unconfigured or unreachable,
+     * everyone is selectable, which is what the app already assumes when it
+     * isn't told. A send still reports who it couldn't reach, whereas greying
+     * out the whole address book would stop anyone trying.
      */
     private function hasDevice(Member $member): bool
     {
-        if ($this->firebaseMembers !== null) {
-            $onFirebase = $this->firebaseMembers->memberIds();
+        $onFirebase = $this->firebaseMembers?->memberIds();
 
-            // Unknown isn't nobody. Selectable is what the app already assumes when
-            // it isn't told, and a send still reports who it couldn't reach, whereas
-            // greying out the whole address book would stop anyone trying.
-            if ($onFirebase === null || isset($onFirebase[$member->getId()])) {
-                return true;
-            }
-        }
-
-        if ($this->enrolledIds === null || $this->enrolledEmails === null) {
-            $this->enrolledIds = [];
-            $this->enrolledEmails = [];
-
-            foreach ($this->devices->findAllLive() as $device) {
-                if ($device->memberId > 0) {
-                    $this->enrolledIds[$device->memberId] = true;
-                }
-
-                $email = strtolower(trim($device->memberEmail));
-                if ($email !== '') {
-                    $this->enrolledEmails[$email] = true;
-                }
-            }
-        }
-
-        if (isset($this->enrolledIds[$member->getId()])) {
-            return true;
-        }
-
-        $email = strtolower(trim($member->getPersonalEmail()));
-
-        return $email !== '' && isset($this->enrolledEmails[$email]);
+        return $onFirebase === null || isset($onFirebase[$member->getId()]);
     }
 
     /**

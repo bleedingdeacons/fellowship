@@ -10,7 +10,6 @@ if (!defined('ABSPATH')) {
 
 use Fellowship\Auth\SignInTokens;
 use Fellowship\Core\RateLimiter;
-use Fellowship\Devices\DeviceResolution;
 use Fellowship\Devices\FirebaseDeviceResolution;
 use Fellowship\Devices\FirebaseDevices;
 use Fellowship\Devices\MemberGate;
@@ -162,7 +161,7 @@ final class AttestationController
                     'This device could not be checked just now. Please try again.',
                     ['status' => 503],
                 ),
-                DeviceResolution::NOT_A_MEMBER => new WP_Error(
+                FirebaseDeviceResolution::NOT_A_MEMBER => new WP_Error(
                     'fellowship_not_a_member',
                     'That address no longer matches a member record.',
                     ['status' => 403],

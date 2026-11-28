@@ -16,12 +16,8 @@ use Closure;
 use Fellowship\Auth\AudienceProviders;
 use Fellowship\Auth\AudienceRegistry;
 use Fellowship\Auth\DeviceCodeStore;
-use Fellowship\Auth\DeviceRedirectValidator;
-use Fellowship\Auth\DeviceTokenMinter;
 use Fellowship\Auth\FirebaseCustomTokenMinter;
-use Fellowship\Auth\FirebaseSignIn;
 use Fellowship\Auth\IdentityBroker;
-use Fellowship\Auth\LinkAudience;
 use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Devices\FirebaseDevices;
 use Fellowship\Firebase\AdminFunctions;
@@ -40,7 +36,6 @@ use Fellowship\Auth\PasswordResetMailer;
 use Fellowship\Auth\SignInTokens;
 use Fellowship\Auth\StateStore;
 use Guardian\Credentials\CredentialStore;
-use Guardian\Firebase\FirebaseIdTokenVerifier;
 use Guardian\Jwt\JwtVerifier;
 use Guardian\ProviderRegistry;
 use Guardian\Providers\AppleProvider;
@@ -49,27 +44,16 @@ use Guardian\Providers\GoogleProvider;
 use Guardian\Providers\MicrosoftProvider;
 use Guardian\Providers\OAuthProvider;
 use Fellowship\Crypto\MessageSealer;
-use Fellowship\Devices\CurrentDevice;
-use Fellowship\Devices\DeviceRepository;
 use Fellowship\Devices\MemberGate;
-use Fellowship\Devices\WpdbDeviceRepository;
 use Fellowship\Cli\DirectoryCli;
 use Fellowship\Directory\DirectoryPresenter;
 use Fellowship\Messaging\AudienceResolver;
 use Fellowship\Messaging\MessageApi;
-use Fellowship\Messaging\MessageDispatcher;
-use Fellowship\Messaging\MessageRepository;
-use Fellowship\Messaging\RecipientRepository;
 use Fellowship\Messaging\RecipientResolver;
-use Fellowship\Messaging\WpdbMessageRepository;
-use Fellowship\Messaging\WpdbRecipientRepository;
-use Fellowship\Push\FcmClient;
-use Fellowship\Push\FcmTransport;
 use Fellowship\Push\ServiceAccount;
 use Fellowship\Rest\DeviceAuthController;
 use Fellowship\Rest\DirectoryController;
 use Fellowship\Rest\FirebaseIdentityController;
-use Fellowship\Rest\MessageController;
 use Fellowship\Rest\AttestationController;
 use Psr\Container\ContainerInterface;
 use Scrutiny\Audit\Interfaces\AuditLogger;
@@ -148,8 +132,6 @@ final class FellowshipServiceProvider
         $container->register(self::JWT_VERIFIER, fn() => new JwtVerifier(UserAgent::plugin(), 'fellowship'));
         $container->register(StateStore::class, fn() => new StateStore());
         $container->register(DeviceCodeStore::class, fn() => new DeviceCodeStore());
-        $container->register(DeviceTokenMinter::class, fn() => new DeviceTokenMinter());
-        $container->register(DeviceRedirectValidator::class, fn() => new DeviceRedirectValidator());
 
         $container->register(self::PROVIDER_REGISTRY, function (ContainerInterface $c) {
             $registry = new ProviderRegistry();
@@ -175,65 +157,26 @@ final class FellowshipServiceProvider
             self::providerFactory($c->get(self::JWT_VERIFIER)),
         ));
 
-        // ── Devices ──
-        $container->register(DeviceRepository::class, function () {
-            global $wpdb;
-            return new WpdbDeviceRepository($wpdb);
-        });
-        $container->register(CurrentDevice::class, fn(ContainerInterface $c) => new CurrentDevice(
-            $c->get(DeviceRepository::class),
-            $c->get(DeviceTokenMinter::class),
-            $c->get(MemberGate::class),
-        ));
-
         // ── Signing in on behalf of other plugins ──
         //
         // One registry, shared: the controller's callback reads it and
         // another plugin writes into it through the broker, on
         // fellowship/loaded. See SignInAudience.
-        $container->register(AudienceRegistry::class, fn(ContainerInterface $c) => new AudienceRegistry(
-            new LinkAudience($c->get(DeviceRedirectValidator::class), $c->get(MemberGate::class)),
-        ));
+        $container->register(AudienceRegistry::class, fn() => new AudienceRegistry());
         $container->register(IdentityBroker::class, fn(ContainerInterface $c) => new IdentityBroker(
             $c->get(AudienceRegistry::class),
             $c->get(self::PROVIDER_REGISTRY),
             $c->get(StateStore::class),
             $c->get(DeviceCodeStore::class),
-            $c->get(CurrentDevice::class),
-            $c->get(DeviceRepository::class),
-            $c->get(MemberGate::class),
-            $c->get(AudienceProviders::class),
             $c->get(FirebaseDevices::class),
+            $c->get(AudienceProviders::class),
         ));
 
         // ── Messages ──
-        $container->register(MessageRepository::class, function () {
-            global $wpdb;
-            return new WpdbMessageRepository($wpdb);
-        });
-        $container->register(RecipientRepository::class, function () {
-            global $wpdb;
-            return new WpdbRecipientRepository($wpdb);
-        });
         $container->register(RecipientResolver::class, fn(ContainerInterface $c) => new RecipientResolver(
             $c->get(MemberRepository::class),
             $c->get(CommitteeRepository::class),
             $c->get(MemberGate::class),
-        ));
-
-        // ── Push ──
-        $container->register(FcmClient::class, fn() => new FcmClient());
-        $container->register(FcmTransport::class, fn(ContainerInterface $c) => new FcmTransport(
-            $c->get(FcmClient::class),
-            $c->get(Settings::class),
-            $c->get(MessageSealer::class),
-        ));
-
-        $container->register(MessageDispatcher::class, fn(ContainerInterface $c) => new MessageDispatcher(
-            $c->get(MessageRepository::class),
-            $c->get(RecipientRepository::class),
-            $c->get(DeviceRepository::class),
-            $c->get(FcmTransport::class),
         ));
 
         $container->register(MessageApi::class, fn(ContainerInterface $c) => new MessageApi(
@@ -252,9 +195,6 @@ final class FellowshipServiceProvider
             $c->get(MemberRepository::class),
             $c->get(CommitteeRepository::class),
             $c->get(MemberGate::class),
-            // Whether each member has a live device, for the app's
-            // hasDevice flag. One findAllLive() per directory read.
-            $c->get(DeviceRepository::class),
             // Feature-detected, the way Promises detects Unity's
             // repositories: Unity ships headless and a deployment need not
             // have groups bound. Absent, the directory is built without
@@ -263,7 +203,7 @@ final class FellowshipServiceProvider
             $c->has(GroupRepository::class) ? $c->get(GroupRepository::class) : null,
             // The same, for intergroup service positions.
             $c->has(PositionRepository::class) ? $c->get(PositionRepository::class) : null,
-            // Who has a device on Firebase, on top of the table above.
+            // Who has a device on Firebase, for the app's hasDevice flag.
             $c->get(LiveMembers::class),
         ));
 
@@ -291,16 +231,6 @@ final class FellowshipServiceProvider
             $c->get(PasswordResetMailer::class),
             $c->get(PasswordPolicy::class),
         ));
-
-        // Native Google sign-in, pinned to the project Fellowship already
-        // pushes through. See FirebaseSignIn on why that is the right one.
-        $container->register(FirebaseSignIn::class, function (ContainerInterface $c) {
-            $settings = $c->get(Settings::class);
-            return new FirebaseSignIn(
-                new FirebaseIdTokenVerifier($c->get(self::JWT_VERIFIER), 'fellowship'),
-                static fn(): string => ServiceAccount::fromJson($settings->getFcmServiceAccount())->projectId ?? '',
-            );
-        });
 
         // The service account pushes through, again: it signs the custom
         // tokens a Unity password becomes, and it is who the Functions run as.
@@ -372,32 +302,15 @@ final class FellowshipServiceProvider
 
         // ── REST ──
         $container->register(DeviceAuthController::class, fn(ContainerInterface $c) => new DeviceAuthController(
-            $c->get(DeviceRepository::class),
-            $c->get(DeviceTokenMinter::class),
-            $c->get(DeviceCodeStore::class),
-            $c->get(DeviceRedirectValidator::class),
-            $c->get(MemberGate::class),
-            $c->get(CurrentDevice::class),
             $c->get(self::PROVIDER_REGISTRY),
             $c->get(StateStore::class),
+            $c->get(DeviceCodeStore::class),
+            $c->get(MemberGate::class),
             $c->get(RateLimiter::class),
             $c->get(AuditLogger::class),
             $c->get(PasswordAuthenticator::class),
             $c->get(AudienceRegistry::class),
             $c->get(AudienceProviders::class),
-            $c->get(FirebaseSignIn::class),
-        ));
-
-        $container->register(MessageController::class, fn(ContainerInterface $c) => new MessageController(
-            $c->get(CurrentDevice::class),
-            $c->get(MessageRepository::class),
-            $c->get(RecipientRepository::class),
-            $c->get(MessageDispatcher::class),
-            $c->get(RecipientResolver::class),
-            $c->get(MessageSealer::class),
-            $c->get(Settings::class),
-            $c->get(RateLimiter::class),
-            $c->get(AuditLogger::class),
         ));
 
         $container->register(DirectoryController::class, fn(ContainerInterface $c) => new DirectoryController(
@@ -412,7 +325,6 @@ final class FellowshipServiceProvider
             $c->get(MemberGate::class),
             $c->get(FirebaseCustomTokenMinter::class),
             $c->get(RateLimiter::class),
-            $c->get(Settings::class),
         ));
 
         $container->register(AudienceResolver::class, fn(ContainerInterface $c) => new AudienceResolver(
