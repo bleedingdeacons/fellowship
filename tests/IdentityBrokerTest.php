@@ -223,11 +223,15 @@ test('a state naming an audience nobody registered is refused', function () {
     expect($response->get_error_code())->toBe('fellowship_bad_state');
 });
 
-test('Link still refuses somebody who is not a member', function () {
-    $this->google->identity = new ProviderIdentity(IDENTITY_BROKER_TABLET, 'google', 'sub-t');
+test('a sign-in started for Link is refused at the callback, member or not', function () {
+    // Link signs in through Firebase. Nothing is redirected to link://,
+    // where any app on the phone could have claimed the code.
     $issued = $this->states->issue('google', 'link://auth');
 
-    expect(identityBrokerCallback($issued['state']))->toBe('link://auth?error=not_a_member');
+    $response = identityBrokerController()->callback(identityBrokerRequest(['state' => $issued['state'], 'code' => 'c']));
+
+    expect($response)->toBeInstanceOf(WP_Error::class);
+    expect($response->get_error_code())->toBe('fellowship_bad_state');
 });
 
 // ── Codes do not cross audiences ─────────────────────────────────

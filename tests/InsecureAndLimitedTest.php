@@ -6,9 +6,11 @@ namespace Fellowship\Tests;
 
 use function Brain\Monkey\Functions\when;
 use function Brain\Monkey\Actions\expectAdded;
+use Fellowship\Auth\AudienceRegistry;
 use Fellowship\Auth\DeviceCodeStore;
 use Fellowship\Auth\DeviceRedirectValidator;
 use Fellowship\Auth\DeviceTokenMinter;
+use Fellowship\Auth\LinkAudience;
 use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
@@ -21,6 +23,7 @@ use Fellowship\Devices\MemberGate;
 use Fellowship\Rest\DeviceAuthController;
 use Fellowship\Tests\Support\InMemoryDeviceRepository;
 use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
+use Fellowship\Tests\Support\StubAudience;
 use Fellowship\Tests\Support\StubProvider;
 use RuntimeException;
 use Scrutiny\Testing\Doubles\SpyAuditLogger;
@@ -49,6 +52,9 @@ use WP_REST_Request;
 covers(\Fellowship\Rest\DeviceAuthController::class);
 
 const INSECURE_AND_LIMITED_MEMBER = 'member@example.org';
+
+/** Another audience's app, such as Freedom's: Link's browser leg is gone. */
+const INSECURE_AND_LIMITED_APP = 'org.example.app.freedom://auth';
 
 beforeEach(function () {
     when('rest_url')->alias(static fn(string $p = ''): string => 'https://example.org/wp-json/' . $p);
@@ -133,7 +139,7 @@ test('a callback carrying a target that is not the app is refused', function () 
     // has already influenced.
     when('is_ssl')->justReturn(true);
 
-    $issued = insecureAndLimitedStates()->issue('google', 'https://example.invalid/steal');
+    $issued = insecureAndLimitedStates()->issue('google', 'https://example.invalid/steal', null, 'freedom');
 
     $response = insecureAndLimitedController()->callback(insecureAndLimitedRequest([
         'state' => $issued['state'],
@@ -151,7 +157,7 @@ test('a callback for a provider that is no longer configured sends the app back'
     // half way through signing in.
     when('is_ssl')->justReturn(true);
 
-    $issued = insecureAndLimitedStates()->issue('microsoft', 'link://auth');
+    $issued = insecureAndLimitedStates()->issue('microsoft', INSECURE_AND_LIMITED_APP, null, 'freedom');
 
     $response = insecureAndLimitedController()->callback(insecureAndLimitedRequest([
         'state' => $issued['state'],
@@ -164,7 +170,7 @@ test('a callback for a provider that is no longer configured sends the app back'
 test('a callback the member declined sends the app back too', function () {
     when('is_ssl')->justReturn(true);
 
-    $issued = insecureAndLimitedStates()->issue('google', 'link://auth');
+    $issued = insecureAndLimitedStates()->issue('google', INSECURE_AND_LIMITED_APP, null, 'freedom');
 
     $response = insecureAndLimitedController()->callback(insecureAndLimitedRequest([
         'state' => $issued['state'],
@@ -261,7 +267,17 @@ function insecureAndLimitedController(
             new PasswordResetMailer(),
             new PasswordPolicy(),
         ),
+        insecureAndLimitedAudiences($gate),
     );
+}
+
+/** Link's audience, as Fellowship always holds it, and a stand-in for Freedom's: the callback serves only the latter. */
+function insecureAndLimitedAudiences(MemberGate $gate): AudienceRegistry
+{
+    $audiences = new AudienceRegistry(new LinkAudience(new DeviceRedirectValidator(), $gate));
+    $audiences->register(new StubAudience('freedom', INSECURE_AND_LIMITED_APP));
+
+    return $audiences;
 }
 
 function throwingDevices(): InMemoryDeviceRepository

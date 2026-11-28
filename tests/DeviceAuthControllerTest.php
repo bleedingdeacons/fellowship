@@ -508,10 +508,9 @@ test('a wrong password is logged against the address typed', function () {
     ]);
 });
 
-test('a non member turned away in the browser is logged', function () {
-    // Google's browser leg refuses a non-member at the callback, before
-    // the app ever reaches the exchange.
-    $this->google->identity = new \Guardian\VerifiedIdentity('nobody@example.org', 'google', 'sub-9');
+test('a sign-in started for Link and refused at the callback is logged', function () {
+    // Link signs in through Firebase, so a Link state reaching the
+    // callback is refused before any provider is asked, and leaves a trace.
     $issued = $this->states->issue('google', DEVICE_AUTH_CONTROLLER_CALLBACK);
 
     deviceAuthControllerController()->callback(deviceAuthControllerRequest([
@@ -519,12 +518,7 @@ test('a non member turned away in the browser is logged', function () {
         'code' => 'provider-code',
     ]));
 
-    expect(deviceAuthControllerRefusals())->toBe([[
-        'step'    => 'callback',
-        'flow'    => 'google',
-        'refusal' => 'not_a_member',
-        'address' => 'n***@example.org',
-    ]]);
+    expect(array_column(deviceAuthControllerRefusals(), 'refusal'))->toBe(['fellowship_bad_state']);
 });
 
 test('a sign in that succeeds logs no refusal', function () {

@@ -146,23 +146,17 @@ test('all gsrs is not offered when there are none', function () {
 
 // ── The route ─────────────────────────────────────────────────────
 
-test('an enrolled handset is given the directory', function () {
-    $token = directoryEnrol();
+// A Firebase device reading it, and the audit entry that leaves, are in
+// FirebaseDevicesTest.
 
-    $response = directoryController()->index(directoryRequest($token));
+test('an old WordPress device token gets no directory', function () {
+    // Link has none any more, and the only ones still issued belong to
+    // another audience, such as Register's tablets.
+    $response = directoryController()->index(directoryRequest(directoryEnrol()));
 
-    expect($response)->toBeInstanceOf(WP_REST_Response::class);
-    expect((array) $response->get_data())->toHaveKey('members');
-});
-
-test('reading the directory is audited', function () {
-    // It is a list of members, so who read it and when is worth
-    // recording.
-    $token = directoryEnrol();
-
-    directoryController()->index(directoryRequest($token));
-
-    expect($this->audit->entries)->not->toBeEmpty();
+    expect($response)->toBeInstanceOf(WP_Error::class);
+    expect($response->get_error_data()['status'])->toBe(401);
+    expect($this->audit->entries)->toBe([]);
 });
 
 test('an unauthenticated request gets no directory', function () {
@@ -170,13 +164,6 @@ test('an unauthenticated request gets no directory', function () {
 
     expect($response)->toBeInstanceOf(WP_Error::class);
     expect($this->audit->entries)->toBe([]);
-});
-
-test('a revoked handset gets no directory', function () {
-    $token = directoryEnrol();
-    $this->devices->revoke(1, time());
-
-    expect(directoryController()->index(directoryRequest($token)))->toBeInstanceOf(WP_Error::class);
 });
 
 test('plain HTTP gets no directory', function () {
@@ -454,10 +441,7 @@ function directoryPresenter(
 
 function directoryController(): DirectoryController
 {
-    $gate = new MemberGate(test()->members);
-
     return new DirectoryController(
-        new CurrentDevice(test()->devices, test()->minter, $gate, test()->members),
         directoryPresenter(),
         test()->settings,
         test()->audit,

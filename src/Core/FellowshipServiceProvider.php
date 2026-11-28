@@ -401,7 +401,6 @@ final class FellowshipServiceProvider
         ));
 
         $container->register(DirectoryController::class, fn(ContainerInterface $c) => new DirectoryController(
-            $c->get(CurrentDevice::class),
             $c->get(DirectoryPresenter::class),
             $c->get(Settings::class),
             $c->get(AuditLogger::class),

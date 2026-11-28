@@ -37,6 +37,7 @@ use Unity\Testing\Doubles\InMemoryMemberRepository;
 use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
 use Unity\Testing\Doubles\MemberStub;
 use WP_REST_Request;
+use WP_Error;
 use WP_REST_Response;
 
 /**
@@ -222,13 +223,15 @@ test('the callback exchanges the code with the client the sign-in started with',
     expect($this->freedom->clientRequests)->toBe([['google', 'ctx-1'], ['google', 'ctx-1']]);
 });
 
-test('Link\'s callback keeps Fellowship\'s client', function () {
-    // Link brings no client, so its sign-ins are exactly what they were.
+test('a sign-in started for Link reaches no client at all', function () {
+    // Link signs in through Firebase, so its browser leg is refused before
+    // any provider is built or asked.
     $issued = $this->states->issue('google', 'link://auth', null);
 
-    $location = audienceClientCallback($issued['state']);
+    $response = audienceClientCallbackResponse($issued['state']);
 
-    expect($location)->toStartWith('link://auth?code=');
+    expect($response)->toBeInstanceOf(WP_Error::class);
+    expect($response->get_error_code())->toBe('fellowship_bad_state');
     expect($this->built)->toBe([]);
     expect($this->freedom->clientRequests)->toBe([]);
 });
@@ -249,6 +252,14 @@ function audienceClientBroker(): IdentityBroker
 
 /** Run the callback for a state and answer where it redirected. */
 function audienceClientCallback(string $state): string
+{
+    $response = audienceClientCallbackResponse($state);
+    expect($response)->toBeInstanceOf(WP_REST_Response::class);
+
+    return (string) ($response->get_headers()['Location'] ?? '');
+}
+
+function audienceClientCallbackResponse(string $state): WP_REST_Response|WP_Error
 {
     $controller = new DeviceAuthController(
         test()->devices,
@@ -275,8 +286,5 @@ function audienceClientCallback(string $state): string
     $request->set_param('state', $state);
     $request->set_param('code', 'from-google');
 
-    $response = $controller->callback($request);
-    expect($response)->toBeInstanceOf(WP_REST_Response::class);
-
-    return (string) ($response->get_headers()['Location'] ?? '');
+    return $controller->callback($request);
 }

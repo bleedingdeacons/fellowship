@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace Fellowship\Tests;
 
 use function Brain\Monkey\Functions\when;
+use Fellowship\Auth\AudienceRegistry;
 use Fellowship\Auth\DeviceCodeStore;
 use Fellowship\Auth\DeviceRedirectValidator;
 use Fellowship\Auth\DeviceTokenMinter;
+use Fellowship\Auth\LinkAudience;
 use Fellowship\Auth\PasswordAuthenticator;
 use Fellowship\Auth\PasswordPolicy;
 use Fellowship\Auth\PasswordResetMailer;
@@ -27,6 +29,7 @@ use Fellowship\Push\FcmTransport;
 use Fellowship\Rest\DeviceAuthController;
 use Fellowship\Rest\MessageController;
 use Fellowship\Tests\Support\InMemoryDeviceRepository;
+use Fellowship\Tests\Support\StubAudience;
 use Fellowship\Tests\Support\StubProvider;
 use Fellowship\Tests\Support\InMemoryMessageRepository;
 use Unity\Testing\Doubles\InMemoryPasswordCredentialRepository;
@@ -60,7 +63,8 @@ covers(\Fellowship\Rest\DeviceAuthController::class, \Fellowship\Rest\MessageCon
 
 const CONTROLLER_ROUTES_MEMBER = 'member@example.org';
 
-const CONTROLLER_ROUTES_CALLBACK = 'link://auth';
+/** Another audience's app, such as Freedom's: Link's browser leg is gone. */
+const CONTROLLER_ROUTES_CALLBACK = 'org.example.app.freedom://auth';
 
 beforeEach(function () {
     when('is_ssl')->justReturn(true);
@@ -91,29 +95,34 @@ beforeEach(function () {
 
 // ── The route table ───────────────────────────────────────────────
 
-test('every auth route is registered', function () {
+test('only the auth routes still called are registered', function () {
+    // The callback, for other audiences' browser sign-ins such as Freedom's,
+    // and the two that set a Link password. Nothing else.
     routesAuthController()->registerRoutes();
 
     $registered = array_column($this->routes, 'route');
+    sort($registered);
 
-    $expected = [
-        '/auth/device/start',
-        '/auth/callback',
-        '/auth/device/exchange',
-        '/auth/device/password',
-        '/auth/password/request',
-        '/auth/password/complete',
-        '/auth/device/push',
-        '/auth/device/key',
-        '/auth/device/key-fault',
-        '/auth/device/session',
-        '/auth/device',
-    ];
-
-    foreach ($expected as $route) {
-        expect($registered)->toContain($route);
-    }
+    expect($registered)->toBe(['/auth/callback', '/auth/password/complete', '/auth/password/request']);
 });
+
+test('the old device routes are gone', function (string $route) {
+    // Link signs in through Firebase. Each of these was a way in that
+    // nothing uses: a second place to guess passwords, a code handed to
+    // link://, a device token minted outside Firebase.
+    routesAuthController()->registerRoutes();
+
+    expect(array_column($this->routes, 'route'))->not->toContain($route);
+})->with([
+    '/auth/device/start',
+    '/auth/device/exchange',
+    '/auth/device/password',
+    '/auth/device/push',
+    '/auth/device/key',
+    '/auth/device/key-fault',
+    '/auth/device/session',
+    '/auth/device',
+]);
 
 test('every message route is registered', function () {
     routesMessageController()->registerRoutes();
@@ -143,7 +152,7 @@ test('a successful callback redirects with a one time code', function () {
     // A code, never a token. The redirect passes through a browser,
     // where it lands in history and can be read by anything else
     // registered for the scheme.
-    $issued = $this->states->issue('google', CONTROLLER_ROUTES_CALLBACK);
+    $issued = $this->states->issue('google', CONTROLLER_ROUTES_CALLBACK, null, 'freedom');
 
     $response = routesAuthController()->callback(controllerRoutesRequest([
         'state' => $issued['state'],
@@ -160,7 +169,7 @@ test('a successful callback redirects with a one time code', function () {
 
 test('a replayed callback is refused', function () {
     // consume() is one-shot, so the second attempt finds nothing.
-    $issued = $this->states->issue('google', CONTROLLER_ROUTES_CALLBACK);
+    $issued = $this->states->issue('google', CONTROLLER_ROUTES_CALLBACK, null, 'freedom');
 
     $first = routesAuthController()->callback(controllerRoutesRequest([
         'state' => $issued['state'],
@@ -187,7 +196,7 @@ test('an invented state is refused', function () {
 test('declining at the provider comes back as a reason', function () {
     // The member pressed cancel. They get a redirect saying so rather
     // than an error page in a browser tab they cannot act on.
-    $issued = $this->states->issue('google', CONTROLLER_ROUTES_CALLBACK);
+    $issued = $this->states->issue('google', CONTROLLER_ROUTES_CALLBACK, null, 'freedom');
 
     $response = routesAuthController()->callback(controllerRoutesRequest([
         'state' => $issued['state'],
@@ -198,14 +207,14 @@ test('declining at the provider comes back as a reason', function () {
     expect((string) ($response->get_headers()['Location'] ?? ''))->toContain('error=declined');
 });
 
-test('a verified address that is not a members is told so in the browser', function () {
+test('a verified address the audience does not admit is told so in the browser', function () {
     // Checked here as well as at the exchange, so somebody who signed
     // in with the wrong Google account finds out where they can read
     // it rather than two steps later inside the app.
     $stranger = new StubProvider('google', serverSide: true);
     $stranger->identity = new ProviderIdentity('nobody@example.org', 'google', 'sub-1');
 
-    $issued = $this->states->issue('google', CONTROLLER_ROUTES_CALLBACK);
+    $issued = $this->states->issue('google', CONTROLLER_ROUTES_CALLBACK, null, 'freedom');
 
     $response = routesAuthController($stranger)->callback(controllerRoutesRequest([
         'state' => $issued['state'],
@@ -213,14 +222,14 @@ test('a verified address that is not a members is told so in the browser', funct
     ]));
 
     expect($response)->toBeInstanceOf(WP_REST_Response::class);
-    expect((string) ($response->get_headers()['Location'] ?? ''))->toContain('error=not_a_member');
+    expect((string) ($response->get_headers()['Location'] ?? ''))->toContain('error=not_authorised');
 });
 
 test('a provider that cannot verify comes back as a reason', function () {
     $failing = new StubProvider('google', serverSide: true);
     $failing->identity = null;
 
-    $issued = $this->states->issue('google', CONTROLLER_ROUTES_CALLBACK);
+    $issued = $this->states->issue('google', CONTROLLER_ROUTES_CALLBACK, null, 'freedom');
 
     $response = routesAuthController($failing)->callback(controllerRoutesRequest([
         'state' => $issued['state'],
@@ -229,6 +238,20 @@ test('a provider that cannot verify comes back as a reason', function () {
 
     expect($response)->toBeInstanceOf(WP_REST_Response::class);
     expect((string) ($response->get_headers()['Location'] ?? ''))->toContain('error=verification');
+});
+
+test('a sign-in started for Link is refused at the callback', function () {
+    // Link signs in through Firebase. A code handed to link:// would go to
+    // whichever app on the phone claimed that scheme.
+    $issued = $this->states->issue('google', 'link://auth');
+
+    $response = routesAuthController()->callback(controllerRoutesRequest([
+        'state' => $issued['state'],
+        'code' => 'from-google',
+    ]));
+
+    expect($response)->toBeInstanceOf(WP_Error::class);
+    expect($response->get_error_code())->toBe('fellowship_bad_state');
 });
 
 // ── Fixtures ──────────────────────────────────────────────────────
@@ -258,7 +281,17 @@ function routesAuthController(?StubProvider $provider = null): DeviceAuthControl
             new PasswordResetMailer(),
             new PasswordPolicy(),
         ),
+        routesAudiences($gate),
     );
+}
+
+/** Link's audience, as Fellowship always holds it, and a stand-in for Freedom's. */
+function routesAudiences(MemberGate $gate): AudienceRegistry
+{
+    $audiences = new AudienceRegistry(new LinkAudience(new DeviceRedirectValidator(), $gate));
+    $audiences->register(new StubAudience('freedom', CONTROLLER_ROUTES_CALLBACK, [CONTROLLER_ROUTES_MEMBER]));
+
+    return $audiences;
 }
 
 function routesMessageController(): MessageController

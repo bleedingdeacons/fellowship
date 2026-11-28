@@ -246,22 +246,15 @@ test('the directory answers each refusal differently', function (array|null $doc
     'an outage: try again'   => [null, 503, 503, 'fellowship_unavailable'],
 ]);
 
-test('Fellowship\'s own device token still works beside it', function () {
-    $minter = new DeviceTokenMinter();
-    $token = $minter->mint();
-    $table = new InMemoryDeviceRepository();
-    $table->create($minter->hash($token), 'member@example.org', 7, 'Pixel', 'android', 'spki', 'fcm', 'push', 1788000000);
+test('Fellowship\'s own device token no longer reads the directory', function () {
+    // Link has none any more; the only ones still issued are another
+    // audience's, such as Register's tablets.
+    $response = firebaseDevicesController()->index(firebaseDevicesRequest((new DeviceTokenMinter())->mint()));
 
-    FakeWpHttp::pushResponse(200, '{"access_token":"google-access-token"}');
-    FakeWpHttp::pushResponse(200, '[{"readTime":"2026-11-06T00:00:00Z"}]');
-
-    $response = firebaseDevicesController($table, $minter)->index(firebaseDevicesRequest($token));
-
-    expect($response)->toBeInstanceOf(WP_REST_Response::class);
-
-    // The token is checked against the table, and Firestore is only asked who has a device.
-    expect(FakeWpHttp::callCount())->toBe(2);
-    expect(FakeWpHttp::sentUrl(1))->toContain(':runQuery');
+    expect($response)->toBeInstanceOf(WP_Error::class);
+    expect($response->get_error_data()['status'])->toBe(401);
+    expect(FakeWpHttp::callCount())->toBe(0);
+    expect(test()->audit->entries)->toBe([]);
 });
 
 test('the directory marks a member with a device on Firebase', function () {
@@ -512,12 +505,11 @@ function firebaseDevicesPresenter(): DirectoryPresenter
     );
 }
 
-function firebaseDevicesController(?InMemoryDeviceRepository $table = null, ?DeviceTokenMinter $minter = null): DirectoryController
+function firebaseDevicesController(): DirectoryController
 {
     test()->audit = new SpyAuditLogger();
 
     return new DirectoryController(
-        new CurrentDevice($table ?? new InMemoryDeviceRepository(), $minter ?? new DeviceTokenMinter(), test()->gate),
         firebaseDevicesPresenter(),
         new Settings(),
         test()->audit,
