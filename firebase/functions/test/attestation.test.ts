@@ -1,7 +1,10 @@
 import { HttpsError } from 'firebase-functions/v2/https';
 import { describe, expect, test } from 'vitest';
 import { verifiedAttestations } from '../src/attestation';
-import { RETIRING_SITE_ACCOUNT, RUNTIME_ACCOUNT, SITE_ACCOUNT } from '../src/config';
+import { RUNTIME_ACCOUNT, SITE_ACCOUNT } from '../src/config';
+
+/** The account the site held until it had one of its own, which also ran the Functions. */
+const FORMER_SITE_ACCOUNT = 'firebase-adminsdk-fbsvc@fellowship-510917.iam.gserviceaccount.com';
 import { certificates, reasonOf, sign } from './support';
 
 /**
@@ -24,8 +27,8 @@ describe('a membership statement', () => {
     expect(await attestations.member(member(), 'uid-1')).toEqual({ memberId: 7 });
   });
 
-  test('is believed from the account the site held before, while it moves to the new one', async () => {
-    expect(await attestations.member(member({ iss: RETIRING_SITE_ACCOUNT }), 'uid-1')).toEqual({ memberId: 7 });
+  test('is refused from the account the site held before', async () => {
+    expect(await reasonOf(attestations.member(member({ iss: FORMER_SITE_ACCOUNT }), 'uid-1'))).toBe('fellowship_bad_attestation');
   });
 
   test.each([
@@ -90,16 +93,17 @@ describe('an audience statement', () => {
 describe('Google\'s keys', () => {
   test('are those of the account the statement names', async () => {
     const asked: string[] = [];
+    const next = 'fellowship-site-2@fellowship-510917.iam.gserviceaccount.com';
     const recording = verifiedAttestations(async (account) => {
       asked.push(account);
 
       return certificates();
-    }, () => Date.now());
+    }, () => Date.now(), [SITE_ACCOUNT, next]);
 
     await recording.member(member(), 'uid-1');
-    await recording.member(member({ iss: RETIRING_SITE_ACCOUNT }), 'uid-1');
+    await recording.member(member({ iss: next }), 'uid-1');
 
-    expect(asked).toEqual([SITE_ACCOUNT, RETIRING_SITE_ACCOUNT]);
+    expect(asked).toEqual([SITE_ACCOUNT, next]);
   });
 
   test('are never asked for when the account is not trusted', async () => {
