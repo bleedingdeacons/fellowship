@@ -33,6 +33,9 @@ final class RecordingWpdb extends wpdb
 
     public mixed $var = null;
 
+    /** @var list<mixed> Answers for successive get_var() calls, before $var is used. */
+    public array $vars = [];
+
     /** @var list<array{table: string, data: array<string, mixed>}> */
     public array $inserts = [];
 
@@ -74,7 +77,7 @@ final class RecordingWpdb extends wpdb
     {
         $this->queries[] = $query;
 
-        return $this->var;
+        return $this->vars !== [] ? array_shift($this->vars) : $this->var;
     }
 
     public function query(string $query): mixed
