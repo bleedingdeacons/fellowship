@@ -3,7 +3,7 @@
 /**
  * Plugin Name: Fellowship
  * Description: Server side of the Link messaging app. Decides which Unity members may use Link, signs what each phone carries to Link's Firebase back end, and runs Link's password sign-in and admin screens. Requires Unity and Scrutiny.
- * Version: 1.19.7
+ * Version: 1.19.8
  * Requires at least: 6.1
  * Requires PHP: 8.4
  * Requires Plugins: unity, scrutiny
