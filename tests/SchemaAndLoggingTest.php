@@ -86,6 +86,42 @@ test('an older schema is upgraded', function () {
     expect(WpState::$options[Schema::OPTION] ?? null)->toBe(Schema::VERSION);
 });
 
+test('the upgrade drops the old Link tables', function () {
+    Schema::install($this->wpdb);
+
+    $drops = array_values(array_filter($this->wpdb->queries, static fn(string $q): bool => str_starts_with($q, 'DROP TABLE')));
+
+    expect($drops)->toBe([
+        'DROP TABLE IF EXISTS `wp_fellowship_recipients`',
+        'DROP TABLE IF EXISTS `wp_fellowship_messages`',
+        'DROP TABLE IF EXISTS `wp_fellowship_devices`',
+    ]);
+});
+
+test('an empty old credentials table is dropped too', function () {
+    $this->wpdb->vars = ['wp_fellowship_credentials', 0];
+
+    Schema::install($this->wpdb);
+
+    expect($this->wpdb->queries)->toContain('DROP TABLE IF EXISTS `wp_fellowship_credentials`');
+});
+
+test('an old credentials table that still holds rows is kept', function () {
+    // tsml-for-unity leaves it as the only copy of some passwords until
+    // somebody has seen its copy work, so an upgrade must not take it.
+    $this->wpdb->vars = ['wp_fellowship_credentials', 3];
+
+    Schema::install($this->wpdb);
+
+    expect($this->wpdb->queries)->not->toContain('DROP TABLE IF EXISTS `wp_fellowship_credentials`');
+});
+
+test('a site that never had the credentials table is not asked to count it', function () {
+    Schema::install($this->wpdb);
+
+    expect(implode(' ', $this->wpdb->queries))->not->toContain('SELECT COUNT(*)');
+});
+
 test('the upgrade to version 5 drops the retired backend setting', function () {
     WpState::$options[Settings::OPTION_PUBLIC] = ['link_backend' => 'firebase', 'retention_days' => '30'];
     WpState::$options[Schema::OPTION] = 4;
