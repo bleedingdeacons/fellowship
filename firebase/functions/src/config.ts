@@ -16,14 +16,11 @@ export const RUNTIME_ACCOUNT = 'fellowship-functions@fellowship-510917.iam.gserv
 export const SITE_ACCOUNT = 'fellowship-site@fellowship-510917.iam.gserviceaccount.com';
 
 /**
- * The account Fellowship held before, which the Functions also ran as. Trusted
- * like the one above only while the site moves to the new key: once it has, take
- * this out, deploy, and delete this account's keys.
+ * Whose statements are believed, and who may call the admin functions. A list so
+ * the site can move to another account: add it here, deploy, switch the site's
+ * key, then take the old one out and deploy again.
  */
-export const RETIRING_SITE_ACCOUNT = 'firebase-adminsdk-fbsvc@fellowship-510917.iam.gserviceaccount.com';
-
-/** Whose statements are believed, and who may call the admin functions. */
-export const SITE_ACCOUNTS: readonly string[] = [SITE_ACCOUNT, RETIRING_SITE_ACCOUNT];
+export const SITE_ACCOUNTS: readonly string[] = [SITE_ACCOUNT];
 
 /** Who Fellowship signs a statement for. See AttestationSigner::audience(). */
 export const ATTESTATION_AUDIENCE = 'fellowship-functions:fellowship-510917';

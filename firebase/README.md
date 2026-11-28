@@ -89,12 +89,14 @@ gcloud iam service-accounts keys create fellowship-site.json --iam-account fello
 gcloud resource-manager org-policies delete iam.disableServiceAccountKeyCreation --project fellowship-510917
 ```
 
-**While the site moves to this key**, `SITE_ACCOUNTS` also holds
-`RETIRING_SITE_ACCOUNT`, `firebase-adminsdk-fbsvc@`, which held both jobs before. Once
-Fellowship has the new key, take it out, deploy, delete that account's keys and
-remove the two roles granted to it by hand. Don't delete the account: Firebase uses
-it. Legacy pushes from WordPress (`FcmTransport`) stop then, because the site account
-can't send them.
+**Moving the site to another account** is done without a gap: add the new account
+to `SITE_ACCOUNTS` and deploy, paste its key into Fellowship, then take the old one
+out and deploy again. `SITE_ACCOUNTS` sets the admin functions' `invoker` too.
+
+Until 2026-11-28 the site held a key for `firebase-adminsdk-fbsvc@`, which the
+Functions also ran as. That key is deleted and the account holds none. Don't delete
+the account itself: Firebase uses it. WordPress's legacy pushes (`FcmTransport`)
+ended with it, because the site account can't send them.
 
 ### What a new project needs first
 
